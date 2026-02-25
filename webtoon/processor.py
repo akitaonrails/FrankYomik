@@ -230,13 +230,15 @@ def render_page(page: WebtoonPageResult, out_dir: str,
         bubble_id = id(bubble)
 
         # Step 1: Clear Korean text (once per bubble, even if split).
-        # Try AI inpainting first, then always run solid clearing to
-        # catch text remnants outside the inpaint mask.
+        # When inpainting succeeds, trust the AI result — no solid
+        # clearing on top.  Only fall back to rectangle clearing when
+        # inpainting is unavailable.
         if bubble_id not in cleared_bubbles:
             if inpaint_bubble(page.img_pil, bubble,
                               target_img=page.output_img):
                 inpainted_bubbles.add(bubble_id)
-            _clear_bubble_text(page.output_img, bubble)
+            else:
+                _clear_bubble_text(page.output_img, bubble)
             cleared_bubbles.add(bubble_id)
 
         # Step 2: Compute render bbox from the region's detections.
@@ -252,7 +254,8 @@ def render_page(page: WebtoonPageResult, out_dir: str,
         # Step 3: Render English text within the text-region bbox
         _render_webtoon_english(page.output_img, bubble, region.english,
                                 text_bbox,
-                                skip_bg_rect=(bubble_id in inpainted_bubbles))
+                                skip_bg_rect=(bubble_id in inpainted_bubbles),
+                                color_ref_img=page.img_pil)
 
     output_path = os.path.join(out_dir, f"{page.name}-en.png")
     page.output_img.save(output_path)
@@ -262,30 +265,28 @@ def render_page(page: WebtoonPageResult, out_dir: str,
 def _clear_bubble_text(img: Image.Image, bubble: WebtoonBubble) -> None:
     """Clear Korean text in a bubble, respecting bubble mask when available.
 
-    Two-phase clearing:
+    Fallback for when AI inpainting is unavailable.  Two-phase clearing:
     1. Clear the text_region_bbox within the bubble mask (covers detected
-       text + gaps between detection rects).  We do NOT fill the entire
-       mask because semi-transparent balloons (blue notification panels)
-       have artwork visible through them — solid-filling destroys that.
+       text + gaps between detection rects).  Without mask, clear the
+       full text_region_bbox directly.
     2. Clear EVERY detection with a padded rectangle using locally-sampled
        background color (catches floating text outside the mask).
     """
     bg_color = bubble.bg_color
-    pad = 14
+    pad = 18
     mask = bubble.bubble_mask
     img_w, img_h = img.width, img.height
 
-    # Phase 1: clear the text region within the mask (bubble-aware).
-    # Uses text_region_bbox (tight around OCR detections + padding), NOT
-    # bubble.bbox, to avoid destroying semi-transparent balloon artwork.
+    # Phase 1: clear the text region.
+    # With mask: clip clearing to bubble boundary (preserves artwork).
+    # Without mask: clear the full text_region_bbox directly.
+    text_bbox = _text_region_bbox(bubble, img_w, img_h)
     if mask is not None:
-        text_bbox = _text_region_bbox(bubble, img_w, img_h)
         _clear_with_mask(img, text_bbox, mask, bg_color)
+    else:
+        clear_text_in_region(img, text_bbox, fill_color=bg_color)
 
     # Phase 2: clear EVERY detection with rectangle + local bg color.
-    # This catches floating text outside the mask and glyph strokes that
-    # extend beyond the mask edge.  Double-clearing inside-mask detections
-    # is harmless since both phases use matching bg colors.
     for det in bubble.text_regions:
         x1, y1, x2, y2 = det.bbox_rect
         det_bbox = (
@@ -402,31 +403,33 @@ def _expand_render_bbox(
     image width).
     """
     mask = bubble.bubble_mask
-    if mask is None:
-        return text_bbox
-
     tx1, ty1, tx2, ty2 = text_bbox
     text_w = tx2 - tx1
 
-    # Sample the mask's horizontal extent at the text's vertical range
-    mask_row = mask[ty1:ty2, :]
-    mask_cols = np.where(mask_row.any(axis=0))[0]
-    if len(mask_cols) == 0:
+    if mask is not None:
+        # Sample the mask's horizontal extent at the text's vertical range
+        mask_row = mask[ty1:ty2, :]
+        mask_cols = np.where(mask_row.any(axis=0))[0]
+        if len(mask_cols) == 0:
+            return text_bbox
+        ref_x1 = int(mask_cols[0])
+        ref_x2 = int(mask_cols[-1]) + 1
+    else:
+        # No mask — use bubble bbox for width expansion
+        ref_x1 = bubble.bbox[0]
+        ref_x2 = bubble.bbox[2]
+
+    ref_w = ref_x2 - ref_x1
+
+    # Only expand if the reference is at least 20% wider than text bbox
+    if ref_w < text_w * 1.2:
         return text_bbox
 
-    mask_x1 = int(mask_cols[0])
-    mask_x2 = int(mask_cols[-1]) + 1
-    mask_w = mask_x2 - mask_x1
-
-    # Only expand if the mask is at least 20% wider than the text bbox
-    if mask_w < text_w * 1.2:
-        return text_bbox
-
-    # Expand to 90% of mask width, centered on the text center
-    target_w = int(mask_w * 0.9)
+    # Expand to 90% of reference width, centered on the text center
+    target_w = int(ref_w * 0.9)
     text_cx = (tx1 + tx2) // 2
-    new_x1 = max(mask_x1, text_cx - target_w // 2)
-    new_x2 = min(mask_x2, text_cx + target_w // 2)
+    new_x1 = max(ref_x1, text_cx - target_w // 2)
+    new_x2 = min(ref_x2, text_cx + target_w // 2)
 
     return (new_x1, ty1, new_x2, ty2)
 
@@ -466,7 +469,8 @@ def _sample_render_surface(img: Image.Image,
 def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
                             text: str,
                             render_bbox: tuple[int, int, int, int],
-                            skip_bg_rect: bool = False) -> None:
+                            skip_bg_rect: bool = False,
+                            color_ref_img: Image.Image | None = None) -> None:
     """Render English text within the text-region bbox.
 
     Uses render_bbox (tight around OCR detections) instead of bubble.bbox
@@ -479,15 +483,24 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
 
     When skip_bg_rect is True (bubble was AI-inpainted), the background
     rectangle is omitted — the inpainted surface is already clean.
+
+    color_ref_img: original (unmodified) image used for font color
+    detection.  Sampling the original avoids wrong colors from
+    cleared/inpainted surfaces.
     """
-    # Sample actual surface color at the render area (after clearing/inpainting)
-    # instead of relying on bubble.bg_color which is sampled from a band
-    # around text during detection and can be wrong for narrow panels.
-    surface_color = _sample_render_surface(img, render_bbox)
+    # Sample the ORIGINAL image for font color detection.  The original
+    # has Korean text but bg pixels dominate, so the median gives the
+    # true panel color.  Sampling the cleared/inpainted surface can give
+    # wrong results (e.g., light blue clearing on a dark blue panel).
+    ref = color_ref_img if color_ref_img is not None else img
+    surface_color = _sample_render_surface(ref, render_bbox)
     lum = _bg_luminance(surface_color)
 
-    # Font color: white on dark, black on light
-    if lum < 0.5:
+    # Font color: white on dark/medium, black on light.
+    # Threshold 0.65 matches the original Korean text color choices —
+    # blue notification panels (lum ~0.57) use white text, while truly
+    # light backgrounds (white, pale yellow) use black text.
+    if lum < 0.65:
         font_color = (255, 255, 255)
         bg_rect_color = (0, 0, 0, 160)
     else:
@@ -541,14 +554,19 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     if not lines:
         return
 
-    # Calculate total text block height and center within render bbox
+    # Calculate total text block height and center within render bbox.
+    # Account for the font's top bearing: getbbox returns (left, top,
+    # right, bottom) and draw.text places glyphs offset by (left, top)
+    # from the given position.  Without this correction text appears
+    # shifted down by `top` pixels.
     line_heights = [_line_height(font, line) for line in lines]
     total_text_h = sum(line_heights) + 3 * (len(lines) - 1)
+    first_top = font.getbbox(lines[0])[1] if lines else 0
 
-    text_y = by1 + max(0, (bh - total_text_h) // 2)
+    text_y = by1 + max(0, (bh - total_text_h) // 2) - first_top
     # Hard clamp: never render below the bbox bottom (with 2px margin)
-    if text_y + total_text_h > by2 - 2:
-        text_y = by2 - 2 - total_text_h
+    if text_y + first_top + total_text_h > by2 - 2:
+        text_y = by2 - 2 - total_text_h - first_top
 
     # Semi-transparent background rectangle (strictly within render bbox).
     # PIL's rounded_rectangle antialiasing can extend ~2px beyond the nominal
@@ -574,7 +592,7 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     for line, lh in zip(lines, line_heights):
         bbox = font.getbbox(line)
         text_w = bbox[2] - bbox[0]
-        x = bx1 + max(0, (bw - text_w) // 2)
+        x = bx1 + max(0, (bw - text_w) // 2) - bbox[0]
         # Hard clamp: don't draw below render bbox
         if y + lh > by2 - 2:
             break
@@ -583,10 +601,16 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
 
     # Clip the entire overlay (bg rect + text) to the bubble mask to
     # prevent any rendering from leaking outside the bubble boundary.
+    # Skip clipping when the mask poorly covers the render area — an
+    # incomplete mask would clip the English text itself, showing dark
+    # background through the gaps.
     if bubble.bubble_mask is not None:
-        overlay_arr = np.array(overlay)
-        overlay_arr[:, :, 3][bubble.bubble_mask == 0] = 0
-        overlay = Image.fromarray(overlay_arr)
+        mask_roi = bubble.bubble_mask[by1:by2, bx1:bx2]
+        mask_coverage = np.count_nonzero(mask_roi) / max(1, mask_roi.size)
+        if mask_coverage >= 0.85:
+            overlay_arr = np.array(overlay)
+            overlay_arr[:, :, 3][bubble.bubble_mask == 0] = 0
+            overlay = Image.fromarray(overlay_arr)
 
     img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 

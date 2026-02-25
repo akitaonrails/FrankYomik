@@ -261,19 +261,31 @@ def build_inpaint_mask(
         text_arr[y1:y2, x1:x2] = 255
     text_mask = Image.fromarray(text_arr)
 
-    # Step 4: intersect — only inpaint where text is AND inside bubble
+    # Step 4: intersect — only inpaint where text is AND inside bubble.
+    # If the bubble mask poorly covers the text area (<85%), skip the
+    # intersection and use text rects alone.  Incomplete masks leave
+    # Korean remnants that the AI model can't clean.
     bubble_arr = np.array(bubble_mask)
     text_arr = np.array(text_mask)
-    result_arr = np.where((bubble_arr > 0) & (text_arr > 0), 255, 0).astype(np.uint8)
+
+    text_pixels = np.count_nonzero(text_arr)
+    overlap_pixels = np.count_nonzero((bubble_arr > 0) & (text_arr > 0))
+    coverage = overlap_pixels / max(1, text_pixels)
+
+    if coverage >= 0.85:
+        # Good coverage — clip to bubble boundary
+        result_arr = np.where((bubble_arr > 0) & (text_arr > 0), 255, 0).astype(np.uint8)
+    else:
+        # Poor coverage — use text rects directly so all text gets inpainted
+        log.info("Bubble mask coverage %.0f%% < 85%%, using text rects only",
+                 coverage * 100)
+        result_arr = text_arr.copy()
 
     # Step 5: dilate to catch glyph antialiasing
     if text_dilate > 0:
         result = Image.fromarray(result_arr)
         result = result.filter(ImageFilter.MaxFilter(text_dilate * 2 + 1))
         result_arr = np.array(result)
-
-    # Ensure nothing leaks outside the original (un-eroded) bubble mask
-    result_arr[bubble.bubble_mask == 0] = 0
 
     if np.count_nonzero(result_arr) == 0:
         return None

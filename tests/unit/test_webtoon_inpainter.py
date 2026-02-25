@@ -92,21 +92,24 @@ class TestBuildInpaintMask:
         assert np.all(result_arr[mask == 0] == 0), \
             "Mask should not extend outside bubble"
 
-    def test_erode_preserves_outline(self):
-        """Erosion shrinks the bubble mask, keeping outline pixels black."""
-        # Large circular mask
-        mask = _make_circular_mask(200, 200, 100, 100, 80)
-        # Text spanning most of the circle
-        det = _make_det(30, 30, 170, 170)
-        bubble = _make_bubble([det], bbox=(20, 20, 180, 180),
+    def test_erode_shrinks_mask(self):
+        """Erosion shrinks the bubble mask via MinFilter.
+
+        Verifies that the eroded mask step in build_inpaint_mask
+        actually reduces pixel count when text fills most of the bubble.
+        Uses high coverage (>85% for both) by keeping text small and
+        centered well inside the bubble.
+        """
+        # 300x300 circular mask, large radius — text+pad stays inside
+        mask = _make_circular_mask(300, 300, 150, 150, 140)
+        det = _make_det(50, 50, 250, 250)
+        bubble = _make_bubble([det], bbox=(10, 10, 290, 290),
                               mask=mask, has_boundary=True)
 
-        # With erode=0, pixels at the circle edge should be inpaintable
         result_no_erode = build_inpaint_mask(
-            bubble, (200, 200), erode_px=0, text_pad=0, text_dilate=0)
-        # With erode=5, edge pixels should be excluded
+            bubble, (300, 300), erode_px=0, text_pad=10, text_dilate=0)
         result_eroded = build_inpaint_mask(
-            bubble, (200, 200), erode_px=5, text_pad=0, text_dilate=0)
+            bubble, (300, 300), erode_px=5, text_pad=10, text_dilate=0)
 
         assert result_no_erode is not None
         assert result_eroded is not None
@@ -175,19 +178,22 @@ class TestBuildInpaintMask:
         assert np.any(result_arr[115:145, 45:105] > 0), \
             "Second text area should be in mask"
 
-    def test_text_outside_bubble_excluded(self):
-        """Text detections outside the bubble mask are excluded."""
+    def test_text_outside_bubble_uses_text_rects(self):
+        """Text outside bubble mask triggers text-rects-only mode."""
         # Small circular mask
         mask = _make_circular_mask(200, 200, 100, 100, 30)
-        # Text far outside the circle
+        # Text far outside the circle — coverage < 85%
         det = _make_det(5, 5, 25, 15)
         bubble = _make_bubble([det], bbox=(70, 70, 130, 130),
                               mask=mask, has_boundary=True)
 
         result = build_inpaint_mask(bubble, (200, 200), erode_px=0,
                                     text_pad=2, text_dilate=0)
-        # Should be None since text area doesn't overlap with bubble mask
-        assert result is None
+        # Low coverage → uses text rects directly (still returns a mask)
+        assert result is not None
+        result_arr = np.array(result)
+        # Text area should be white
+        assert np.any(result_arr[3:17, 3:27] > 0)
 
 
 # --- TestInpaintBubbleIntegration ---

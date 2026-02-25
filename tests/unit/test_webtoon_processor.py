@@ -370,14 +370,21 @@ class TestRenderWebtoonEnglish:
 
     def test_dark_bg_gets_white_text(self):
         """Dark backgrounds should produce white text for readability."""
-        # This tests the luminance-based color selection
-        assert _bg_luminance((0, 0, 0)) < 0.5
-        assert _bg_luminance((30, 30, 50)) < 0.5
+        assert _bg_luminance((0, 0, 0)) < 0.65
+        assert _bg_luminance((30, 30, 50)) < 0.65
+
+    def test_blue_panel_gets_white_text(self):
+        """Blue notification panels (lum ~0.57) should get white text.
+
+        Regression: webtoon blue panels with RGB ~(55, 175, 255) were
+        getting black text because lum 0.57 > old threshold 0.5.
+        """
+        assert _bg_luminance((55, 175, 255)) < 0.65
 
     def test_light_bg_gets_dark_text(self):
         """Light backgrounds should produce dark text for readability."""
-        assert _bg_luminance((255, 255, 255)) > 0.5
-        assert _bg_luminance((220, 220, 200)) > 0.5
+        assert _bg_luminance((255, 255, 255)) > 0.65
+        assert _bg_luminance((220, 220, 200)) > 0.65
 
 
 class TestSampleLocalBg:
