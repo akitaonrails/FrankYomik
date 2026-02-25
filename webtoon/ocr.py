@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from .config import (
+    CLUSTER_GAP,
     EASYOCR_CONFIDENCE_THRESHOLD,
     EASYOCR_GPU,
     EASYOCR_INVERTED_CONFIDENCE,
@@ -70,29 +71,40 @@ def detect_and_read(img: Image.Image | np.ndarray) -> list[TextDetection]:
         img_array = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     # Pass 1: original image
-    pass1 = _run_ocr(img_array)
+    pass1, rej1 = _run_ocr(img_array)
 
     # Pass 2: contrast-enhanced grayscale
     enhanced = _enhance_for_ocr(img_array)
-    pass2 = _run_ocr(enhanced)
+    pass2, rej2 = _run_ocr(enhanced)
 
     # Pass 3: inverted + CLAHE (bright text on dark backgrounds)
     inverted = _enhance_for_ocr_inverted(img_array)
-    pass3 = _run_ocr(inverted, min_confidence=EASYOCR_INVERTED_CONFIDENCE)
+    pass3, rej3 = _run_ocr(inverted, min_confidence=EASYOCR_INVERTED_CONFIDENCE)
 
     # Merge, dedup by IoU
     merged = _merge_detections(pass1, pass2)
     merged = _merge_detections(merged, pass3)
 
-    log.debug("OCR: pass1=%d, pass2=%d, pass3=%d, merged=%d",
-              len(pass1), len(pass2), len(pass3), len(merged))
+    # Rescue low-confidence detections that are near valid ones
+    all_rejected = _merge_detections(rej1, rej2)
+    all_rejected = _merge_detections(all_rejected, rej3)
+    rescued = _rescue_neighbor_detections(merged, all_rejected)
+    merged.extend(rescued)
+
+    log.debug("OCR: pass1=%d, pass2=%d, pass3=%d, rescued=%d, merged=%d",
+              len(pass1), len(pass2), len(pass3), len(rescued), len(merged))
     return merged
 
 
 def _run_ocr(img_array: np.ndarray,
              min_confidence: float = EASYOCR_CONFIDENCE_THRESHOLD,
-             ) -> list[TextDetection]:
-    """Run EasyOCR on a numpy RGB or grayscale array."""
+             ) -> tuple[list[TextDetection], list[TextDetection]]:
+    """Run EasyOCR on a numpy RGB or grayscale array.
+
+    Returns:
+        (accepted, rejected) — accepted detections above min_confidence,
+        plus rejected detections below threshold (for neighbor rescue).
+    """
     reader = _get_reader()
 
     results = reader.readtext(
@@ -101,10 +113,9 @@ def _run_ocr(img_array: np.ndarray,
         low_text=EASYOCR_LOW_TEXT,
     )
 
-    detections = []
+    accepted = []
+    rejected = []
     for bbox_poly, text, confidence in results:
-        if confidence < min_confidence:
-            continue
         if not text.strip():
             continue
 
@@ -112,14 +123,19 @@ def _run_ocr(img_array: np.ndarray,
         ys = [pt[1] for pt in bbox_poly]
         bbox_rect = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
 
-        detections.append(TextDetection(
+        det = TextDetection(
             bbox_poly=[[int(x), int(y)] for x, y in bbox_poly],
             text=text.strip(),
             confidence=confidence,
             bbox_rect=bbox_rect,
-        ))
+        )
 
-    return detections
+        if confidence >= min_confidence:
+            accepted.append(det)
+        else:
+            rejected.append(det)
+
+    return accepted, rejected
 
 
 def _enhance_for_ocr(img_rgb: np.ndarray) -> np.ndarray:
@@ -205,6 +221,102 @@ def _merge_detections(pass1: list[TextDetection],
                 merged[overlap_idx] = det2
 
     return merged
+
+
+def _rescue_neighbor_detections(
+    valid: list[TextDetection],
+    rejected: list[TextDetection],
+) -> list[TextDetection]:
+    """Rescue low-confidence detections near multi-line text groups.
+
+    When CRAFT's text detector finds a text box but the recognizer gives
+    very low confidence (e.g., proper nouns the language model doesn't
+    expect), the detection is filtered out.  If the rejected box is
+    vertically aligned with a group of 2+ accepted Korean detections,
+    it's almost certainly real text in the same text block.
+
+    Approach: build connected groups of valid Korean detections (transitive
+    vertical proximity), then rescue rejected detections adjacent to groups
+    of size >= 2.
+
+    Regression for 297/040: "유중혁에겐" (character name) above two
+    detected lines was missed at 0.030 confidence despite being the
+    same font/style.
+    """
+    if not valid or not rejected:
+        return []
+
+    # Filter valid detections to Korean-only
+    korean_valid = [v for v in valid if is_valid_korean(v.text)]
+    if len(korean_valid) < 2:
+        return []
+
+    # Build connected groups using transitive vertical proximity
+    groups: list[list[TextDetection]] = []
+    for det in korean_valid:
+        merged_into = None
+        for g in groups:
+            if _is_column_neighbor(det, g):
+                if merged_into is None:
+                    g.append(det)
+                    merged_into = g
+                else:
+                    # Merge two groups
+                    merged_into.extend(g)
+                    g.clear()
+        if merged_into is None:
+            groups.append([det])
+    groups = [g for g in groups if len(g) >= 2]
+
+    if not groups:
+        return []
+
+    rescued: list[TextDetection] = []
+    for rej in rejected:
+        if rej.confidence < 0.02 or not is_valid_korean(rej.text):
+            continue
+        if any(_iou(rej.bbox_rect, v.bbox_rect) > 0.3 for v in valid):
+            continue
+
+        rej_h = rej.bbox_rect[3] - rej.bbox_rect[1]
+        for g in groups:
+            if not _is_column_neighbor(rej, g):
+                continue
+            # Height must be consistent with group (same font/style)
+            median_h = sorted(d.bbox_rect[3] - d.bbox_rect[1]
+                              for d in g)[len(g) // 2]
+            h_ratio = rej_h / max(median_h, 1)
+            if 0.7 <= h_ratio <= 1.4:
+                log.info("  Rescued low-conf detection: '%s' (%.3f) "
+                         "near %d-line group (h_ratio=%.2f)",
+                         rej.text, rej.confidence, len(g), h_ratio)
+                rescued.append(rej)
+            break
+
+    return rescued
+
+
+def _is_column_neighbor(det: TextDetection,
+                        group: list[TextDetection]) -> bool:
+    """Check if det is vertically aligned with any member of group."""
+    dx1, dy1, dx2, dy2 = det.bbox_rect
+    d_cx = (dx1 + dx2) / 2
+    d_w = dx2 - dx1
+
+    for g in group:
+        gx1, gy1, gx2, gy2 = g.bbox_rect
+        g_cx = (gx1 + gx2) / 2
+        g_w = gx2 - gx1
+
+        gap = max(0, dy1 - gy2, gy1 - dy2)
+        x_diff = abs(d_cx - g_cx)
+        max_w = max(d_w, g_w)
+
+        if gap <= CLUSTER_GAP and x_diff < max_w * 0.5:
+            return True
+    return False
+
+    return rescued
 
 
 def _bbox_area(bbox: tuple[int, int, int, int]) -> int:

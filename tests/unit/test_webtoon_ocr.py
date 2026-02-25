@@ -8,6 +8,7 @@ from webtoon.ocr import (
     _enhance_for_ocr,
     _enhance_for_ocr_inverted,
     _merge_detections,
+    _rescue_neighbor_detections,
     detect_and_read,
     is_valid_korean,
 )
@@ -266,3 +267,88 @@ class TestEnhanceForOcrInverted:
         dark = np.full((100, 100, 3), 20, dtype=np.uint8)
         result = _enhance_for_ocr_inverted(dark)
         assert result.mean() > 128, "Dark image should invert to mostly light"
+
+
+class TestRescueNeighborDetections:
+    """Rescue low-confidence detections near multi-line text groups.
+
+    Regression for 297/040: "유중혁에겐" (character name) in a 3-line
+    text block was missed at 0.030 confidence because EasyOCR's
+    recognizer couldn't handle the proper noun.  The two lines below
+    it were detected fine.  The rescue logic recovers line 1 by
+    recognizing it's in the same vertical column as the other two.
+    """
+
+    def test_rescues_detection_near_two_valid_neighbors(self):
+        """Low-conf detection near 2+ valid Korean detections is rescued."""
+        valid = [
+            _make_det(108, 828, 580, 930, text="충분하고도 남는", conf=0.47),
+            _make_det(202, 914, 488, 1018, text="시간이지.", conf=0.93),
+        ]
+        rejected = [
+            _make_det(178, 742, 506, 844, text="유중혀에젠", conf=0.03),
+        ]
+        rescued = _rescue_neighbor_detections(valid, rejected)
+        assert len(rescued) == 1
+        assert rescued[0].text == "유중혀에젠"
+
+    def test_no_rescue_without_group(self):
+        """Single valid detection is not enough for rescue."""
+        valid = [
+            _make_det(202, 914, 488, 1018, text="시간이지.", conf=0.93),
+        ]
+        rejected = [
+            _make_det(178, 742, 506, 844, text="유중혀에젠", conf=0.03),
+        ]
+        rescued = _rescue_neighbor_detections(valid, rejected)
+        assert len(rescued) == 0
+
+    def test_rejects_noise_with_wrong_height(self):
+        """Noise detection with different height from group is rejected."""
+        valid = [
+            _make_det(108, 828, 580, 930, text="충분하고도 남는", conf=0.47),
+            _make_det(202, 914, 488, 1018, text="시간이지.", conf=0.93),
+        ]
+        # Noise: only 24px tall vs group's ~100px
+        rejected = [
+            _make_det(200, 800, 300, 824, text="디미묘", conf=0.03),
+        ]
+        rescued = _rescue_neighbor_detections(valid, rejected)
+        assert len(rescued) == 0
+
+    def test_rejects_non_korean_text(self):
+        """Non-Korean rejected text is not rescued."""
+        valid = [
+            _make_det(108, 828, 580, 930, text="충분하고도 남는", conf=0.47),
+            _make_det(202, 914, 488, 1018, text="시간이지.", conf=0.93),
+        ]
+        rejected = [
+            _make_det(178, 742, 506, 844, text=")", conf=0.05),
+        ]
+        rescued = _rescue_neighbor_detections(valid, rejected)
+        assert len(rescued) == 0
+
+    def test_rejects_detection_in_different_column(self):
+        """Detection far to the side of the text group is not rescued."""
+        valid = [
+            _make_det(108, 828, 580, 930, text="충분하고도 남는", conf=0.47),
+            _make_det(202, 914, 488, 1018, text="시간이지.", conf=0.93),
+        ]
+        # Far to the right, different column
+        rejected = [
+            _make_det(10, 742, 80, 844, text="테스트 텍스트", conf=0.03),
+        ]
+        rescued = _rescue_neighbor_detections(valid, rejected)
+        assert len(rescued) == 0
+
+    def test_rejects_very_low_confidence(self):
+        """Floor confidence of 0.02 filters absolute noise."""
+        valid = [
+            _make_det(108, 828, 580, 930, text="충분하고도 남는", conf=0.47),
+            _make_det(202, 914, 488, 1018, text="시간이지.", conf=0.93),
+        ]
+        rejected = [
+            _make_det(178, 742, 506, 844, text="유중혀에젠", conf=0.01),
+        ]
+        rescued = _rescue_neighbor_detections(valid, rejected)
+        assert len(rescued) == 0
