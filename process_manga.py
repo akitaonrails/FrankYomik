@@ -14,7 +14,7 @@ import logging
 import os
 
 from pipeline.config import DOCS_DIR, OUTPUT_DIR, EN_BASE_FONT_DIVISOR, EN_BASE_FONT_MIN, EN_BASE_FONT_MAX
-from pipeline.image_utils import load_image, load_image_pil, clear_text_in_region, clear_text_in_contour
+from pipeline.image_utils import load_image, load_image_pil, clear_text_in_region, clear_text_in_contour, contour_inner_bbox
 from pipeline.bubble_detector import detect_bubbles
 from pipeline.ocr import extract_text_from_region, is_valid_japanese
 from pipeline.furigana import annotate as furigana_annotate
@@ -77,9 +77,11 @@ def process_furigana(image_path: str, out_dir: str, debug: bool = False) -> None
         contour = bubble.get("contour")
         if contour is not None:
             clear_text_in_contour(output_img, contour)
+            layout_bbox = contour_inner_bbox(contour) or bbox
         else:
             clear_text_in_region(output_img, bbox)
-        render_furigana_vertical(output_img, bbox, segments)
+            layout_bbox = bbox
+        render_furigana_vertical(output_img, layout_bbox, segments)
 
     output_path = os.path.join(out_dir, f"{name}-furigana.png")
     output_img.save(output_path)
@@ -131,9 +133,11 @@ def process_translate(image_path: str, out_dir: str, debug: bool = False) -> Non
         contour = bubble.get("contour")
         if contour is not None:
             clear_text_in_contour(output_img, contour)
+            layout_bbox = contour_inner_bbox(contour) or bbox
         else:
             clear_text_in_region(output_img, bbox)
-        render_english(output_img, bbox, english, base_font_size=base_font_size)
+            layout_bbox = bbox
+        render_english(output_img, layout_bbox, english, base_font_size=base_font_size)
 
     output_path = os.path.join(out_dir, f"{name}-en.png")
     output_img.save(output_path)

@@ -38,6 +38,44 @@ def clear_text_in_region(img: Image.Image, bbox: tuple[int, int, int, int],
     draw.rectangle(bbox, fill=fill_color)
 
 
+def contour_inner_bbox(contour: np.ndarray, margin: int = 8) -> tuple[int, int, int, int] | None:
+    """Compute a layout bbox inset from the contour boundary.
+
+    Erodes the contour mask by `margin` pixels and returns the bounding rect
+    of the remaining area. This gives a rectangle fully inside the contour
+    with margin from its edges, suitable for text layout.
+
+    Returns (x1, y1, x2, y2) or None if the eroded area is too small.
+    """
+    x, y, w, h = cv2.boundingRect(contour)
+    # Work on a local crop for efficiency
+    pad = margin + 2
+    mask = np.zeros((h + 2 * pad, w + 2 * pad), dtype=np.uint8)
+    shifted = contour.copy()
+    shifted[:, :, 0] -= x - pad
+    shifted[:, :, 1] -= y - pad
+    cv2.drawContours(mask, [shifted], -1, 255, -1)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                       (2 * margin + 1, 2 * margin + 1))
+    eroded = cv2.erode(mask, kernel, iterations=1)
+
+    coords = cv2.findNonZero(eroded)
+    if coords is None:
+        return None
+
+    rx, ry, rw, rh = cv2.boundingRect(coords)
+    # Map back to image coordinates
+    ix1 = rx + x - pad
+    iy1 = ry + y - pad
+    ix2 = ix1 + rw
+    iy2 = iy1 + rh
+
+    if rw < 20 or rh < 20:
+        return None
+    return (ix1, iy1, ix2, iy2)
+
+
 def clear_text_in_contour(img: Image.Image, contour: np.ndarray,
                           fill_color: tuple = (255, 255, 255)) -> None:
     """Fill the interior of a contour with a solid color (default white) in-place.

@@ -15,6 +15,9 @@ from .config import (
     BUBBLE_PADDING,
 )
 
+# Padding around each text element's white background
+_TEXT_BG_PAD = 2
+
 log = logging.getLogger(__name__)
 
 # --- Hyphenation ---
@@ -182,7 +185,14 @@ def _render_vertical_sfx(img: Image.Image, bbox: tuple[int, int, int, int],
     for ch in chars:
         ch_bbox = draw.textbbox((0, 0), ch, font=font)
         ch_w = ch_bbox[2] - ch_bbox[0]
-        draw.text((cx - ch_w // 2, start_y), ch, fill="black", font=font)
+        ch_h = ch_bbox[3] - ch_bbox[1]
+        tx = cx - ch_w // 2
+        draw.rectangle(
+            (tx - _TEXT_BG_PAD, start_y - _TEXT_BG_PAD,
+             tx + ch_w + _TEXT_BG_PAD, start_y + ch_h + _TEXT_BG_PAD),
+            fill="white",
+        )
+        draw.text((tx, start_y), ch, fill="black", font=font)
         start_y += char_h
         if start_y + char_h > y2 - TEXT_MARGIN:
             break
@@ -236,8 +246,14 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
     for line in lines:
         line_bbox = draw.textbbox((0, 0), line, font=font)
         line_w = line_bbox[2] - line_bbox[0]
+        line_h = line_bbox[3] - line_bbox[1]
         text_x = x1 + TEXT_MARGIN + (bw - line_w) // 2
 
+        draw.rectangle(
+            (text_x - _TEXT_BG_PAD, text_y - _TEXT_BG_PAD,
+             text_x + line_w + _TEXT_BG_PAD, text_y + line_h + _TEXT_BG_PAD),
+            fill="white",
+        )
         draw.text((text_x, text_y), line, fill="black", font=font)
         text_y += line_height
 
@@ -390,6 +406,14 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             if col_x < x1 + TEXT_MARGIN:
                 break
 
+        main_bbox = draw.textbbox((0, 0), ch_info["char"], font=font)
+        main_w = main_bbox[2] - main_bbox[0]
+        main_h = main_bbox[3] - main_bbox[1]
+        draw.rectangle(
+            (col_x - _TEXT_BG_PAD, char_y - _TEXT_BG_PAD,
+             col_x + main_w + _TEXT_BG_PAD, char_y + main_h + _TEXT_BG_PAD),
+            fill="white",
+        )
         draw.text((col_x, char_y), ch_info["char"], fill="black", font=font)
 
         if ch_info["furigana"]:
@@ -399,6 +423,14 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             furi_y = char_y + (char_height - furi_total_h) // 2
             for fc in ch_info["furigana"]:
                 if furi_x + furi_size <= x2 - BUBBLE_PADDING:
+                    fc_bbox = draw.textbbox((0, 0), fc, font=furi_font)
+                    fc_w = fc_bbox[2] - fc_bbox[0]
+                    fc_h = fc_bbox[3] - fc_bbox[1]
+                    draw.rectangle(
+                        (furi_x - 1, furi_y - 1,
+                         furi_x + fc_w + 1, furi_y + fc_h + 1),
+                        fill="white",
+                    )
                     draw.text((furi_x, furi_y), fc, fill="black", font=furi_font)
                 furi_y += furi_char_h
 
