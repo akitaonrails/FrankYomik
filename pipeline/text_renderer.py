@@ -88,16 +88,15 @@ def _split_word(word: str, max_len: int) -> list[str]:
 
 # Patterns that indicate sound effects / exclamations
 _SFX_PATTERNS = [
-    re.compile(r'^[A-Za-z!?.]+$'),                    # Pure letters+punctuation, no spaces
     re.compile(r'(.)\1{2,}', re.IGNORECASE),          # Repeated chars: Grrr, Aaaa
-    re.compile(r'^(Ugh|Guh|Huh|Tch|Hmm|Grr|Ahh|Gah|Bam|Wham|Crack|Snap|Boom)', re.IGNORECASE),
+    re.compile(r'^(Ugh|Guh|Tch|Grr|Ahh|Gah|Bam|Wham|Crack|Snap|Boom|Thud|Slash|Crash|Pow|Zap)!*$', re.IGNORECASE),
 ]
 
 def _is_sound_effect(text: str) -> bool:
     """Detect if text is a sound effect or short exclamation.
 
     Must be selective: "Guh!!", "!!", "Grrrr" are SFX.
-    "So...", "But...", "Huh?" are NOT (they're dialogue).
+    "Why?", "Stop!", "But..." are NOT (they're dialogue).
     """
     stripped = text.strip()
 
@@ -110,10 +109,6 @@ def _is_sound_effect(text: str) -> bool:
     if ' ' not in stripped:
         for pat in _SFX_PATTERNS:
             if pat.search(stripped):
-                # But exclude common short words
-                word_only = re.sub(r'[^a-zA-Z]', '', stripped).lower()
-                if word_only in ('so', 'but', 'by', 'the', 'ah', 'oh', 'no', 'huh', 'hey'):
-                    return False
                 return True
 
     return False
@@ -219,27 +214,17 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
                                base_font_size: int | None = None) -> None:
     """Render horizontal English text centered inside a bubble region.
 
-    For narrow/tall bubbles, uses hyphenation to break long words.
+    Words are only hyphenated during word wrap when they don't fit on a line.
     """
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
 
-    # For narrow bubbles, hyphenate long words to avoid single-word lines
-    ratio = bh / max(bw, 1)
-    if ratio > 1.2:
-        # Narrow bubble — allow shorter word fragments
-        max_chars = max(3, bw // 12)  # rough estimate of chars that fit
-        words = _hyphenate_words(text.split(), max_chars=max(4, min(7, max_chars)))
-        display_text = " ".join(words)
-    else:
-        display_text = text
-
-    font_size = _fit_horizontal_english_size(display_text, bw, bh, base_font_size)
+    font_size = _fit_horizontal_english_size(text, bw, bh, base_font_size)
     font = _load_font(FONT_EN, font_size)
     draw = ImageDraw.Draw(img)
 
-    lines = _word_wrap(display_text, font, bw, draw)
+    lines = _word_wrap(text, font, bw, draw)
     if not lines:
         return
 
@@ -284,25 +269,72 @@ def _fit_horizontal_english_size(text: str, bw: int, bh: int,
 
 def _word_wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int,
                draw: ImageDraw.ImageDraw) -> list[str]:
-    """Wrap text into lines that fit within max_width pixels."""
+    """Wrap text into lines that fit within max_width pixels.
+
+    Words that are wider than max_width are broken with hyphens at
+    syllable-ish boundaries (only when needed, not pre-emptively).
+    """
     words = text.split()
     if not words:
         return []
 
     lines = []
-    current = words[0]
+    current = ""
 
-    for word in words[1:]:
-        test = current + " " + word
+    for word in words:
+        if not current:
+            test = word
+        else:
+            test = current + " " + word
+
         bbox = draw.textbbox((0, 0), test, font=font)
         if bbox[2] - bbox[0] <= max_width:
             current = test
         else:
-            lines.append(current)
-            current = word
+            if current:
+                lines.append(current)
+            # Check if this single word is wider than max_width
+            word_bbox = draw.textbbox((0, 0), word, font=font)
+            if word_bbox[2] - word_bbox[0] > max_width:
+                # Break the word into fragments that fit
+                fragments = _break_word_to_fit(word, font, max_width, draw)
+                for frag in fragments[:-1]:
+                    lines.append(frag)
+                current = fragments[-1]
+            else:
+                current = word
 
-    lines.append(current)
+    if current:
+        lines.append(current)
     return lines
+
+
+def _break_word_to_fit(word: str, font: ImageFont.FreeTypeFont,
+                       max_width: int, draw: ImageDraw.ImageDraw) -> list[str]:
+    """Break a word into hyphenated fragments that each fit within max_width."""
+    fragments = []
+    remaining = word
+
+    while remaining:
+        # Try progressively shorter prefixes
+        for end in range(len(remaining), 0, -1):
+            fragment = remaining[:end]
+            if end < len(remaining):
+                display = fragment + "-"
+            else:
+                display = fragment
+
+            bbox = draw.textbbox((0, 0), display, font=font)
+            if bbox[2] - bbox[0] <= max_width and end > 0:
+                fragments.append(display)
+                remaining = remaining[end:]
+                break
+        else:
+            # Even a single char doesn't fit — force it
+            fragments.append(remaining[0])
+            remaining = remaining[1:]
+
+    return fragments if fragments else [word]
 
 
 # --- Vertical Japanese with furigana ---
