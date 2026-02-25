@@ -13,7 +13,7 @@ import glob
 import logging
 import os
 
-from pipeline.config import DOCS_DIR, OUTPUT_DIR
+from pipeline.config import DOCS_DIR, OUTPUT_DIR, EN_BASE_FONT_DIVISOR, EN_BASE_FONT_MIN, EN_BASE_FONT_MAX
 from pipeline.image_utils import load_image, load_image_pil, clear_text_in_region
 from pipeline.bubble_detector import detect_bubbles
 from pipeline.ocr import extract_text_from_region, is_valid_japanese
@@ -100,6 +100,11 @@ def process_translate(image_path: str, out_dir: str, debug: bool = False) -> Non
 
     output_img = img_pil.copy()
 
+    # Compute a consistent base font size from the page height
+    page_height = img_pil.height
+    base_font_size = max(EN_BASE_FONT_MIN, min(EN_BASE_FONT_MAX, page_height // EN_BASE_FONT_DIVISOR))
+    log.info("Base English font size: %d (page height=%d)", base_font_size, page_height)
+
     for i, bubble in enumerate(bubbles):
         bbox = bubble["bbox"]
         log.info("Bubble %d/%d: bbox=%s", i + 1, len(bubbles), bbox)
@@ -120,7 +125,7 @@ def process_translate(image_path: str, out_dir: str, debug: bool = False) -> Non
         log.info("  EN: %s", english)
 
         clear_text_in_region(output_img, bbox)
-        render_english(output_img, bbox, english)
+        render_english(output_img, bbox, english, base_font_size=base_font_size)
 
     output_path = os.path.join(out_dir, f"{name}-en.png")
     output_img.save(output_path)

@@ -25,6 +25,11 @@ MIN_FONT_SIZE = 10
 MAX_FONT_SIZE = 60
 TEXT_MARGIN = 8               # Margin inside bubble for text placement
 
+# English font normalization (base_size = page_height / divisor, clamped)
+EN_BASE_FONT_DIVISOR = 55
+EN_BASE_FONT_MIN = 14
+EN_BASE_FONT_MAX = 24
+
 # File paths
 DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output")

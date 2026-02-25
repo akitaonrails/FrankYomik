@@ -78,7 +78,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
 
         # Interior brightness check
         mean_val = cv2.mean(gray, mask=mask)[0]
-        if mean_val < 200:
+        if mean_val < 180:
             continue
 
         # --- False positive filters ---
@@ -94,7 +94,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         #    Bubbles are mostly pure white, faces/skin have gradients
         bright_pixels = cv2.countNonZero(cv2.bitwise_and(bright_thresh, mask))
         bright_ratio = bright_pixels / area
-        if bright_ratio < 0.80:
+        if bright_ratio < 0.65:
             continue
 
         # 3. Mid-tone ratio: faces have many mid-tone pixels (skin gradients),
@@ -102,7 +102,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         mid_mask = cv2.inRange(gray, 80, 220)
         mid_pixels = cv2.countNonZero(cv2.bitwise_and(mid_mask, mask))
         mid_ratio = mid_pixels / area
-        if mid_ratio > 0.10:
+        if mid_ratio > 0.15:
             continue
 
         # 4. Contour circularity: bubbles are round/elliptical,
@@ -120,7 +120,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         border_pixels = cv2.countNonZero(border_only)
         if border_pixels > 0:
             border_mean = cv2.mean(gray, mask=border_only)[0]
-            if border_mean > 140:
+            if border_mean > 160:
                 continue
 
         candidates.append({

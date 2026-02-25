@@ -139,7 +139,7 @@ def _load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
 # --- English rendering entry point ---
 
 def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
-                   text: str) -> None:
+                   text: str, base_font_size: int | None = None) -> None:
     """Render English text inside a bubble, choosing the best layout."""
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
@@ -154,7 +154,7 @@ def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
     if layout == "vertical_sfx":
         _render_vertical_sfx(img, bbox, text)
     else:
-        _render_horizontal_english(img, bbox, text)
+        _render_horizontal_english(img, bbox, text, base_font_size)
 
 
 # --- Vertical sound effect rendering ---
@@ -215,7 +215,8 @@ def _fit_vertical_chars(chars: list[str], bw: int, bh: int) -> int:
 # --- Horizontal English ---
 
 def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int],
-                               text: str) -> None:
+                               text: str,
+                               base_font_size: int | None = None) -> None:
     """Render horizontal English text centered inside a bubble region.
 
     For narrow/tall bubbles, uses hyphenation to break long words.
@@ -234,7 +235,7 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
     else:
         display_text = text
 
-    font_size = _fit_horizontal_english_size(display_text, bw, bh)
+    font_size = _fit_horizontal_english_size(display_text, bw, bh, base_font_size)
     font = _load_font(FONT_EN, font_size)
     draw = ImageDraw.Draw(img)
 
@@ -256,9 +257,11 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
         text_y += line_height
 
 
-def _fit_horizontal_english_size(text: str, bw: int, bh: int) -> int:
+def _fit_horizontal_english_size(text: str, bw: int, bh: int,
+                                 base_font_size: int | None = None) -> int:
     """Binary search for the largest horizontal English font size."""
-    lo, hi = MIN_FONT_SIZE, min(MAX_FONT_SIZE, bh)
+    upper = base_font_size if base_font_size is not None else MAX_FONT_SIZE
+    lo, hi = MIN_FONT_SIZE, min(upper, bh)
     best = lo
 
     for _ in range(15):
@@ -341,7 +344,8 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     col_width = font_size + furi_size + 4
     char_height = int(font_size * 1.15)
 
-    start_x = x2 - TEXT_MARGIN - font_size
+    furi_space = furi_size + 2 if any(c["furigana"] for c in chars) else 0
+    start_x = x2 - TEXT_MARGIN - font_size - furi_space
     start_y = y1 + TEXT_MARGIN
 
     col_x = start_x
@@ -383,11 +387,15 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
         col_width = mid + furi_extra
         char_height = int(mid * 1.15)
 
+        # Reserve space for the first column's furigana extending past the rightmost kanji
+        furi_offset = (int(mid * FURIGANA_SIZE_RATIO) + 2) if has_furigana else 0
+        available_width = bw - furi_offset
+
         chars_per_col = max(1, bh // char_height)
         cols_needed = (n + chars_per_col - 1) // chars_per_col
         total_width = cols_needed * col_width
 
-        if total_width <= bw:
+        if total_width <= available_width:
             best = mid
             lo = mid + 1
         else:
