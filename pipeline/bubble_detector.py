@@ -128,8 +128,35 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         white_pixels = gray[(mask > 0) & (gray > 200)]
         if len(white_pixels) > 50:
             white_std = float(np.std(white_pixels))
-            if white_std > 12:
+            if white_std > 15:
                 continue
+
+        # 7. Dark content analysis using eroded interior (excludes border).
+        erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        inner_mask = cv2.erode(mask, erode_k, iterations=1)
+        inner_area = cv2.countNonZero(inner_mask)
+        if inner_area > 100:
+            dark_in_region = np.zeros(gray.shape, dtype=np.uint8)
+            dark_in_region[(inner_mask > 0) & (gray < 120)] = 255
+            dark_count = cv2.countNonZero(dark_in_region)
+
+            # 7a. Minimum dark content: real bubbles have dark text strokes
+            #     (typically >1% of interior at gray<120). Bright face/skin
+            #     regions have almost none (<0.3%).
+            dark_ratio = dark_count / inner_area
+            if dark_ratio < 0.005:
+                continue
+
+            # 7b. Largest dark component size: text = many small strokes,
+            #     face hair/eyes = fewer large blobs.
+            if dark_count > 0:
+                num_labels, _, stats, _ = cv2.connectedComponentsWithStats(
+                    dark_in_region, connectivity=8)
+                if num_labels > 1:
+                    component_areas = stats[1:, cv2.CC_STAT_AREA]
+                    largest = int(max(component_areas))
+                    if largest > inner_area * 0.08:
+                        continue
 
         candidates.append({
             "bbox": (x, y, x + bw, y + bh),

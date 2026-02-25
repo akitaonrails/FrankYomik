@@ -77,12 +77,12 @@ def is_valid_japanese(text: str) -> bool:
     if content_chars < 2:
         return False
 
-    # Reject 2-char text where both are kanji — manga-ocr tends to hallucinate
-    # complex kanji from face features. Real dialogue with only 2 kanji and
-    # nothing else is extremely rare.
-    if content_chars == 2:
+    # Reject short all-kanji text — manga-ocr tends to hallucinate complex
+    # kanji from face features. Real dialogue almost always has hiragana
+    # (particles, verb endings). Pure kanji short phrases are extremely rare.
+    if content_chars <= 4:
         kanji_count = sum(1 for ch in stripped if 0x4E00 <= ord(ch) <= 0x9FFF)
-        if kanji_count == 2:
+        if kanji_count == content_chars:
             return False
 
     meaningful = content_chars + other_chars
