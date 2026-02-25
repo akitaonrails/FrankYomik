@@ -65,3 +65,13 @@ webtoon:
     pad_y: 10                       # Vertical padding around text cluster
     flood_fill_tolerance: 15        # LAB color space tolerance for flood fill
     contour_expand: 5               # Pixels to expand contour search area
+  inpainting:
+    enabled: false                    # Opt-in; existing pipeline unchanged by default
+    model: "lama"                     # "lama", "flux-fill", or "sdxl"
+    erode_px: 3                       # Shrink mask from bubble edge to preserve outline
+    text_pad: 14                      # Padding around text detections in mask
+    text_dilate: 4                    # Dilate text rects to catch glyph antialiasing
+    context_pad: 20                   # Extra pixels around bubble crop for model context
+    # Diffusion-specific (ignored for LaMa):
+    num_inference_steps: 28
+    prompt: "clean empty speech bubble interior, flat color"

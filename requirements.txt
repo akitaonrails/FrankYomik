@@ -7,3 +7,7 @@ deep-translator
 pyyaml
 nodriver
 easyocr
+simple-lama-inpainting  # install with: pip install --no-deps simple-lama-inpainting
+                        # (its pinned deps conflict with numpy/Pillow/opencv)
+# Optional - for Flux/SDXL inpainting backends:
+# pip install diffusers transformers accelerate

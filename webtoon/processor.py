@@ -12,6 +12,7 @@ from .config import FONT_KO
 
 from .bubble_detector import WebtoonBubble, detect_bubbles
 from .image_utils import split_tall_image, stitch_detections
+from .inpainter import inpaint_bubble
 from .ocr import TextDetection, detect_and_read, is_valid_korean
 from .translator import translate
 
@@ -219,6 +220,7 @@ def render_page(page: WebtoonPageResult, out_dir: str,
     # Track which bubbles we've already cleared (avoid double-clearing when
     # a bubble is split into multiple sub-group regions).
     cleared_bubbles: set[int] = set()
+    inpainted_bubbles: set[int] = set()
 
     for region in page.regions:
         if not region.english:
@@ -228,7 +230,12 @@ def render_page(page: WebtoonPageResult, out_dir: str,
         bubble_id = id(bubble)
 
         # Step 1: Clear Korean text (once per bubble, even if split).
+        # Try AI inpainting first, then always run solid clearing to
+        # catch text remnants outside the inpaint mask.
         if bubble_id not in cleared_bubbles:
+            if inpaint_bubble(page.img_pil, bubble,
+                              target_img=page.output_img):
+                inpainted_bubbles.add(bubble_id)
             _clear_bubble_text(page.output_img, bubble)
             cleared_bubbles.add(bubble_id)
 
@@ -244,7 +251,8 @@ def render_page(page: WebtoonPageResult, out_dir: str,
 
         # Step 3: Render English text within the text-region bbox
         _render_webtoon_english(page.output_img, bubble, region.english,
-                                text_bbox)
+                                text_bbox,
+                                skip_bg_rect=(bubble_id in inpainted_bubbles))
 
     output_path = os.path.join(out_dir, f"{page.name}-en.png")
     page.output_img.save(output_path)
@@ -429,9 +437,36 @@ def _bg_luminance(color: tuple[int, int, int]) -> float:
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
 
 
+def _sample_render_surface(img: Image.Image,
+                           bbox: tuple[int, int, int, int]
+                           ) -> tuple[int, int, int]:
+    """Sample the median color of the render area from the current output image.
+
+    Called AFTER clearing/inpainting so we see the actual surface the text
+    will be rendered on, not the original text pixels.  More reliable than
+    bubble.bg_color for narrow panels where the sampling band leaks into
+    surrounding artwork.
+    """
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(img.width, x2)
+    y2 = min(img.height, y2)
+    if x2 <= x1 or y2 <= y1:
+        return (255, 255, 255)
+
+    crop = np.array(img.crop((x1, y1, x2, y2)))
+    if crop.size == 0:
+        return (255, 255, 255)
+
+    median = np.median(crop.reshape(-1, 3), axis=0).astype(int)
+    return (int(median[0]), int(median[1]), int(median[2]))
+
+
 def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
                             text: str,
-                            render_bbox: tuple[int, int, int, int]) -> None:
+                            render_bbox: tuple[int, int, int, int],
+                            skip_bg_rect: bool = False) -> None:
     """Render English text within the text-region bbox.
 
     Uses render_bbox (tight around OCR detections) instead of bubble.bbox
@@ -441,9 +476,15 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     When the bubble has a mask, the semi-transparent background rectangle
     is clipped to the mask to prevent white rectangles leaking outside
     the bubble boundary.
+
+    When skip_bg_rect is True (bubble was AI-inpainted), the background
+    rectangle is omitted — the inpainted surface is already clean.
     """
-    bg_color = bubble.bg_color
-    lum = _bg_luminance(bg_color)
+    # Sample actual surface color at the render area (after clearing/inpainting)
+    # instead of relying on bubble.bg_color which is sampled from a band
+    # around text during detection and can be wrong for narrow panels.
+    surface_color = _sample_render_surface(img, render_bbox)
+    lum = _bg_luminance(surface_color)
 
     # Font color: white on dark, black on light
     if lum < 0.5:
@@ -522,9 +563,10 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     # bubble boundary (the bg rect was already clipped, but text was not).
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(overlay)
-    overlay_draw.rounded_rectangle(
-        (bg_x1, bg_y1, bg_x2, bg_y2), radius=3, fill=bg_rect_color,
-    )
+    if not skip_bg_rect:
+        overlay_draw.rounded_rectangle(
+            (bg_x1, bg_y1, bg_x2, bg_y2), radius=3, fill=bg_rect_color,
+        )
 
     # Render text lines centered horizontally (on overlay)
     font_color_rgba = font_color + (255,)

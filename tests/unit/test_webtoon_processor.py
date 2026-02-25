@@ -25,6 +25,7 @@ from webtoon.processor import (
     _is_title_text,
     _render_webtoon_english,
     _sample_local_bg,
+    _sample_render_surface,
     _text_region_bbox,
     _wrap_text,
 )
@@ -576,3 +577,62 @@ class TestRenderingMaskConstraint:
             f"Clearing outside mask used white instead of local bg: "
             f"R={mean_color[0]:.0f}"
         )
+
+
+class TestSampleRenderSurface:
+    """Font color must be determined from the actual cleared/inpainted surface.
+
+    Regression for chapter_293 pages 006 and 013: bubble.bg_color was sampled
+    from a narrow band during detection which leaked into bright surrounding
+    artwork, causing black text on dark-blue notification panels.  Now we
+    sample the median color of the render area AFTER clearing.
+    """
+
+    def test_returns_dark_color_for_blue_surface(self):
+        """Blue panel surface → dark median → should produce white font."""
+        blue = (40, 80, 180)
+        img = Image.new("RGB", (300, 200), blue)
+        color = _sample_render_surface(img, (50, 50, 250, 150))
+        lum = _bg_luminance(color)
+        assert lum < 0.5, (
+            f"Blue surface should be dark (lum={lum:.2f}), "
+            f"sampled={color}"
+        )
+
+    def test_returns_light_color_for_white_surface(self):
+        """White bubble surface → bright median → should produce dark font."""
+        img = Image.new("RGB", (300, 200), (250, 250, 250))
+        color = _sample_render_surface(img, (50, 50, 250, 150))
+        lum = _bg_luminance(color)
+        assert lum > 0.5, (
+            f"White surface should be bright (lum={lum:.2f}), "
+            f"sampled={color}"
+        )
+
+    def test_samples_actual_image_not_bg_color(self):
+        """Surface sampling uses actual pixels, not bubble.bg_color.
+
+        Regression: bubble.bg_color was bright (leaked into artwork) even
+        though the actual panel surface was dark blue → wrong font color.
+        """
+        dark_surface = (30, 50, 120)
+        img = Image.new("RGB", (200, 200), dark_surface)
+        bbox = (20, 20, 180, 180)
+
+        # The surface is dark, so font should be white regardless of
+        # what bubble.bg_color says
+        color = _sample_render_surface(img, bbox)
+        assert _bg_luminance(color) < 0.5
+
+    def test_handles_zero_size_bbox(self):
+        """Zero-size bbox returns white fallback."""
+        img = Image.new("RGB", (100, 100), (0, 0, 0))
+        color = _sample_render_surface(img, (50, 50, 50, 50))
+        assert color == (255, 255, 255)
+
+    def test_clamped_to_image_bounds(self):
+        """Bbox extending beyond image is clamped, doesn't crash."""
+        img = Image.new("RGB", (100, 100), (100, 100, 100))
+        color = _sample_render_surface(img, (-10, -10, 200, 200))
+        # Should sample the entire image → (100, 100, 100)
+        assert abs(color[0] - 100) < 5
