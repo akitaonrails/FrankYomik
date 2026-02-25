@@ -23,19 +23,48 @@ def _overlap_ratio(a: tuple, b: tuple) -> float:
     return inter / area_a if area_a > 0 else 0.0
 
 
+def _is_color_page(img_cv: np.ndarray) -> bool:
+    """Detect if a page is color (vs grayscale manga).
+
+    Uses HSV saturation: color pages have >10% of pixels with saturation > 30.
+    Grayscale manga has near-zero saturation everywhere.
+    """
+    hsv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2HSV)
+    pct_saturated = np.sum(hsv[:, :, 1] > 30) / hsv[:, :, 1].size
+    return pct_saturated > 0.10
+
+
 def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
     """Detect speech bubbles using OpenCV white-region contour analysis.
 
-    Filters out false positives (faces, clothing) using:
-    - Edge density: bubbles have few internal edges (text only), faces have many
-    - Border darkness: speech bubbles have dark outlines
-    - Brightness uniformity: bubble interiors are mostly pure white
+    Uses separate threshold profiles for grayscale vs color manga pages.
 
     Returns list of dicts with keys: bbox (x1,y1,x2,y2), type.
     """
     h, w = img_cv.shape[:2]
     page_area = h * w
     gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    is_color = _is_color_page(img_cv)
+
+    # --- Threshold profiles ---
+    if is_color:
+        log.info("Color page detected — using relaxed thresholds")
+        bright_level = 220       # colored bubbles aren't pure white
+        min_bright_ratio = 0.50  # lower bar for colored backgrounds
+        max_edge_density = 0.12
+        max_mid_ratio = 0.40     # colored backgrounds have many mid-tones
+        min_dark_ratio = 0.008
+        max_component_ratio = 0.10
+        use_rect_fallback = True  # bounding rect fallback for dark check
+    else:
+        log.info("Grayscale page detected — using standard thresholds")
+        bright_level = 240
+        min_bright_ratio = 0.65
+        max_edge_density = 0.12
+        max_mid_ratio = 0.15
+        min_dark_ratio = 0.008
+        max_component_ratio = 0.10
+        use_rect_fallback = False
 
     # Edge map for texture analysis (computed once)
     edges = cv2.Canny(gray, 50, 150)
@@ -49,7 +78,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
     thresh = cv2.dilate(thresh, kernel, iterations=1)
 
     # Bright pixel threshold for uniformity check
-    _, bright_thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
+    _, bright_thresh = cv2.threshold(gray, bright_level, 255, cv2.THRESH_BINARY)
 
     # Use RETR_TREE to find nested contours (bubbles inside panels)
     contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -83,37 +112,33 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
 
         # --- False positive filters ---
 
-        # 1. Edge density: ratio of edge pixels inside the region
-        #    Bubbles have sparse edges (just text strokes), faces have many
+        # 1. Edge density
         edge_pixels = cv2.countNonZero(cv2.bitwise_and(edges, edges, mask=mask))
         edge_density = edge_pixels / area
-        if edge_density > 0.10:
+        if edge_density > max_edge_density:
             continue
 
-        # 2. Bright pixel ratio: fraction of very bright (>240) pixels
-        #    Bubbles are mostly pure white, faces/skin have gradients
+        # 2. Bright pixel ratio
         bright_pixels = cv2.countNonZero(cv2.bitwise_and(bright_thresh, mask))
         bright_ratio = bright_pixels / area
-        if bright_ratio < 0.65:
+        if bright_ratio < min_bright_ratio:
             continue
 
-        # 3. Mid-tone ratio: faces have many mid-tone pixels (skin gradients),
-        #    bubbles are bimodal (white background + black text, few mid-tones)
+        # 3. Mid-tone ratio
         mid_mask = cv2.inRange(gray, 80, 220)
         mid_pixels = cv2.countNonZero(cv2.bitwise_and(mid_mask, mask))
         mid_ratio = mid_pixels / area
-        if mid_ratio > 0.15:
+        if mid_ratio > max_mid_ratio:
             continue
 
-        # 4. Contour circularity: bubbles are round/elliptical,
-        #    faces and clothing are irregular shapes
+        # 4. Contour circularity
         perimeter = cv2.arcLength(cnt, True)
         if perimeter > 0:
             circularity = 4 * np.pi * area / (perimeter * perimeter)
             if circularity < 0.15:
                 continue
 
-        # 5. Border darkness: speech bubbles have dark outlines
+        # 5. Border darkness
         border_mask = np.zeros(gray.shape, dtype=np.uint8)
         cv2.drawContours(border_mask, [cnt], -1, 255, 3)
         border_only = cv2.subtract(border_mask, mask)
@@ -123,8 +148,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
             if border_mean > 160:
                 continue
 
-        # 6. Background uniformity: real bubble interiors are very uniform white.
-        #    Faces have skin-tone gradients even in their brightest areas.
+        # 6. Background uniformity
         white_pixels = gray[(mask > 0) & (gray > 200)]
         if len(white_pixels) > 50:
             white_std = float(np.std(white_pixels))
@@ -136,16 +160,22 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         inner_mask = cv2.erode(mask, erode_k, iterations=1)
         inner_area = cv2.countNonZero(inner_mask)
         if inner_area > 100:
-            # 7a. Very-dark pixel check (gray < 60): text strokes are
-            #     near-black. Face art features (hair anti-aliasing, skin
-            #     shadows) are moderately dark (60-120) and don't count.
+            # 7a. Very-dark pixel check (gray < 60)
             very_dark = np.sum((inner_mask > 0) & (gray < 60))
-            if very_dark / inner_area < 0.008:
-                continue
+            dark_ratio_60 = very_dark / inner_area
+            if dark_ratio_60 < min_dark_ratio:
+                if use_rect_fallback and very_dark == 0 and bw * bh > 0:
+                    # Color page fallback: contour may not encompass text
+                    # strokes. Check bounding rect with band-pass filter
+                    # (too low = no text, too high = surrounding art).
+                    rect_roi = gray[y:y+bh, x:x+bw]
+                    rect_dark = np.sum(rect_roi < 60) / rect_roi.size
+                    if not (0.013 <= rect_dark <= 0.08):
+                        continue
+                else:
+                    continue
 
-            # 7b. Largest dark component size: text = many small strokes,
-            #     face hair/eyes = fewer large blobs.  Uses wider threshold
-            #     (gray < 120) for component connectivity.
+            # 7b. Largest dark component size
             dark_in_region = np.zeros(gray.shape, dtype=np.uint8)
             dark_in_region[(inner_mask > 0) & (gray < 120)] = 255
             dark_count = cv2.countNonZero(dark_in_region)
@@ -155,7 +185,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
                 if num_labels > 1:
                     component_areas = stats[1:, cv2.CC_STAT_AREA]
                     largest = int(max(component_areas))
-                    if largest > inner_area * 0.08:
+                    if largest > inner_area * max_component_ratio:
                         continue
 
         candidates.append({

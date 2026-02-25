@@ -88,7 +88,7 @@ def _split_word(word: str, max_len: int) -> list[str]:
 
 # Patterns that indicate sound effects / exclamations
 _SFX_PATTERNS = [
-    re.compile(r'(.)\1{2,}', re.IGNORECASE),          # Repeated chars: Grrr, Aaaa
+    re.compile(r'([a-zA-Z])\1{2,}'),                   # Repeated letters: Grrr, Aaaa
     re.compile(r'^(Ugh|Guh|Tch|Grr|Ahh|Gah|Bam|Wham|Crack|Snap|Boom|Thud|Slash|Crash|Pow|Zap)!*$', re.IGNORECASE),
 ]
 

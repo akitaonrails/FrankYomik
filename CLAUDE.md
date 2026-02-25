@@ -89,6 +89,20 @@ Uses pure OpenCV — VLM-based detection (Qwen2.5-VL) was tried first but produc
 - **manga-ocr** runs on CPU (forced via `CUDA_VISIBLE_DEVICES=""` before import)
 - **Fonts**: Noto CJK at `/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc` (Arch Linux path)
 
+## Regression Testing
+
+**Always run `pytest tests/` after modifying detection thresholds, filters, or rendering logic.** Tests lock in known-good behavior:
+
+- `tests/test_bubble_detector.py`: Minimum detection counts per page, known bubble presence, face false positive rejection
+- `tests/test_ocr_validation.py`: Japanese text validation (accept dialogue, reject noise/hallucinations)
+- `tests/test_text_renderer.py`: SFX detection, word wrap, hyphenation behavior
+
+**Workflow for adjustments**:
+1. Run existing tests before making changes (`pytest tests/ -v`)
+2. Make threshold/filter adjustments
+3. Run tests again — fix any regressions before proceeding
+4. When you discover new behaviors (new false positives, missed bubbles, rendering issues), add regression tests to lock them in
+
 ## Test Data
 
 - `docs/adult*.png` (4 pages): Seinen manga without furigana — tests furigana pipeline
