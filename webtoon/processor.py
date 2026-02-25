@@ -62,9 +62,14 @@ def load_page(path: str) -> WebtoonPageResult:
 
 
 def detect_text(page: WebtoonPageResult) -> None:
-    """Stage 2: Run EasyOCR, handling tall images by splitting into strips."""
+    """Stage 2: Run EasyOCR, handling tall images by splitting into strips.
+
+    Smaller strips (600px) give CLAHE better local contrast for styled text
+    on colored panels. The two-pass OCR (original + CLAHE) runs per-strip,
+    and results are stitched with IoU deduplication.
+    """
     h = page.img_cv.shape[0]
-    max_strip_height = 2000
+    max_strip_height = 600
 
     if h <= max_strip_height:
         page.detections = detect_and_read(page.img_cv)
