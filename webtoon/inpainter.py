@@ -229,27 +229,23 @@ def build_inpaint_mask(
 ) -> Image.Image | None:
     """Build binary mask: white=inpaint (text inside balloon), black=keep.
 
-    1. Start with bubble.bubble_mask (return None if absent → fallback)
-    2. Erode by erode_px (preserve balloon outline)
-    3. Build text rects mask (union of padded detection bboxes)
-    4. Intersect: eroded_bubble AND text_rects (only inpaint where text is)
-    5. Dilate result by text_dilate px (catch glyph antialiasing edges)
+    When bubble_mask is available:
+      1. Erode by erode_px (preserve balloon outline)
+      2. Build text rects mask (union of padded detection bboxes)
+      3. Intersect: eroded_bubble AND text_rects (only inpaint where text is)
+         — if bubble mask coverage < 85%, use text rects alone
+      4. Dilate result by text_dilate px (catch glyph antialiasing edges)
+
+    When bubble_mask is absent (padded-bbox fallback bubbles):
+      Use text rects directly so inpainting can still clean text areas
+      instead of falling back to solid-color filling.
     """
-    if bubble.bubble_mask is None:
-        return None
     if not bubble.text_regions:
         return None
 
     w, h = img_size
 
-    # Step 1: bubble mask as PIL
-    bubble_mask = Image.fromarray(bubble.bubble_mask)
-
-    # Step 2: erode to preserve balloon outline
-    if erode_px > 0:
-        bubble_mask = bubble_mask.filter(ImageFilter.MinFilter(erode_px * 2 + 1))
-
-    # Step 3: build text rects mask (union of padded detection bboxes)
+    # Step 1: build text rects mask (always needed)
     text_mask = Image.new("L", (w, h), 0)
     text_arr = np.array(text_mask)
     for det in bubble.text_regions:
@@ -261,25 +257,34 @@ def build_inpaint_mask(
         text_arr[y1:y2, x1:x2] = 255
     text_mask = Image.fromarray(text_arr)
 
-    # Step 4: intersect — only inpaint where text is AND inside bubble.
-    # If the bubble mask poorly covers the text area (<85%), skip the
-    # intersection and use text rects alone.  Incomplete masks leave
-    # Korean remnants that the AI model can't clean.
-    bubble_arr = np.array(bubble_mask)
-    text_arr = np.array(text_mask)
-
-    text_pixels = np.count_nonzero(text_arr)
-    overlap_pixels = np.count_nonzero((bubble_arr > 0) & (text_arr > 0))
-    coverage = overlap_pixels / max(1, text_pixels)
-
-    if coverage >= 0.85:
-        # Good coverage — clip to bubble boundary
-        result_arr = np.where((bubble_arr > 0) & (text_arr > 0), 255, 0).astype(np.uint8)
+    if bubble.bubble_mask is None:
+        # No contour mask — use text rects directly
+        result_arr = text_arr
     else:
-        # Poor coverage — use text rects directly so all text gets inpainted
-        log.info("Bubble mask coverage %.0f%% < 85%%, using text rects only",
-                 coverage * 100)
-        result_arr = text_arr.copy()
+        # Step 2: bubble mask as PIL, eroded
+        bubble_mask = Image.fromarray(bubble.bubble_mask)
+        if erode_px > 0:
+            bubble_mask = bubble_mask.filter(ImageFilter.MinFilter(erode_px * 2 + 1))
+
+        # Step 3: intersect — only inpaint where text is AND inside bubble.
+        # If the bubble mask poorly covers the text area (<85%), skip the
+        # intersection and use text rects alone.  Incomplete masks leave
+        # Korean remnants that the AI model can't clean.
+        bubble_arr = np.array(bubble_mask)
+        text_arr = np.array(text_mask)
+
+        text_pixels = np.count_nonzero(text_arr)
+        overlap_pixels = np.count_nonzero((bubble_arr > 0) & (text_arr > 0))
+        coverage = overlap_pixels / max(1, text_pixels)
+
+        if coverage >= 0.85:
+            # Good coverage — clip to bubble boundary
+            result_arr = np.where((bubble_arr > 0) & (text_arr > 0), 255, 0).astype(np.uint8)
+        else:
+            # Poor coverage — use text rects directly so all text gets inpainted
+            log.info("Bubble mask coverage %.0f%% < 85%%, using text rects only",
+                     coverage * 100)
+            result_arr = text_arr.copy()
 
     # Step 5: dilate to catch glyph antialiasing
     if text_dilate > 0:

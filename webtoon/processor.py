@@ -105,18 +105,26 @@ def _is_title_text(bubble: WebtoonBubble) -> bool:
 
 def _detect_subgroups(detections: list[TextDetection],
                       gap_threshold: int = 20,
-                      x_offset_threshold: int = 50) -> list[list[TextDetection]]:
+                      x_offset_threshold: int = 50,
+                      large_x_threshold: int = 100) -> list[list[TextDetection]]:
     """Split detections into vertical sub-groups for separate rendering.
 
     Uses two criteria to identify distinct speech boxes vs. lines in the
     same box:
-    1. Vertical gap between groups exceeds gap_threshold
-    2. Horizontal center offset between groups exceeds x_offset_threshold
+    1. Vertical gap between groups exceeds gap_threshold AND horizontal
+       center offset exceeds x_offset_threshold
+    2. Horizontal center offset alone exceeds large_x_threshold (catches
+       overlapping balloons where text from separate bubbles has near-zero
+       vertical gap but very different X positions)
 
-    Both must be true to split.  This prevents splitting two lines of
-    the same message that happen to have a vertical gap (e.g., 039's
-    notification panel) while correctly splitting text from two separate
-    speech boxes (e.g., 059's two black boxes).
+    Criterion 1 prevents splitting two lines of the same message that
+    happen to have a vertical gap (e.g., 039's notification panel) while
+    correctly splitting text from two separate speech boxes (e.g., 059's
+    two black boxes).
+
+    Criterion 2 catches overlapping balloons (e.g., 071) where detections
+    from two spatially separate bubbles have tiny vertical gaps but are
+    far apart horizontally.
     """
     if len(detections) <= 1:
         return [detections]
@@ -128,20 +136,17 @@ def _detect_subgroups(detections: list[TextDetection],
         prev_bottom = max(d.bbox_rect[3] for d in groups[-1])
         gap = det.bbox_rect[1] - prev_bottom
 
-        if gap > gap_threshold:
-            # Check horizontal alignment with current group
-            prev_cx = sum(
-                (d.bbox_rect[0] + d.bbox_rect[2]) / 2 for d in groups[-1]
-            ) / len(groups[-1])
-            det_cx = (det.bbox_rect[0] + det.bbox_rect[2]) / 2
-            h_offset = abs(det_cx - prev_cx)
+        # Compute horizontal offset from the current group's center
+        prev_cx = sum(
+            (d.bbox_rect[0] + d.bbox_rect[2]) / 2 for d in groups[-1]
+        ) / len(groups[-1])
+        det_cx = (det.bbox_rect[0] + det.bbox_rect[2]) / 2
+        h_offset = abs(det_cx - prev_cx)
 
-            if h_offset > x_offset_threshold:
-                # Different X position → separate speech box
-                groups.append([det])
-            else:
-                # Same X position → just a bigger gap in same box
-                groups[-1].append(det)
+        # Split if: (vertical gap + moderate x offset) OR (large x offset alone)
+        if ((gap > gap_threshold and h_offset > x_offset_threshold) or
+                h_offset > large_x_threshold):
+            groups.append([det])
         else:
             groups[-1].append(det)
 
@@ -601,10 +606,10 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
 
     # Clip the entire overlay (bg rect + text) to the bubble mask to
     # prevent any rendering from leaking outside the bubble boundary.
-    # Skip clipping when the mask poorly covers the render area — an
-    # incomplete mask would clip the English text itself, showing dark
-    # background through the gaps.
-    if bubble.bubble_mask is not None:
+    # Skip when: (a) inpainted — the surface is already clean, clipping
+    # only cuts through English text glyphs creating ghost artifacts, or
+    # (b) mask poorly covers the render area — would clip the text itself.
+    if bubble.bubble_mask is not None and not skip_bg_rect:
         mask_roi = bubble.bubble_mask[by1:by2, bx1:bx2]
         mask_coverage = np.count_nonzero(mask_roi) / max(1, mask_roi.size)
         if mask_coverage >= 0.85:

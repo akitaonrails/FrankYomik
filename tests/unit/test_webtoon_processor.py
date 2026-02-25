@@ -22,6 +22,7 @@ from webtoon.processor import (
     _bg_luminance,
     _clear_bubble_text,
     _clear_with_mask,
+    _detect_subgroups,
     _is_title_text,
     _render_webtoon_english,
     _sample_local_bg,
@@ -643,3 +644,64 @@ class TestSampleRenderSurface:
         color = _sample_render_surface(img, (-10, -10, 200, 200))
         # Should sample the entire image → (100, 100, 100)
         assert abs(color[0] - 100) < 5
+
+
+class TestDetectSubgroups:
+    """Sub-group splitting for overlapping balloons and multi-box bubbles.
+
+    Regression for 071: detections from two separate overlapping balloons
+    had small vertical gap (4px) but large horizontal offset (179px).
+    Without horizontal-only splitting, text from both balloons was merged
+    into one garbled translation.
+    """
+
+    def test_single_detection_returns_one_group(self):
+        """A single detection stays in one group."""
+        dets = [_make_det(100, 100, 200, 130)]
+        groups = _detect_subgroups(dets)
+        assert len(groups) == 1
+        assert len(groups[0]) == 1
+
+    def test_vertical_gap_and_x_offset_splits(self):
+        """Vertical gap + horizontal offset → split."""
+        dets = [
+            _make_det(100, 100, 200, 130, text="첫 번째"),
+            _make_det(300, 200, 400, 230, text="두 번째"),
+        ]
+        groups = _detect_subgroups(dets)
+        assert len(groups) == 2
+
+    def test_large_x_offset_splits_without_vertical_gap(self):
+        """Large horizontal offset alone splits (overlapping balloons).
+
+        Regression for 071: two balloons overlap vertically so gap is tiny,
+        but text centers are 179px apart horizontally.
+        """
+        # Two detections at similar Y but very different X
+        dets = [
+            _make_det(100, 100, 200, 130, text="왼쪽"),   # center X = 150
+            _make_det(300, 125, 400, 155, text="오른쪽"),  # center X = 350, gap ~-5px
+        ]
+        groups = _detect_subgroups(dets)
+        assert len(groups) == 2, (
+            f"Expected 2 groups for 200px horizontal offset, got {len(groups)}"
+        )
+
+    def test_same_column_no_split(self):
+        """Lines in same column (small x offset) stay together."""
+        dets = [
+            _make_det(100, 100, 300, 130, text="첫 줄"),
+            _make_det(110, 140, 290, 170, text="둘째 줄"),
+            _make_det(105, 180, 295, 210, text="셋째 줄"),
+        ]
+        groups = _detect_subgroups(dets)
+        assert len(groups) == 1
+
+    def test_vertical_gap_same_x_no_split(self):
+        """Vertical gap with same X position stays together (same balloon)."""
+        dets = [
+            _make_det(100, 100, 300, 130, text="첫 줄"),
+            _make_det(110, 180, 290, 210, text="둘째 줄"),  # 50px gap, same X
+        ]
+        groups = _detect_subgroups(dets)
+        assert len(groups) == 1

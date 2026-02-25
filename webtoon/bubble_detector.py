@@ -120,27 +120,31 @@ def find_bubble_boundary(img_cv: np.ndarray,
     contour_result = _find_contour_boundary(img_cv, text_bbox)
     if contour_result is not None:
         bbox, mask = contour_result
-        return WebtoonBubble(
-            bbox=bbox,
-            text_regions=cluster,
-            combined_text=combined,
-            has_bubble_boundary=True,
-            bg_color=bg_color,
-            bubble_mask=mask,
-        )
+        if not _spans_image(bbox, w, h):
+            return WebtoonBubble(
+                bbox=bbox,
+                text_regions=cluster,
+                combined_text=combined,
+                has_bubble_boundary=True,
+                bg_color=bg_color,
+                bubble_mask=mask,
+            )
+        log.debug("Contour spans image (%s on %dx%d), skipping", bbox, w, h)
 
     # Level 2: Try flood fill
     fill_result = _flood_fill_boundary(img_cv, text_bbox, bg_color)
     if fill_result is not None:
         bbox, mask = fill_result
-        return WebtoonBubble(
-            bbox=bbox,
-            text_regions=cluster,
-            combined_text=combined,
-            has_bubble_boundary=True,
-            bg_color=bg_color,
-            bubble_mask=mask,
-        )
+        if not _spans_image(bbox, w, h):
+            return WebtoonBubble(
+                bbox=bbox,
+                text_regions=cluster,
+                combined_text=combined,
+                has_bubble_boundary=True,
+                bg_color=bg_color,
+                bubble_mask=mask,
+            )
+        log.debug("Flood fill spans image (%s on %dx%d), skipping", bbox, w, h)
 
     # Level 1: Padded bbox (always works)
     x1, y1, x2, y2 = text_bbox
@@ -157,6 +161,20 @@ def find_bubble_boundary(img_cv: np.ndarray,
         has_bubble_boundary=False,
         bg_color=bg_color,
     )
+
+
+def _spans_image(bbox: tuple[int, int, int, int], img_w: int, img_h: int,
+                 threshold: float = 0.7) -> bool:
+    """Reject boundaries that span most of the image (likely image-edge artifacts).
+
+    Returns True when the bbox covers more than `threshold` of BOTH image
+    width and height — a single speech bubble never spans 70%+ in both
+    directions simultaneously.
+    """
+    bw = bbox[2] - bbox[0]
+    bh = bbox[3] - bbox[1]
+    return (bw / max(1, img_w) > threshold and
+            bh / max(1, img_h) > threshold)
 
 
 def _sample_background(img_cv: np.ndarray,

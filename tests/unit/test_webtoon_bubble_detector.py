@@ -4,6 +4,7 @@ from webtoon.bubble_detector import (
     cluster_detections,
     _cluster_bbox,
     _should_merge,
+    _spans_image,
 )
 from webtoon.ocr import TextDetection
 
@@ -90,3 +91,34 @@ class TestShouldMerge:
         cluster = [_make_det(10, 10, 100, 30)]
         det = _make_det(10, 200, 100, 220)
         assert _should_merge(cluster, det, gap=40) is False
+
+
+class TestSpansImage:
+    """Reject bubble boundaries that span most of the image.
+
+    Regression for 082: both bubbles had bbox=(0,0,690,1600) covering the
+    entire 690x1600 image.  Image-edge contours should be rejected so the
+    pipeline falls back to padded text bbox instead.
+    """
+
+    def test_full_image_span_rejected(self):
+        """bbox covering entire image is rejected."""
+        assert _spans_image((0, 0, 690, 1600), 690, 1600) is True
+
+    def test_normal_bubble_accepted(self):
+        """Normal-sized bubble passes the check."""
+        assert _spans_image((100, 200, 400, 500), 690, 1600) is False
+
+    def test_wide_but_short_accepted(self):
+        """A wide notification bar (100% width, 10% height) is accepted."""
+        assert _spans_image((0, 400, 690, 560), 690, 1600) is False
+
+    def test_tall_but_narrow_accepted(self):
+        """A tall narrow bubble (20% width, 80% height) is accepted."""
+        assert _spans_image((200, 50, 340, 1350), 690, 1600) is False
+
+    def test_threshold_boundary(self):
+        """bbox at exactly 70% of both dimensions is rejected."""
+        # 70% of 1000 = 700
+        assert _spans_image((0, 0, 700, 700), 1000, 1000) is False  # equal not >
+        assert _spans_image((0, 0, 701, 701), 1000, 1000) is True

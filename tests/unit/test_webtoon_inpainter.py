@@ -57,12 +57,18 @@ def _make_circular_mask(w, h, cx, cy, r):
 class TestBuildInpaintMask:
     """Tests for build_inpaint_mask()."""
 
-    def test_returns_none_without_bubble_mask(self):
-        """No bubble_mask → returns None (caller uses solid-fill fallback)."""
+    def test_uses_text_rects_without_bubble_mask(self):
+        """No bubble_mask → uses text rects directly for inpainting."""
         det = _make_det(50, 50, 150, 80)
         bubble = _make_bubble([det], mask=None)
-        result = build_inpaint_mask(bubble, (200, 200))
-        assert result is None
+        result = build_inpaint_mask(bubble, (200, 200), text_pad=5,
+                                     text_dilate=0)
+        assert result is not None
+        result_arr = np.array(result)
+        # Text rect area (padded by 5) should be white
+        assert np.any(result_arr[45:85, 45:155] > 0)
+        # Far corners should be black (no bubble mask to extend into)
+        assert result_arr[0, 0] == 0
 
     def test_returns_none_without_text_regions(self):
         """Empty text_regions → returns None."""
@@ -213,16 +219,21 @@ class TestInpaintBubbleIntegration:
             result = inpaint_bubble(img, bubble)
         assert result is False
 
-    def test_returns_false_without_mask(self):
-        """Bubble without mask → returns False (fallback to solid fill)."""
+    def test_inpaints_without_bubble_mask(self):
+        """Bubble without bubble_mask still inpaints using text rects."""
         img = Image.new("RGB", (200, 200), (255, 255, 255))
+        target = img.copy()
         det = _make_det(50, 50, 150, 80)
         bubble = _make_bubble([det], mask=None)
 
-        # Even with a backend provided, no mask means no inpainting
         mock_backend = MagicMock()
-        result = inpaint_bubble(img, bubble, backend=mock_backend)
-        assert result is False
+        mock_backend.inpaint.return_value = Image.new("RGB", (200, 200),
+                                                       (255, 0, 0))
+
+        with patch("webtoon.inpainter.INPAINT_ENABLED", True):
+            result = inpaint_bubble(img, bubble, backend=mock_backend,
+                                    target_img=target)
+        assert result is True
 
     def test_inpaint_modifies_only_masked_pixels(self):
         """Inpainting result should only modify pixels where mask is white."""

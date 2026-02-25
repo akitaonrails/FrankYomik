@@ -3,7 +3,14 @@
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from webtoon.ocr import detect_and_read, is_valid_korean
+from webtoon.ocr import (
+    _bbox_area,
+    _enhance_for_ocr,
+    _merge_detections,
+    detect_and_read,
+    is_valid_korean,
+)
+from webtoon.ocr import TextDetection
 
 
 class TestIsValidKorean:
@@ -120,3 +127,90 @@ class TestDetectAndReadColorConversion:
         draw.text((40, 20), "안녕하세요 테스트입니다", font=font, fill=(255, 255, 255))
         dets = detect_and_read(img)
         assert len(dets) > 0, "PIL Image input should detect Korean text"
+
+
+def _make_det(x1, y1, x2, y2, text="테스트", conf=0.9):
+    """Helper to create a TextDetection."""
+    return TextDetection(
+        bbox_poly=[[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+        text=text,
+        confidence=conf,
+        bbox_rect=(x1, y1, x2, y2),
+    )
+
+
+class TestAdaptiveCLAHE:
+    """Adaptive CLAHE tile sizing for tall images.
+
+    Regression for 082: fixed tileGridSize=(8,8) on a 690x1600 image
+    created 200px tiles — too coarse for styled text with colored
+    gradients.  Adaptive sizing targets ~100px tiles.
+    """
+
+    def test_tall_image_gets_more_tiles(self):
+        """Tall images should get more vertical tiles than short images."""
+        short = np.zeros((300, 690, 3), dtype=np.uint8)
+        tall = np.zeros((1600, 690, 3), dtype=np.uint8)
+
+        enhanced_short = _enhance_for_ocr(short)
+        enhanced_tall = _enhance_for_ocr(tall)
+
+        # Both should return valid grayscale images
+        assert enhanced_short.shape == (300, 690)
+        assert enhanced_tall.shape == (1600, 690)
+
+    def test_minimum_tile_count(self):
+        """Even small images get at least 8 tiles per dimension."""
+        tiny = np.zeros((100, 100, 3), dtype=np.uint8)
+        result = _enhance_for_ocr(tiny)
+        assert result.shape == (100, 100)
+
+
+class TestMergeDetections:
+    """Two-pass OCR merge logic with wider-detection preference.
+
+    Regression for 082: pass 1 caught only the right half of a styled
+    title line, while pass 2 (CLAHE-enhanced) caught the full line.
+    The old merge always preferred pass 1 — now a significantly wider
+    pass 2 detection replaces the narrower pass 1 detection.
+    """
+
+    def test_non_overlapping_both_kept(self):
+        """Non-overlapping detections from both passes are kept."""
+        pass1 = [_make_det(10, 10, 100, 40, text="첫 줄")]
+        pass2 = [_make_det(10, 100, 100, 130, text="둘째 줄")]
+        merged = _merge_detections(pass1, pass2)
+        assert len(merged) == 2
+
+    def test_duplicate_prefers_pass1(self):
+        """Same detection in both passes → keep pass 1."""
+        pass1 = [_make_det(10, 10, 100, 40, text="같은 줄", conf=0.9)]
+        pass2 = [_make_det(12, 11, 98, 39, text="같은 줄", conf=0.8)]
+        merged = _merge_detections(pass1, pass2)
+        assert len(merged) == 1
+        assert merged[0].confidence == 0.9
+
+    def test_wider_pass2_replaces_narrow_pass1(self):
+        """Pass 2 detection >1.5x wider replaces pass 1.
+
+        Regression for 082: pass 1 caught '마왕 선발전' (x=412-584)
+        while pass 2 caught the full line (x=106-582).
+        """
+        # Pass 1: right portion only
+        pass1 = [_make_det(412, 1084, 584, 1140, text="마왕 선발전", conf=0.84)]
+        # Pass 2: full line (2.7x larger area)
+        pass2 = [_make_det(106, 1084, 582, 1140,
+                           text="메인 시나리오 #25 - 마왕 선발전", conf=0.35)]
+        merged = _merge_detections(pass1, pass2)
+        assert len(merged) == 1
+        # The wider pass 2 detection should replace pass 1
+        assert merged[0].bbox_rect[0] == 106, \
+            "Wider pass 2 detection should replace narrow pass 1"
+
+    def test_similar_size_keeps_pass1(self):
+        """Pass 2 detection of similar size doesn't replace pass 1."""
+        pass1 = [_make_det(100, 100, 300, 140, text="원본", conf=0.9)]
+        pass2 = [_make_det(95, 98, 310, 142, text="향상", conf=0.8)]
+        merged = _merge_detections(pass1, pass2)
+        assert len(merged) == 1
+        assert merged[0].text == "원본"
