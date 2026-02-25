@@ -1,0 +1,578 @@
+"""Regression tests for webtoon processor rendering and clearing logic.
+
+Key learnings these tests lock in:
+- Text rendering uses tight text-region bbox (from OCR detections), NOT the
+  bubble's contour bbox which can be much larger and cause misplaced text.
+- Clearing respects bubble mask — no white rectangles should leak outside
+  the bubble boundary (regression: 029 had white rectangle beyond bubble).
+- Per-detection clearing with local bg sampling catches floating text and
+  glyph strokes that extend beyond the bubble mask edge.
+- Semi-transparent background rectangle stays within the render bbox.
+- All detections get cleared regardless of mask coverage (regression: 058
+  had Korean text remnants because partially-masked detection was skipped).
+- Title/logo text (large single-char detections) is correctly skipped.
+"""
+
+import numpy as np
+from PIL import Image
+
+from webtoon.bubble_detector import WebtoonBubble
+from webtoon.ocr import TextDetection
+from webtoon.processor import (
+    _bg_luminance,
+    _clear_bubble_text,
+    _clear_with_mask,
+    _is_title_text,
+    _render_webtoon_english,
+    _sample_local_bg,
+    _text_region_bbox,
+    _wrap_text,
+)
+
+
+def _make_det(x1, y1, x2, y2, text="테스트", conf=0.9):
+    """Helper to create a TextDetection with consistent fields."""
+    return TextDetection(
+        bbox_poly=[[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+        text=text,
+        confidence=conf,
+        bbox_rect=(x1, y1, x2, y2),
+    )
+
+
+def _make_bubble(detections, bbox=None, bg_color=(255, 255, 255),
+                 mask=None, has_boundary=False):
+    """Helper to create a WebtoonBubble from detections."""
+    if bbox is None:
+        x1 = min(d.bbox_rect[0] for d in detections)
+        y1 = min(d.bbox_rect[1] for d in detections)
+        x2 = max(d.bbox_rect[2] for d in detections)
+        y2 = max(d.bbox_rect[3] for d in detections)
+        bbox = (x1 - 20, y1 - 20, x2 + 20, y2 + 20)
+    combined = " ".join(d.text for d in detections)
+    return WebtoonBubble(
+        bbox=bbox,
+        text_regions=detections,
+        combined_text=combined,
+        has_bubble_boundary=has_boundary,
+        bg_color=bg_color,
+        bubble_mask=mask,
+    )
+
+
+class TestTextRegionBbox:
+    """_text_region_bbox must be tight around OCR detections, not the contour.
+
+    Regression: text was rendered at contour bbox position (oversized), causing
+    English text to appear far from where the Korean text was.
+    """
+
+    def test_tighter_than_contour_bbox(self):
+        """Text region bbox must be smaller than or equal to the contour bbox."""
+        dets = [
+            _make_det(200, 300, 400, 340),
+            _make_det(180, 350, 420, 390),
+        ]
+        # Contour bbox is much larger than text area
+        bubble = _make_bubble(dets, bbox=(50, 100, 600, 500))
+        text_bbox = _text_region_bbox(bubble, 700, 600)
+
+        # Text region must be inside contour bbox
+        assert text_bbox[0] >= bubble.bbox[0]  # x1
+        assert text_bbox[1] >= bubble.bbox[1]  # y1
+        assert text_bbox[2] <= bubble.bbox[2]  # x2
+        assert text_bbox[3] <= bubble.bbox[3]  # y2
+
+    def test_includes_all_detections_with_padding(self):
+        """Text region must encompass all detections (plus padding)."""
+        dets = [
+            _make_det(200, 300, 400, 340),
+            _make_det(180, 350, 420, 390),
+        ]
+        bubble = _make_bubble(dets)
+        text_bbox = _text_region_bbox(bubble, 700, 600)
+
+        # Must include all detection edges (with some padding)
+        assert text_bbox[0] <= 180  # leftmost detection x1
+        assert text_bbox[1] <= 300  # topmost detection y1
+        assert text_bbox[2] >= 420  # rightmost detection x2
+        assert text_bbox[3] >= 390  # bottommost detection y2
+
+    def test_clamped_to_image_bounds(self):
+        """Text region bbox must not exceed image dimensions."""
+        dets = [_make_det(5, 5, 95, 35)]
+        bubble = _make_bubble(dets)
+        text_bbox = _text_region_bbox(bubble, 100, 50)
+
+        assert text_bbox[0] >= 0
+        assert text_bbox[1] >= 0
+        assert text_bbox[2] <= 100
+        assert text_bbox[3] <= 50
+
+    def test_falls_back_to_bubble_bbox_when_no_detections(self):
+        """If bubble has no text_regions, return the bubble bbox."""
+        bubble = WebtoonBubble(
+            bbox=(50, 100, 200, 300),
+            text_regions=[],
+            combined_text="",
+        )
+        assert _text_region_bbox(bubble, 700, 600) == (50, 100, 200, 300)
+
+
+class TestClearWithMask:
+    """Mask-based clearing must only modify pixels inside the mask.
+
+    Regression: 029 had a white rectangle that extended beyond the spiky
+    bubble boundary because clearing wasn't constrained to the mask.
+    """
+
+    def test_only_modifies_masked_pixels(self):
+        """Pixels outside the mask must not be changed."""
+        img = Image.new("RGB", (200, 200), (128, 128, 128))
+        # Circular mask in the center
+        mask = np.zeros((200, 200), dtype=np.uint8)
+        mask[50:150, 50:150] = 255
+
+        orig = np.array(img.copy())
+        _clear_with_mask(img, (40, 40, 160, 160), mask, (255, 255, 255))
+        result = np.array(img)
+
+        # Outside mask: unchanged
+        outside = mask == 0
+        np.testing.assert_array_equal(result[outside], orig[outside])
+
+    def test_fills_masked_pixels_with_bg_color(self):
+        """Pixels inside the mask within the bbox must be filled."""
+        img = Image.new("RGB", (200, 200), (0, 0, 0))
+        mask = np.zeros((200, 200), dtype=np.uint8)
+        mask[80:120, 80:120] = 255
+        fill_color = (255, 200, 100)
+
+        _clear_with_mask(img, (70, 70, 130, 130), mask, fill_color)
+        result = np.array(img)
+
+        # Masked pixels in bbox should be filled
+        roi = result[80:120, 80:120]
+        assert np.all(roi == fill_color)
+
+    def test_no_change_if_bbox_outside_mask(self):
+        """If bbox doesn't overlap with mask, nothing changes."""
+        img = Image.new("RGB", (200, 200), (100, 100, 100))
+        mask = np.zeros((200, 200), dtype=np.uint8)
+        mask[150:190, 150:190] = 255
+
+        orig = np.array(img.copy())
+        _clear_with_mask(img, (10, 10, 50, 50), mask, (255, 255, 255))
+        result = np.array(img)
+
+        np.testing.assert_array_equal(result, orig)
+
+    def test_handles_zero_size_bbox(self):
+        """Zero-size bbox should not crash."""
+        img = Image.new("RGB", (100, 100), (128, 128, 128))
+        mask = np.zeros((100, 100), dtype=np.uint8)
+        _clear_with_mask(img, (50, 50, 50, 50), mask, (255, 255, 255))
+        # No crash = pass
+
+
+class TestClearBubbleText:
+    """Two-phase clearing must clear all Korean text without leaking.
+
+    Phase 1: Mask-based clearing for bubbles with contour boundaries.
+    Phase 2: Per-detection rectangle clearing with local bg color.
+
+    Regression: 058 had Korean remnants because a detection partially covered
+    by the mask was skipped. Now ALL detections get rectangle-cleared.
+    """
+
+    def test_clears_all_detections_with_mask(self):
+        """Every detection must be cleared even when mask partially covers some."""
+        img_size = (400, 400)
+        img = Image.new("RGB", img_size, (255, 255, 255))
+        # Draw fake "Korean text" as dark rectangles
+        arr = np.array(img)
+        arr[100:130, 100:200] = [0, 0, 0]  # det 0
+        arr[140:170, 100:200] = [0, 0, 0]  # det 1
+        arr[180:210, 100:200] = [0, 0, 0]  # det 2 (will be partially outside mask)
+        img = Image.fromarray(arr)
+
+        dets = [
+            _make_det(100, 100, 200, 130),
+            _make_det(100, 140, 200, 170),
+            _make_det(100, 180, 200, 210),
+        ]
+        # Mask only covers first two detections
+        mask = np.zeros((400, 400), dtype=np.uint8)
+        mask[90:175, 85:215] = 255
+
+        bubble = _make_bubble(dets, bbox=(80, 80, 220, 220),
+                              mask=mask, has_boundary=True)
+
+        _clear_bubble_text(img, bubble)
+        result = np.array(img)
+
+        # ALL three detection areas must be cleared (close to bg color)
+        for det in dets:
+            x1, y1, x2, y2 = det.bbox_rect
+            region = result[y1:y2, x1:x2]
+            mean_val = region.mean()
+            assert mean_val > 200, (
+                f"Detection at {det.bbox_rect} not cleared: mean={mean_val:.0f}"
+            )
+
+    def test_clears_without_mask(self):
+        """Bubbles without mask use rectangle clearing for all detections."""
+        img = Image.new("RGB", (300, 300), (255, 255, 255))
+        arr = np.array(img)
+        arr[50:80, 50:150] = [30, 30, 30]  # fake text
+        img = Image.fromarray(arr)
+
+        dets = [_make_det(50, 50, 150, 80)]
+        bubble = _make_bubble(dets, mask=None, has_boundary=False)
+
+        _clear_bubble_text(img, bubble)
+        result = np.array(img)
+
+        # Detection area should be cleared
+        region = result[50:80, 50:150]
+        assert region.mean() > 200
+
+    def test_uses_local_bg_color_not_hardcoded_white(self):
+        """Per-detection clearing should sample local bg, not assume white."""
+        # Create image with colored background
+        bg = (200, 180, 160)
+        img = Image.new("RGB", (300, 300), bg)
+        arr = np.array(img)
+        arr[100:130, 100:200] = [0, 0, 0]  # dark text on colored bg
+        img = Image.fromarray(arr)
+
+        dets = [_make_det(100, 100, 200, 130)]
+        bubble = _make_bubble(dets, mask=None, has_boundary=False,
+                              bg_color=bg)
+
+        _clear_bubble_text(img, bubble)
+        result = np.array(img)
+
+        # Cleared area should be close to the bg color, not pure white
+        region = result[100:130, 100:200]
+        mean_color = region.mean(axis=(0, 1))
+        # Should be close to (200, 180, 160), not (255, 255, 255)
+        assert abs(mean_color[0] - bg[0]) < 30, f"R channel off: {mean_color[0]}"
+        assert abs(mean_color[1] - bg[1]) < 30, f"G channel off: {mean_color[1]}"
+        assert abs(mean_color[2] - bg[2]) < 30, f"B channel off: {mean_color[2]}"
+
+
+class TestRenderWebtoonEnglish:
+    """English rendering must stay within render_bbox bounds.
+
+    Regression: text and semi-transparent bg rectangle extended beyond the
+    bubble boundary, creating visible white boxes on non-white backgrounds.
+    """
+
+    def test_rendering_stays_within_bbox(self):
+        """All pixel changes must be within the render_bbox."""
+        img = Image.new("RGB", (500, 500), (220, 220, 220))
+        orig = np.array(img.copy())
+
+        dets = [_make_det(100, 200, 300, 240)]
+        bubble = _make_bubble(dets, bg_color=(255, 255, 255))
+        render_bbox = (90, 190, 310, 260)
+
+        _render_webtoon_english(img, bubble, "Hello world", render_bbox)
+        result = np.array(img)
+
+        diff = np.abs(result.astype(int) - orig.astype(int)).sum(axis=2) > 2
+        if diff.any():
+            changed_ys = np.where(diff.any(axis=1))[0]
+            changed_xs = np.where(diff.any(axis=0))[0]
+            bx1, by1, bx2, by2 = render_bbox
+            assert changed_ys.min() >= by1, (
+                f"Rendering extends above bbox: y={changed_ys.min()} < {by1}"
+            )
+            assert changed_ys.max() < by2, (
+                f"Rendering extends below bbox: y={changed_ys.max()} >= {by2}"
+            )
+            assert changed_xs.min() >= bx1, (
+                f"Rendering extends left of bbox: x={changed_xs.min()} < {bx1}"
+            )
+            assert changed_xs.max() < bx2, (
+                f"Rendering extends right of bbox: x={changed_xs.max()} >= {bx2}"
+            )
+
+    def test_bg_rectangle_within_bbox(self):
+        """Semi-transparent background rectangle must not exceed render_bbox."""
+        # Dark background so the white bg_rect is highly visible
+        img = Image.new("RGB", (400, 400), (30, 30, 30))
+        orig = np.array(img.copy())
+
+        dets = [_make_det(100, 150, 300, 200)]
+        bubble = _make_bubble(dets, bg_color=(30, 30, 30))
+        render_bbox = (85, 140, 315, 220)
+
+        _render_webtoon_english(img, bubble, "Test text", render_bbox)
+        result = np.array(img)
+
+        diff = np.abs(result.astype(int) - orig.astype(int)).sum(axis=2) > 2
+        bx1, by1, bx2, by2 = render_bbox
+        # Nothing outside bbox should change
+        outside = np.zeros_like(diff)
+        outside[:by1, :] = True
+        outside[by2:, :] = True
+        outside[:, :bx1] = True
+        outside[:, bx2:] = True
+        assert not diff[outside].any(), "Rendering leaked outside render_bbox"
+
+    def test_skips_tiny_bbox(self):
+        """Very small render bbox should be skipped gracefully."""
+        img = Image.new("RGB", (100, 100), (255, 255, 255))
+        orig = np.array(img.copy())
+
+        dets = [_make_det(40, 40, 50, 45)]
+        bubble = _make_bubble(dets)
+
+        _render_webtoon_english(img, bubble, "Hello", (40, 40, 48, 45))
+        result = np.array(img)
+
+        # Should not crash; tiny bbox might not render anything
+        # Just verify no crash occurred
+
+    def test_long_text_truncated_not_overflowing(self):
+        """Long text should be truncated with '...' rather than overflow bbox.
+
+        Font rendering has inherent antialiasing bleed (~2px from glyph
+        descenders), so we allow a small tolerance.
+        """
+        img = Image.new("RGB", (500, 500), (200, 200, 200))
+        orig = np.array(img.copy())
+
+        dets = [
+            _make_det(80, 150, 350, 190),
+            _make_det(80, 200, 350, 240),
+        ]
+        bubble = _make_bubble(dets, bg_color=(255, 255, 255))
+        render_bbox = (66, 140, 364, 250)
+
+        long_text = ("This is a very long sentence that absolutely cannot "
+                     "fit within the render bbox and should be truncated "
+                     "rather than overflowing beyond the boundary")
+        _render_webtoon_english(img, bubble, long_text, render_bbox)
+        result = np.array(img)
+
+        diff = np.abs(result.astype(int) - orig.astype(int)).sum(axis=2) > 2
+        if diff.any():
+            changed_ys = np.where(diff.any(axis=1))[0]
+            _, _, _, by2 = render_bbox
+            # Allow 3px tolerance for font descender antialiasing
+            assert changed_ys.max() < by2 + 3, (
+                f"Long text overflows bbox: y={changed_ys.max()} >= {by2 + 3}"
+            )
+
+    def test_dark_bg_gets_white_text(self):
+        """Dark backgrounds should produce white text for readability."""
+        # This tests the luminance-based color selection
+        assert _bg_luminance((0, 0, 0)) < 0.5
+        assert _bg_luminance((30, 30, 50)) < 0.5
+
+    def test_light_bg_gets_dark_text(self):
+        """Light backgrounds should produce dark text for readability."""
+        assert _bg_luminance((255, 255, 255)) > 0.5
+        assert _bg_luminance((220, 220, 200)) > 0.5
+
+
+class TestSampleLocalBg:
+    """Local bg sampling must return the actual surrounding color."""
+
+    def test_returns_surrounding_color(self):
+        """Should return median color of band around the detection."""
+        bg = (180, 160, 140)
+        img = Image.new("RGB", (200, 200), bg)
+        # Put some "text" in the center
+        arr = np.array(img)
+        arr[80:120, 80:120] = [0, 0, 0]
+        img = Image.fromarray(arr)
+
+        color = _sample_local_bg(img, (80, 80, 120, 120))
+        # Should be close to bg color
+        assert abs(color[0] - bg[0]) < 20
+        assert abs(color[1] - bg[1]) < 20
+        assert abs(color[2] - bg[2]) < 20
+
+    def test_defaults_to_white_on_edge(self):
+        """Corner detections should fall back to white."""
+        img = Image.new("RGB", (20, 20), (255, 255, 255))
+        color = _sample_local_bg(img, (0, 0, 20, 20))
+        # At image edges, sampling bands may be empty → white fallback
+        assert color[0] >= 200  # Should be white-ish
+
+
+class TestIsTitleText:
+    """Title/logo detection prevents clearing decorative text.
+
+    Title text: large single-character detections (artistic/decorative).
+    Normal dialogue: full text lines per detection.
+    """
+
+    def test_normal_dialogue_not_title(self):
+        """Multi-character dialogue lines are not title text."""
+        dets = [
+            _make_det(100, 100, 300, 140, text="이것은 대화입니다"),
+            _make_det(100, 150, 300, 190, text="또 다른 줄이에요"),
+        ]
+        bubble = _make_bubble(dets)
+        assert _is_title_text(bubble) is False
+
+    def test_large_single_chars_is_title(self):
+        """Large single-character detections are title text."""
+        dets = [
+            _make_det(100, 100, 200, 200, text="마"),  # 100px tall, 1 char
+            _make_det(100, 210, 200, 310, text="왕"),  # 100px tall, 1 char
+        ]
+        bubble = _make_bubble(dets)
+        assert _is_title_text(bubble) is True
+
+    def test_small_single_chars_not_title(self):
+        """Small single-character detections are not title text."""
+        dets = [
+            _make_det(100, 100, 130, 130, text="네"),  # 30px tall
+            _make_det(100, 140, 130, 170, text="가"),  # 30px tall
+        ]
+        bubble = _make_bubble(dets)
+        assert _is_title_text(bubble) is False
+
+    def test_empty_bubble_not_title(self):
+        """Empty bubble is not title text."""
+        bubble = WebtoonBubble(
+            bbox=(0, 0, 100, 100),
+            text_regions=[],
+            combined_text="",
+        )
+        assert _is_title_text(bubble) is False
+
+
+class TestWrapText:
+    """Word wrapping must produce lines that fit within max_width."""
+
+    def test_short_text_single_line(self):
+        from PIL import ImageFont
+        from webtoon.config import FONT_KO
+
+        font = ImageFont.truetype(FONT_KO, 16)
+        lines = _wrap_text("Hi", font, 200)
+        assert len(lines) == 1
+        assert lines[0] == "Hi"
+
+    def test_long_text_wraps(self):
+        from PIL import ImageFont
+        from webtoon.config import FONT_KO
+
+        font = ImageFont.truetype(FONT_KO, 16)
+        lines = _wrap_text("This is a longer sentence that should wrap", font, 100)
+        assert len(lines) > 1
+
+    def test_empty_text_returns_empty(self):
+        from PIL import ImageFont
+        from webtoon.config import FONT_KO
+
+        font = ImageFont.truetype(FONT_KO, 16)
+        assert _wrap_text("", font, 200) == []
+
+    def test_lines_fit_within_width(self):
+        from PIL import ImageFont
+        from webtoon.config import FONT_KO
+
+        font = ImageFont.truetype(FONT_KO, 16)
+        max_w = 150
+        lines = _wrap_text("Hello world this is a test of wrapping", font, max_w)
+        for line in lines:
+            bbox = font.getbbox(line)
+            line_w = bbox[2] - bbox[0]
+            # Each line should fit (individual words wider than max_w are an
+            # edge case where a single word can't be broken)
+            words_in_line = line.split()
+            if len(words_in_line) > 1:
+                assert line_w <= max_w + 5, f"Line too wide: '{line}' = {line_w}px"
+
+
+class TestRenderingMaskConstraint:
+    """The semi-transparent bg rectangle must be clipped to bubble mask.
+
+    This is the regression test for the 029 bug where a white rectangle
+    leaked beyond the bubble boundary.
+
+    Note: Phase 2 per-detection clearing intentionally extends beyond the mask
+    (uses local bg color to blend), but the rendering overlay must NOT.
+    """
+
+    def test_bg_rectangle_clipped_to_mask(self):
+        """The semi-transparent bg rectangle must not appear outside the mask."""
+        size = (500, 500)
+        bg = (150, 150, 150)
+        img = Image.new("RGB", size, bg)
+
+        # Circular mask
+        mask = np.zeros(size[::-1], dtype=np.uint8)  # (h, w)
+        cy, cx, r = 235, 250, 80
+        Y, X = np.ogrid[:size[1], :size[0]]
+        mask[(Y - cy)**2 + (X - cx)**2 <= r**2] = 255
+
+        dets = [
+            _make_det(180, 200, 320, 230, text="테스트 문장"),
+            _make_det(180, 240, 320, 270, text="두 번째 줄"),
+        ]
+        bubble = _make_bubble(
+            dets, bbox=(170, 155, 330, 315),
+            mask=mask, has_boundary=True, bg_color=(255, 255, 255),
+        )
+
+        # First clear text (Phase 2 may extend beyond mask — that's OK)
+        _clear_bubble_text(img, bubble)
+        # Snapshot after clearing but before rendering
+        after_clear = np.array(img.copy())
+
+        # Now render English — this is what we're testing
+        text_bbox = _text_region_bbox(bubble, size[0], size[1])
+        _render_webtoon_english(img, bubble, "Test sentence", text_bbox)
+        after_render = np.array(img)
+
+        # The rendering (bg rect + text) must not change pixels outside mask
+        diff = np.abs(after_render.astype(int) - after_clear.astype(int)).sum(axis=2)
+        outside_mask = mask == 0
+
+        large_changes_outside = (diff > 5) & outside_mask
+        n_large_outside = large_changes_outside.sum()
+        assert n_large_outside == 0, (
+            f"{n_large_outside} pixels had rendering changes outside the "
+            f"bubble mask (bg rectangle leak)"
+        )
+
+    def test_clearing_uses_local_bg_outside_mask(self):
+        """Phase 2 clearing outside mask should use local bg (not white)."""
+        size = (400, 400)
+        bg = (180, 160, 140)
+        img = Image.new("RGB", size, bg)
+
+        # Put dark text partly outside a small mask
+        arr = np.array(img)
+        arr[150:180, 100:300] = [0, 0, 0]
+        img = Image.fromarray(arr)
+
+        # Mask covers only part of the detection
+        mask = np.zeros((400, 400), dtype=np.uint8)
+        mask[140:185, 90:200] = 255  # only left half
+
+        dets = [_make_det(100, 150, 300, 180)]
+        bubble = _make_bubble(dets, mask=mask, has_boundary=True,
+                              bg_color=(180, 160, 140))
+
+        _clear_bubble_text(img, bubble)
+        result = np.array(img)
+
+        # The right half (outside mask) should be cleared to local bg,
+        # not pure white (255, 255, 255)
+        right_region = result[150:180, 200:300]
+        mean_color = right_region.mean(axis=(0, 1))
+        # Should be close to bg, not pure white
+        assert mean_color[0] < 240, (
+            f"Clearing outside mask used white instead of local bg: "
+            f"R={mean_color[0]:.0f}"
+        )
