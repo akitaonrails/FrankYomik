@@ -123,6 +123,14 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
             if border_mean > 160:
                 continue
 
+        # 6. Background uniformity: real bubble interiors are very uniform white.
+        #    Faces have skin-tone gradients even in their brightest areas.
+        white_pixels = gray[(mask > 0) & (gray > 200)]
+        if len(white_pixels) > 50:
+            white_std = float(np.std(white_pixels))
+            if white_std > 12:
+                continue
+
         candidates.append({
             "bbox": (x, y, x + bw, y + bh),
             "type": "speech_bubble",

@@ -51,24 +51,42 @@ def is_valid_japanese(text: str) -> bool:
     Returns False for gibberish / noise that manga-ocr produces from
     non-text regions (faces, clothing, backgrounds).
 
-    Only counts content characters (hiragana, katakana, CJK ideographs) —
-    punctuation and fullwidth forms are excluded so they can't inflate the ratio.
-    Requires at least 2 content characters to reject single-char noise.
+    Counts content characters (hiragana, katakana, CJK ideographs) and
+    computes ratio against non-punctuation characters only. Japanese
+    punctuation (。、「」．！？ etc.) is excluded from the denominator so
+    common manga ellipsis (．．．) doesn't penalize the ratio.
     """
-    if not text or len(text.strip()) < 2:
+    stripped = text.strip()
+    if not stripped or len(stripped) < 2:
         return False
 
     content_chars = 0
-    for ch in text:
+    other_chars = 0
+    for ch in stripped:
         cp = ord(ch)
-        # Only count actual content characters, not punctuation/fullwidth
         if (0x3040 <= cp <= 0x309F or   # Hiragana
             0x30A0 <= cp <= 0x30FF or   # Katakana
             0x4E00 <= cp <= 0x9FFF):    # CJK Ideographs
             content_chars += 1
+        elif (0x3000 <= cp <= 0x303F or  # CJK punctuation (、。「」…)
+              0xFF01 <= cp <= 0xFF60):   # Fullwidth forms (．！？，)
+            pass  # Japanese punctuation — don't count for or against
+        else:
+            other_chars += 1
 
     if content_chars < 2:
         return False
 
-    ratio = content_chars / len(text.strip())
-    return ratio > 0.5
+    # Reject 2-char text where both are kanji — manga-ocr tends to hallucinate
+    # complex kanji from face features. Real dialogue with only 2 kanji and
+    # nothing else is extremely rare.
+    if content_chars == 2:
+        kanji_count = sum(1 for ch in stripped if 0x4E00 <= ord(ch) <= 0x9FFF)
+        if kanji_count == 2:
+            return False
+
+    meaningful = content_chars + other_chars
+    if meaningful == 0:
+        return False
+
+    return content_chars / meaningful > 0.5
