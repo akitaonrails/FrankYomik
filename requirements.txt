@@ -1,0 +1,6 @@
+manga-ocr
+pykakasi
+opencv-python-headless
+Pillow
+requests
+deep-translator

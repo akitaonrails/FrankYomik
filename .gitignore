@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Output (generated images)
+output/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
