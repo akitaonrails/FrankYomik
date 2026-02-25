@@ -354,7 +354,8 @@ def _is_sfx_detection(det: TextDetection) -> bool:
 
 
 def detect_bubbles(img_cv: np.ndarray,
-                   detections: list[TextDetection]) -> list[WebtoonBubble]:
+                   detections: list[TextDetection],
+                   ) -> tuple[list[WebtoonBubble], list[TextDetection]]:
     """Main entry point: cluster detections and find bubble boundaries.
 
     Args:
@@ -362,17 +363,21 @@ def detect_bubbles(img_cv: np.ndarray,
         detections: EasyOCR text detections from ocr.detect_and_read().
 
     Returns:
-        List of WebtoonBubble with text and boundary info.
+        Tuple of (dialogue bubbles, SFX detections). SFX are separated
+        before clustering to prevent their oversized bboxes from
+        contaminating dialogue clusters.
     """
     # Filter out SFX detections before clustering to prevent their
     # oversized bboxes from contaminating dialogue clusters.
     dialogue_dets = []
+    sfx_dets: list[TextDetection] = []
     for det in detections:
         if _is_sfx_detection(det):
-            log.info("  Skipping SFX detection: '%s' (%dx%dpx)",
+            log.info("  SFX detection: '%s' (%dx%dpx)",
                      det.text,
                      det.bbox_rect[2] - det.bbox_rect[0],
                      det.bbox_rect[3] - det.bbox_rect[1])
+            sfx_dets.append(det)
         else:
             dialogue_dets.append(det)
 
@@ -385,4 +390,4 @@ def detect_bubbles(img_cv: np.ndarray,
                  len(cluster), bubble.has_bubble_boundary, bubble.bbox)
         bubbles.append(bubble)
 
-    return bubbles
+    return bubbles, sfx_dets

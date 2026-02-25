@@ -14,12 +14,13 @@ from pipeline.config import (
     TRANSLATE_OPTIONS,
     TRANSLATE_THINK,
     FONT_EN,
+    FONT_JP_BOLD,
 )
 
 # Re-export for use within webtoon package
 __all__ = [
     "OLLAMA_BASE_URL", "TRANSLATE_MODEL", "TRANSLATE_OPTIONS", "TRANSLATE_THINK",
-    "FONT_EN", "FONT_KO",
+    "FONT_EN", "FONT_KO", "FONT_KO_BOLD",
     "DATA_DIR", "OUTPUT_DIR",
     "SCROLL_PAUSE", "DOWNLOAD_TIMEOUT",
     "EASYOCR_GPU", "EASYOCR_CONFIDENCE_THRESHOLD",
@@ -86,3 +87,4 @@ INPAINT_PROMPT = _inpaint_cfg.get("prompt",
 
 # --- Font (NotoSansCJK includes Korean glyphs) ---
 FONT_KO = FONT_EN
+FONT_KO_BOLD = FONT_JP_BOLD

@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from webtoon.translator import translate, _fallback_translate
+from webtoon.translator import translate, translate_sfx, _fallback_translate
 
 
 class TestTranslate:
@@ -49,3 +49,40 @@ class TestTranslate:
 
         result = translate("안녕하세요")
         assert result == "Fallback"
+
+
+class TestTranslateSfx:
+    """SFX translation uses a specialized prompt for onomatopoeia."""
+
+    @patch("webtoon.translator.requests.post")
+    def test_sfx_prompt_contains_sound_effect(self, mock_post):
+        """Prompt must mention sound effect for proper SFX translation."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "CRASH"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        translate_sfx("꽈양")
+        payload = mock_post.call_args[1]["json"]
+        prompt = payload["messages"][0]["content"]
+        assert "sound effect" in prompt.lower()
+
+    @patch("webtoon.translator.requests.post")
+    def test_sfx_returns_uppercase(self, mock_post):
+        """SFX result is always uppercased."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "crash"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = translate_sfx("꽈양")
+        assert result == "CRASH"
+        assert result == result.upper()
+
+    @patch("webtoon.translator._fallback_translate_sfx", return_value="BOOM")
+    @patch("webtoon.translator.requests.post", side_effect=Exception("timeout"))
+    def test_sfx_fallback_on_failure(self, mock_post, mock_fallback):
+        """Falls back to Google Translate on Ollama failure."""
+        result = translate_sfx("쾅")
+        assert result == "BOOM"
+        mock_fallback.assert_called_once_with("쾅")

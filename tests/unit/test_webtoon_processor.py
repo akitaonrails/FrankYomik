@@ -26,9 +26,11 @@ from webtoon.processor import (
     _expand_render_bbox,
     _is_title_text,
     _line_spacing,
+    _render_sfx,
     _render_webtoon_english,
     _sample_local_bg,
     _sample_render_surface,
+    _sample_sfx_color,
     _text_region_bbox,
     _total_block_height,
     _wrap_text,
@@ -820,3 +822,104 @@ class TestFontSizeCap:
         lines = _wrap_text("No talent, huh! Baltar", font, 250)
         assert len(lines) >= 2, \
             f"Should wrap to 2+ lines at 36px/250px, got {len(lines)}: {lines}"
+
+
+class TestSampleSfxColor:
+    """Color sampling for SFX overlay text."""
+
+    def test_returns_bright_color_for_saturated_area(self):
+        """Saturated colored area should return a vivid color, not gray."""
+        # Create image with bright red area
+        img = Image.new("RGB", (200, 200), (255, 50, 50))
+        color = _sample_sfx_color(img, (10, 10, 190, 190))
+        # Should return something reddish (R >> G, B)
+        assert color[0] > 150, f"Expected red-ish, got {color}"
+
+    def test_fallback_for_dark_gray_area(self):
+        """Dark/gray areas should return the default bright red fallback."""
+        img = Image.new("RGB", (200, 200), (30, 30, 30))
+        color = _sample_sfx_color(img, (10, 10, 190, 190))
+        # Default fallback is (255, 50, 50)
+        assert color == (255, 50, 50), f"Expected fallback red, got {color}"
+
+    def test_fallback_for_white_area(self):
+        """Very bright/white areas should return the fallback color."""
+        img = Image.new("RGB", (200, 200), (250, 250, 250))
+        color = _sample_sfx_color(img, (10, 10, 190, 190))
+        assert color == (255, 50, 50), f"Expected fallback red, got {color}"
+
+    def test_fallback_for_zero_size_bbox(self):
+        """Zero-size bbox should return fallback."""
+        img = Image.new("RGB", (100, 100), (128, 128, 128))
+        color = _sample_sfx_color(img, (50, 50, 50, 50))
+        assert color == (255, 50, 50)
+
+    def test_out_of_bounds_bbox_clamped(self):
+        """Out-of-bounds bbox should be clamped without crash."""
+        img = Image.new("RGB", (100, 100), (200, 50, 50))
+        color = _sample_sfx_color(img, (-10, -10, 200, 200))
+        # Should not crash; returns some color
+        assert len(color) == 3
+
+
+class TestRenderSfx:
+    """SFX rendering produces bold outlined text within the detection bbox."""
+
+    def test_renders_text_on_image(self):
+        """SFX rendering should modify pixels within the detection area."""
+        img = Image.new("RGB", (500, 500), (128, 128, 128))
+        original = img.copy()
+        orig_arr = np.array(original)
+
+        det = _make_det(100, 200, 330, 400, text="꽈양")
+        _render_sfx(img, det, "CRASH", original)
+
+        result = np.array(img)
+        diff = np.abs(result.astype(int) - orig_arr.astype(int)).sum(axis=2)
+        assert diff.sum() > 0, "SFX rendering should change some pixels"
+
+    def test_renders_within_detection_bbox_area(self):
+        """Most pixel changes should be near the detection bbox."""
+        img = Image.new("RGB", (500, 500), (128, 128, 128))
+        original = img.copy()
+        orig_arr = np.array(original)
+
+        det = _make_det(150, 200, 350, 350, text="쾅")
+        _render_sfx(img, det, "BOOM", original)
+
+        result = np.array(img)
+        diff = np.abs(result.astype(int) - orig_arr.astype(int)).sum(axis=2) > 2
+        if diff.any():
+            changed_ys = np.where(diff.any(axis=1))[0]
+            changed_xs = np.where(diff.any(axis=0))[0]
+            # Allow tolerance for stroke_width=3 (both sides) + shadow=2 + font metrics
+            x1, y1, x2, y2 = det.bbox_rect
+            tolerance = 20
+            assert changed_ys.min() >= y1 - tolerance, (
+                f"SFX extends too far above: {changed_ys.min()} < {y1 - tolerance}"
+            )
+            assert changed_xs.min() >= x1 - tolerance, (
+                f"SFX extends too far left: {changed_xs.min()} < {x1 - tolerance}"
+            )
+
+    def test_drop_shadow_present(self):
+        """Drop shadow should create visible dark pixels offset from text."""
+        # Use a very light image so shadow (dark) is detectable
+        img = Image.new("RGB", (400, 400), (240, 240, 240))
+        original = img.copy()
+
+        det = _make_det(100, 100, 300, 250, text="값")
+        _render_sfx(img, det, "CRASH", original)
+
+        result = np.array(img)
+        # There should be some darkened pixels (shadow)
+        dark_pixels = (result.mean(axis=2) < 200).sum()
+        assert dark_pixels > 0, "Drop shadow should create some dark pixels"
+
+    def test_no_crash_on_empty_text(self):
+        """Empty SFX text should not crash."""
+        img = Image.new("RGB", (200, 200), (128, 128, 128))
+        original = img.copy()
+        det = _make_det(50, 50, 150, 150, text="값")
+        _render_sfx(img, det, "", original)
+        # No crash = pass

@@ -1,7 +1,10 @@
 """Unit tests for webtoon bubble detector clustering logic."""
 
+import numpy as np
+
 from webtoon.bubble_detector import (
     cluster_detections,
+    detect_bubbles,
     _cluster_bbox,
     _is_sfx_detection,
     _should_merge,
@@ -158,3 +161,40 @@ class TestIsSfxDetection:
         """Small single character (normal text) is not SFX."""
         det = _make_det(100, 100, 130, 140, text="네")  # 40px tall
         assert _is_sfx_detection(det) is False
+
+
+class TestDetectBubblesReturnType:
+    """detect_bubbles() returns (bubbles, sfx_detections) tuple."""
+
+    def test_returns_tuple(self):
+        """Return value is a 2-tuple of (bubbles, sfx_list)."""
+        img = np.full((400, 400, 3), 200, dtype=np.uint8)
+        dets = [_make_det(100, 100, 300, 140, text="대화입니다")]
+        result = detect_bubbles(img, dets)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_sfx_separated_from_dialogue(self):
+        """SFX detections go to sfx_list, dialogue to bubbles."""
+        img = np.full((600, 400, 3), 200, dtype=np.uint8)
+        dialogue = _make_det(100, 100, 300, 140, text="대화입니다")
+        sfx = _make_det(15, 535, 245, 853, text="값")  # tall single char
+        bubbles, sfx_list = detect_bubbles(img, [dialogue, sfx])
+        assert len(bubbles) == 1
+        assert len(sfx_list) == 1
+        assert sfx_list[0].text == "값"
+
+    def test_no_sfx_returns_empty_list(self):
+        """When no SFX present, sfx_list is empty."""
+        img = np.full((400, 400, 3), 200, dtype=np.uint8)
+        dets = [_make_det(100, 100, 300, 140, text="대화입니다")]
+        bubbles, sfx_list = detect_bubbles(img, dets)
+        assert len(sfx_list) == 0
+        assert len(bubbles) == 1
+
+    def test_empty_input(self):
+        """Empty detections returns empty bubbles and empty sfx."""
+        img = np.full((400, 400, 3), 200, dtype=np.uint8)
+        bubbles, sfx_list = detect_bubbles(img, [])
+        assert bubbles == []
+        assert sfx_list == []

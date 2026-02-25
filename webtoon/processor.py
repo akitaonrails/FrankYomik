@@ -8,13 +8,13 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from pipeline.image_utils import clear_text_in_region, load_image, load_image_pil
-from .config import FONT_KO
+from .config import FONT_KO, FONT_KO_BOLD
 
 from .bubble_detector import WebtoonBubble, detect_bubbles
 from .image_utils import split_tall_image, stitch_detections
 from .inpainter import inpaint_bubble
 from .ocr import TextDetection, detect_and_read, is_valid_korean
-from .translator import translate
+from .translator import translate, translate_sfx
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +43,7 @@ class WebtoonPageResult:
     img_pil: Image.Image | None = None
     detections: list[TextDetection] = field(default_factory=list)
     bubbles: list[WebtoonBubble] = field(default_factory=list)
+    sfx_detections: list[TextDetection] = field(default_factory=list)
     regions: list[WebtoonTextRegion] = field(default_factory=list)
     output_img: Image.Image | None = None
 
@@ -86,8 +87,9 @@ def detect_text(page: WebtoonPageResult) -> None:
 
 def cluster_and_find_bubbles(page: WebtoonPageResult) -> None:
     """Stage 3: Cluster text detections into bubbles and find boundaries."""
-    page.bubbles = detect_bubbles(page.img_cv, page.detections)
-    log.info("Found %d bubbles in %s", len(page.bubbles), page.name)
+    page.bubbles, page.sfx_detections = detect_bubbles(page.img_cv, page.detections)
+    log.info("Found %d bubbles, %d SFX in %s",
+             len(page.bubbles), len(page.sfx_detections), page.name)
 
 
 def _is_title_text(bubble: WebtoonBubble) -> bool:
@@ -266,6 +268,13 @@ def render_page(page: WebtoonPageResult, out_dir: str,
                                 text_bbox,
                                 skip_bg_rect=(bubble_id in inpainted_bubbles),
                                 color_ref_img=page.img_pil)
+
+    # --- SFX overlay pass (after dialogue) ---
+    for det in page.sfx_detections:
+        sfx_english = translate_sfx(det.text)
+        if sfx_english.strip():
+            log.info("  SFX: '%s' → '%s'", det.text, sfx_english)
+            _render_sfx(page.output_img, det, sfx_english, page.img_pil)
 
     output_path = os.path.join(out_dir, f"{page.name}-en.png")
     page.output_img.save(output_path)
@@ -684,8 +693,94 @@ def _total_block_height(font: ImageFont.FreeTypeFont,
             + gap * (len(lines) - 1))
 
 
+def _sample_sfx_color(img: Image.Image,
+                      bbox: tuple[int, int, int, int]) -> tuple[int, int, int]:
+    """Sample the dominant non-background color from an SFX area.
+
+    Looks for the most saturated/bright pixel cluster in the detection
+    bbox.  If the area is mostly gray/dark (low saturation), returns a
+    default bright red.
+    """
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(img.width, x2)
+    y2 = min(img.height, y2)
+    if x2 <= x1 or y2 <= y1:
+        return (255, 50, 50)
+
+    crop = img.crop((x1, y1, x2, y2)).convert("RGB")
+    pixels = np.array(crop).reshape(-1, 3).astype(np.float32)
+    if len(pixels) == 0:
+        return (255, 50, 50)
+
+    # Convert to HSV-like: compute saturation and value per pixel
+    maxc = pixels.max(axis=1)
+    minc = pixels.min(axis=1)
+    sat = np.where(maxc > 0, (maxc - minc) / maxc, 0)
+    val = maxc / 255.0
+
+    # Score pixels by saturation * brightness — want vivid, bright colors
+    score = sat * val
+    # Filter out very dark pixels (background/outlines) and very light (white bg)
+    mask = (val > 0.2) & (val < 0.95) & (sat > 0.15)
+
+    if mask.sum() < 10:
+        return (255, 50, 50)
+
+    # Pick the highest-scoring pixel cluster (top 10% by score)
+    threshold = np.percentile(score[mask], 90)
+    top_pixels = pixels[mask & (score >= threshold)]
+    median = np.median(top_pixels, axis=0).astype(int)
+    return (int(median[0]), int(median[1]), int(median[2]))
+
+
+def _render_sfx(img: Image.Image, det: TextDetection, english: str,
+                original_img: Image.Image) -> None:
+    """Render translated SFX on top of original art with bold outlined text."""
+    x1, y1, x2, y2 = det.bbox_rect
+    det_h = y2 - y1
+    det_w = x2 - x1
+
+    # Font size: ~70% of detection height, capped
+    font_size = max(16, min(80, int(det_h * 0.7)))
+    try:
+        font = ImageFont.truetype(FONT_KO_BOLD, font_size)
+    except OSError:
+        return
+
+    body_color = _sample_sfx_color(original_img, det.bbox_rect)
+
+    # Create RGBA overlay for compositing
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Measure text
+    bbox = font.getbbox(english)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+
+    # Center in detection bbox
+    tx = x1 + (det_w - tw) // 2 - bbox[0]
+    ty = y1 + (det_h - th) // 2 - bbox[1]
+
+    # Drop shadow (offset +2,+2, semi-transparent black)
+    draw.text((tx + 2, ty + 2), english, font=font,
+              fill=(0, 0, 0, 100))
+
+    # Main text with white outline
+    draw.text((tx, ty), english, font=font,
+              fill=body_color + (255,),
+              stroke_width=3, stroke_fill=(255, 255, 255, 255))
+
+    # Composite onto output image
+    rgba_img = img.convert("RGBA")
+    composited = Image.alpha_composite(rgba_img, overlay)
+    img.paste(composited.convert("RGB"))
+
+
 def _draw_webtoon_debug(page: WebtoonPageResult) -> Image.Image:
-    """Draw debug bounding boxes for webtoon bubbles."""
+    """Draw debug bounding boxes for webtoon bubbles and SFX."""
     debug_img = page.img_pil.copy()
     draw = ImageDraw.Draw(debug_img)
 
@@ -697,5 +792,9 @@ def _draw_webtoon_debug(page: WebtoonPageResult) -> Image.Image:
         # Draw individual text region bboxes
         for det in bubble.text_regions:
             draw.rectangle(det.bbox_rect, outline="cyan", width=1)
+
+    # Draw SFX detection bboxes
+    for det in page.sfx_detections:
+        draw.rectangle(det.bbox_rect, outline="magenta", width=2)
 
     return debug_img
