@@ -530,10 +530,12 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
 
     # Find largest font size that fits within the render bbox.
     # Inner margin keeps text comfortably inside balloon boundaries —
-    # styled balloon outlines (thick dark strokes) eat into the mask
-    # area, so text needs to stay well inside.
-    fit_h = bh - 14
-    fit_w = bw - 16
+    # proportional margins (5%, min 10px) prevent text from touching
+    # edges on both small and large boxes.
+    margin_h = max(10, int(bh * 0.05))
+    margin_w = max(10, int(bw * 0.05))
+    fit_h = bh - margin_h * 2
+    fit_w = bw - margin_w * 2
     # Start from a size proportional to the bbox height.  Korean text in
     # webtoon balloons is typically 50-70% of the balloon height, so we
     # target a similar ratio.  Cap at 48px to avoid overly large text.
@@ -542,28 +544,32 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     font = None
     lines: list[str] = []
 
+    chosen_size = 8
     for size in range(target_font_size, 7, -1):
         try:
             f = ImageFont.truetype(FONT_KO, size)
         except OSError:
             continue
         wrapped = _wrap_text(text, f, fit_w)
-        total_h = _total_block_height(f, wrapped)
+        total_h = _total_block_height(f, wrapped, font_size=size)
         if total_h <= fit_h:
             font = f
             lines = wrapped
+            chosen_size = size
             break
 
     if font is None or not lines:
+        chosen_size = 8
         try:
             font = ImageFont.truetype(FONT_KO, 8)
         except OSError:
             return
         lines = _wrap_text(text, font, fit_w)
         # If still too tall, truncate lines to fit
-        total_h = _total_block_height(font, lines)
+        gap = _line_spacing(chosen_size)
+        total_h = _total_block_height(font, lines, font_size=chosen_size)
         if total_h > fit_h and len(lines) > 1:
-            max_lines = max(1, fit_h // (_line_height(font, "X") + 3))
+            max_lines = max(1, fit_h // (_line_height(font, "X") + gap))
             lines = lines[:max_lines]
             lines[-1] = lines[-1].rstrip() + "..."
 
@@ -575,8 +581,9 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     # right, bottom) and draw.text places glyphs offset by (left, top)
     # from the given position.  Without this correction text appears
     # shifted down by `top` pixels.
+    gap = _line_spacing(chosen_size)
     line_heights = [_line_height(font, line) for line in lines]
-    total_text_h = sum(line_heights) + 3 * (len(lines) - 1)
+    total_text_h = sum(line_heights) + gap * (len(lines) - 1)
     first_top = font.getbbox(lines[0])[1] if lines else 0
 
     text_y = by1 + max(0, (bh - total_text_h) // 2) - first_top
@@ -613,7 +620,7 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
         if y + lh > by2 - 2:
             break
         overlay_draw.text((x, y), line, font=font, fill=font_color_rgba)
-        y += lh + 3
+        y += lh + gap
 
     # Clip the entire overlay (bg rect + text) to the bubble mask to
     # prevent any rendering from leaking outside the bubble boundary.
@@ -660,13 +667,20 @@ def _line_height(font: ImageFont.FreeTypeFont, text: str) -> int:
     return int(bbox[3] - bbox[1])
 
 
+def _line_spacing(font_size: int) -> int:
+    """Inter-line gap proportional to font size (roughly 20% of size)."""
+    return max(4, font_size // 5)
+
+
 def _total_block_height(font: ImageFont.FreeTypeFont,
-                        lines: list[str]) -> int:
+                        lines: list[str],
+                        font_size: int = 0) -> int:
     """Total pixel height of a wrapped text block including line spacing."""
     if not lines:
         return 0
+    gap = _line_spacing(font_size) if font_size else 4
     return (sum(_line_height(font, line) for line in lines)
-            + 3 * (len(lines) - 1))
+            + gap * (len(lines) - 1))
 
 
 def _draw_webtoon_debug(page: WebtoonPageResult) -> Image.Image:
