@@ -23,7 +23,7 @@ __all__ = [
     "DATA_DIR", "OUTPUT_DIR",
     "SCROLL_PAUSE", "DOWNLOAD_TIMEOUT",
     "EASYOCR_GPU", "EASYOCR_CONFIDENCE_THRESHOLD",
-    "EASYOCR_TEXT_THRESHOLD", "EASYOCR_LOW_TEXT",
+    "EASYOCR_TEXT_THRESHOLD", "EASYOCR_LOW_TEXT", "EASYOCR_INVERTED_CONFIDENCE",
     "CLUSTER_GAP", "PAD_X", "PAD_Y",
     "FLOOD_FILL_TOLERANCE", "CONTOUR_EXPAND",
     "INPAINT_ENABLED", "INPAINT_MODEL", "INPAINT_ERODE_PX",
@@ -64,6 +64,7 @@ EASYOCR_GPU = _easyocr_cfg.get("gpu", True)
 EASYOCR_CONFIDENCE_THRESHOLD = _easyocr_cfg.get("confidence_threshold", 0.3)
 EASYOCR_TEXT_THRESHOLD = _easyocr_cfg.get("text_threshold", 0.7)
 EASYOCR_LOW_TEXT = _easyocr_cfg.get("low_text", 0.4)
+EASYOCR_INVERTED_CONFIDENCE = _easyocr_cfg.get("inverted_confidence", 0.10)
 
 # --- Bubble detection ---
 CLUSTER_GAP = _bubble_cfg.get("cluster_gap", 40)

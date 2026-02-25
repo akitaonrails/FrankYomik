@@ -10,6 +10,7 @@ from PIL import Image
 from .config import (
     EASYOCR_CONFIDENCE_THRESHOLD,
     EASYOCR_GPU,
+    EASYOCR_INVERTED_CONFIDENCE,
     EASYOCR_LOW_TEXT,
     EASYOCR_TEXT_THRESHOLD,
 )
@@ -46,10 +47,12 @@ class TextDetection:
 def detect_and_read(img: Image.Image | np.ndarray) -> list[TextDetection]:
     """Run EasyOCR on an image, return filtered text detections.
 
-    Two-pass approach:
+    Three-pass approach:
     1. Run on the original RGB image (best for normal text)
     2. Run on a contrast-enhanced grayscale version (catches stylized
        text with colored outlines, gradients, drop shadows)
+    3. Run on an inverted + CLAHE version (catches bright text on dark
+       backgrounds — gold-outlined text, white text on black panels)
 
     Results are merged with IoU-based deduplication.
 
@@ -73,15 +76,22 @@ def detect_and_read(img: Image.Image | np.ndarray) -> list[TextDetection]:
     enhanced = _enhance_for_ocr(img_array)
     pass2 = _run_ocr(enhanced)
 
+    # Pass 3: inverted + CLAHE (bright text on dark backgrounds)
+    inverted = _enhance_for_ocr_inverted(img_array)
+    pass3 = _run_ocr(inverted, min_confidence=EASYOCR_INVERTED_CONFIDENCE)
+
     # Merge, dedup by IoU
     merged = _merge_detections(pass1, pass2)
+    merged = _merge_detections(merged, pass3)
 
-    log.debug("OCR: pass1=%d, pass2=%d, merged=%d",
-              len(pass1), len(pass2), len(merged))
+    log.debug("OCR: pass1=%d, pass2=%d, pass3=%d, merged=%d",
+              len(pass1), len(pass2), len(pass3), len(merged))
     return merged
 
 
-def _run_ocr(img_array: np.ndarray) -> list[TextDetection]:
+def _run_ocr(img_array: np.ndarray,
+             min_confidence: float = EASYOCR_CONFIDENCE_THRESHOLD,
+             ) -> list[TextDetection]:
     """Run EasyOCR on a numpy RGB or grayscale array."""
     reader = _get_reader()
 
@@ -93,7 +103,7 @@ def _run_ocr(img_array: np.ndarray) -> list[TextDetection]:
 
     detections = []
     for bbox_poly, text, confidence in results:
-        if confidence < EASYOCR_CONFIDENCE_THRESHOLD:
+        if confidence < min_confidence:
             continue
         if not text.strip():
             continue
@@ -130,6 +140,23 @@ def _enhance_for_ocr(img_rgb: np.ndarray) -> np.ndarray:
     tile_w = max(8, w // 100)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(tile_w, tile_h))
     return clahe.apply(gray)
+
+
+def _enhance_for_ocr_inverted(img_rgb: np.ndarray) -> np.ndarray:
+    """Create an inverted contrast-enhanced grayscale image for OCR pass 3.
+
+    Targets bright text on dark backgrounds (gold-outlined Korean text,
+    white text on black panels).  Inverts the grayscale image so bright
+    text becomes dark strokes on a light background, then applies CLAHE.
+    """
+    import cv2
+    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+    inv = 255 - gray
+    h, w = inv.shape[:2]
+    tile_h = max(8, h // 100)
+    tile_w = max(8, w // 100)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(tile_w, tile_h))
+    return clahe.apply(inv)
 
 
 def _iou(a: tuple[int, int, int, int],

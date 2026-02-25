@@ -435,11 +435,15 @@ def _expand_render_bbox(
     if ref_w < text_w * 1.2:
         return text_bbox
 
-    # Expand to 90% of reference width, centered on the text center
-    target_w = int(ref_w * 0.9)
+    # Expand to 85% of reference width, centered on the text center.
+    # Inset from the mask/bubble edge so text stays inside the visible
+    # balloon interior — contour masks include the dark outline stroke,
+    # and rendering right up to the mask edge puts text on the outline.
+    inset = 8 if bubble.has_bubble_boundary else 0
+    target_w = int(ref_w * 0.85)
     text_cx = (tx1 + tx2) // 2
-    new_x1 = max(ref_x1, text_cx - target_w // 2)
-    new_x2 = min(ref_x2, text_cx + target_w // 2)
+    new_x1 = max(ref_x1 + inset, text_cx - target_w // 2)
+    new_x2 = min(ref_x2 - inset, text_cx + target_w // 2)
 
     return (new_x1, ty1, new_x2, ty2)
 
@@ -525,9 +529,11 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
         return
 
     # Find largest font size that fits within the render bbox.
-    # Shrink bbox by 4px to prevent edge overflow from font rendering.
-    fit_h = bh - 4
-    fit_w = bw - 6
+    # Inner margin keeps text comfortably inside balloon boundaries —
+    # styled balloon outlines (thick dark strokes) eat into the mask
+    # area, so text needs to stay well inside.
+    fit_h = bh - 14
+    fit_w = bw - 16
     # Start from a size proportional to the bbox height.  Korean text in
     # webtoon balloons is typically 50-70% of the balloon height, so we
     # target a similar ratio.  Cap at 48px to avoid overly large text.

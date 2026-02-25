@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 from webtoon.ocr import (
     _bbox_area,
     _enhance_for_ocr,
+    _enhance_for_ocr_inverted,
     _merge_detections,
     detect_and_read,
     is_valid_korean,
@@ -214,3 +215,54 @@ class TestMergeDetections:
         merged = _merge_detections(pass1, pass2)
         assert len(merged) == 1
         assert merged[0].text == "원본"
+
+    def test_three_pass_merge_adds_non_overlapping(self):
+        """Pass 3 (inverted) detections that don't overlap are added."""
+        pass12 = [_make_det(10, 10, 100, 40, text="기존")]
+        pass3 = [_make_det(10, 400, 300, 480, text="새로운 텍스트", conf=0.12)]
+        merged = _merge_detections(pass12, pass3)
+        assert len(merged) == 2
+
+    def test_three_pass_merge_dedup_overlapping(self):
+        """Pass 3 detection overlapping pass 1+2 is deduped."""
+        pass12 = [_make_det(10, 10, 200, 50, text="기존", conf=0.8)]
+        pass3 = [_make_det(15, 12, 195, 48, text="반전", conf=0.12)]
+        merged = _merge_detections(pass12, pass3)
+        assert len(merged) == 1
+        assert merged[0].text == "기존"
+
+
+class TestEnhanceForOcrInverted:
+    """Inverted CLAHE preprocessing for bright text on dark backgrounds.
+
+    Regression for 039: gold-outlined white Korean text on a black panel
+    was invisible to both pass 1 (original) and pass 2 (CLAHE).
+    The inverted pass flips brightness so bright text becomes dark strokes
+    on a light background, making it detectable by EasyOCR.
+    """
+
+    def test_output_shape_matches_input(self):
+        """Output is single-channel grayscale, same H×W as input."""
+        img = np.zeros((200, 400, 3), dtype=np.uint8)
+        result = _enhance_for_ocr_inverted(img)
+        assert result.shape == (200, 400)
+
+    def test_bright_text_becomes_dark(self):
+        """White text on black becomes dark strokes on light background."""
+        # Black background
+        img = np.zeros((100, 300, 3), dtype=np.uint8)
+        # White text stripe
+        img[30:70, 50:250] = 255
+        result = _enhance_for_ocr_inverted(img)
+        # The formerly-white text area should now be darker than the
+        # formerly-black background
+        text_mean = result[40:60, 100:200].mean()
+        bg_mean = result[5:20, 5:20].mean()
+        assert text_mean < bg_mean, \
+            "Inverted: white text should become dark, black bg should become light"
+
+    def test_dark_image_produces_light_output(self):
+        """Mostly dark input inverts to mostly light output."""
+        dark = np.full((100, 100, 3), 20, dtype=np.uint8)
+        result = _enhance_for_ocr_inverted(dark)
+        assert result.mean() > 128, "Dark image should invert to mostly light"

@@ -59,6 +59,7 @@ webtoon:
     confidence_threshold: 0.25      # Minimum OCR confidence
     text_threshold: 0.5             # EasyOCR text detection threshold (lower = more detections)
     low_text: 0.3                   # EasyOCR low text score (lower = more text linking)
+    inverted_confidence: 0.10       # Lower threshold for inverted pass (bright text on dark bg)
   bubble_detection:
     cluster_gap: 40                 # Max vertical gap between text lines in same bubble
     pad_x: 15                       # Horizontal padding around text cluster
