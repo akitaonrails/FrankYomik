@@ -192,6 +192,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
             "bbox": (x, y, x + bw, y + bh),
             "type": "speech_bubble",
             "area": area,
+            "contour": cnt,
         })
 
     # Remove overlapping detections: keep smaller (more specific) ones

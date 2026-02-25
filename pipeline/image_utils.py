@@ -38,6 +38,20 @@ def clear_text_in_region(img: Image.Image, bbox: tuple[int, int, int, int],
     draw.rectangle(bbox, fill=fill_color)
 
 
+def clear_text_in_contour(img: Image.Image, contour: np.ndarray,
+                          fill_color: tuple = (255, 255, 255)) -> None:
+    """Fill the interior of a contour with a solid color (default white) in-place.
+
+    Uses the bubble's actual contour shape instead of a bounding rectangle,
+    preserving artwork outside the bubble boundary.
+    """
+    img_array = np.array(img)
+    mask = np.zeros(img_array.shape[:2], dtype=np.uint8)
+    cv2.drawContours(mask, [contour], -1, 255, -1)
+    img_array[mask == 255] = fill_color
+    img.paste(Image.fromarray(img_array))
+
+
 def normalize_bbox(bbox_norm: list[int], img_width: int, img_height: int) -> tuple[int, int, int, int]:
     """Convert Qwen's 0-999 normalized coordinates to pixel coordinates.
 
