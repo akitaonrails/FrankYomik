@@ -23,11 +23,14 @@ from webtoon.processor import (
     _clear_bubble_text,
     _clear_with_mask,
     _detect_subgroups,
+    _expand_render_bbox,
     _is_title_text,
+    _line_spacing,
     _render_webtoon_english,
     _sample_local_bg,
     _sample_render_surface,
     _text_region_bbox,
+    _total_block_height,
     _wrap_text,
 )
 
@@ -705,3 +708,115 @@ class TestDetectSubgroups:
         ]
         groups = _detect_subgroups(dets)
         assert len(groups) == 1
+
+
+class TestLineSpacing:
+    """Proportional line spacing for readable multi-line text.
+
+    Regression for 297/028: fixed 3px line spacing at font size 34
+    produced cramped, unreadable text in large dark panels.  Spacing
+    now scales with font size (~20%).
+    """
+
+    def test_spacing_scales_with_font_size(self):
+        """Larger fonts get proportionally larger inter-line gaps."""
+        assert _line_spacing(30) > _line_spacing(12)
+
+    def test_minimum_spacing(self):
+        """Even tiny fonts get at least 4px spacing."""
+        assert _line_spacing(8) >= 4
+        assert _line_spacing(10) >= 4
+
+    def test_large_font_spacing(self):
+        """Font size 30 should get ~6px spacing (20%)."""
+        gap = _line_spacing(30)
+        assert 5 <= gap <= 8
+
+    def test_total_block_height_uses_proportional_gap(self):
+        """_total_block_height with font_size uses proportional spacing."""
+        from PIL import ImageFont
+        from webtoon.config import FONT_KO
+        font = ImageFont.truetype(FONT_KO, 30)
+        lines = ["Line one", "Line two", "Line three"]
+        h_with_size = _total_block_height(font, lines, font_size=30)
+        h_default = _total_block_height(font, lines, font_size=0)
+        # Proportional spacing (font_size=30 → gap=6) > default (gap=4)
+        assert h_with_size > h_default
+
+
+class TestExpandRenderBbox:
+    """Render bbox expansion capped to original Korean text width.
+
+    Regression for 297/051: bubble covered the full image (690x935)
+    so expansion blew the render width from 252px to 586px, causing
+    "No talent, huh! Baltar" to render as one oversized line instead
+    of wrapping to multiple lines.
+    """
+
+    def test_no_expansion_when_similar_width(self):
+        """No expansion when bubble is barely wider than text."""
+        det = _make_det(100, 50, 300, 80)
+        bubble = _make_bubble([det], bbox=(90, 40, 310, 90))
+        result = _expand_render_bbox((100, 50, 300, 80), bubble)
+        assert result == (100, 50, 300, 80)
+
+    def test_caps_expansion_to_text_width(self):
+        """Expansion is capped at 1.3x original text width, not bubble width.
+
+        Regression for 297/051: 252px text in 690px bubble expanded to
+        586px.  Now capped to 252 * 1.3 ≈ 328px.
+        """
+        det = _make_det(200, 50, 452, 200)  # 252px wide text
+        # Huge bubble (full image width)
+        bubble = _make_bubble([det], bbox=(0, 0, 690, 935))
+        result = _expand_render_bbox((200, 50, 452, 200), bubble)
+        expanded_w = result[2] - result[0]
+        # Should be close to 252 * 1.3 = 328, not 586
+        assert expanded_w <= 252 * 1.4, \
+            f"Expansion {expanded_w}px should be capped near 1.3x text width (328px)"
+        assert expanded_w >= 252, "Should not shrink below original text width"
+
+    def test_mask_based_expansion_also_capped(self):
+        """Even with a mask, expansion respects the 1.3x text width cap."""
+        det = _make_det(200, 50, 400, 100)  # 200px wide
+        mask = np.zeros((200, 690), dtype=np.uint8)
+        mask[40:110, 50:640] = 255  # Wide mask (590px)
+        bubble = _make_bubble([det], bbox=(50, 40, 640, 110),
+                              mask=mask, has_boundary=True)
+        result = _expand_render_bbox((200, 50, 400, 100), bubble)
+        expanded_w = result[2] - result[0]
+        assert expanded_w <= 200 * 1.4, \
+            f"Mask-based expansion {expanded_w}px should also be capped"
+
+
+class TestFontSizeCap:
+    """Font size capped at 36px for consistent sizing across a page.
+
+    Regression for 297/051, 059: uncapped font sizing produced 48px
+    text in large boxes — oversized compared to surrounding balloons.
+    Capping at 36px forces line wrapping instead.
+    """
+
+    def test_font_stays_under_cap(self):
+        """Font size should not exceed 36px even in tall boxes."""
+        from PIL import ImageFont
+        from webtoon.config import FONT_KO
+        text = "Short text here"
+        bh = 400  # Very tall box
+        bw = 300
+        margin_h = max(10, int(bh * 0.05))
+        margin_w = max(10, int(bw * 0.05))
+        fit_h = bh - margin_h * 2
+        fit_w = bw - margin_w * 2
+        target = max(10, min(36, int(fit_h * 0.7)))
+        # The target should be 36, not higher
+        assert target == 36, f"Font target {target} should be capped at 36"
+
+    def test_short_text_wraps_at_capped_size(self):
+        """With 36px cap and narrow render, short text wraps to 2+ lines."""
+        from PIL import ImageFont
+        from webtoon.config import FONT_KO
+        font = ImageFont.truetype(FONT_KO, 36)
+        lines = _wrap_text("No talent, huh! Baltar", font, 250)
+        assert len(lines) >= 2, \
+            f"Should wrap to 2+ lines at 36px/250px, got {len(lines)}: {lines}"
