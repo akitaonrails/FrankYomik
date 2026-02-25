@@ -38,6 +38,19 @@ def clear_text_in_region(img: Image.Image, bbox: tuple[int, int, int, int],
     draw.rectangle(bbox, fill=fill_color)
 
 
+def contour_fill_ratio(contour: np.ndarray) -> float:
+    """Ratio of contour area to bounding rect area (0-1).
+
+    High values (>0.7) indicate well-shaped bubbles. Low values suggest
+    irregular contours that may have merged with faces or background.
+    """
+    x, y, w, h = cv2.boundingRect(contour)
+    bbox_area = w * h
+    if bbox_area == 0:
+        return 0.0
+    return cv2.contourArea(contour) / bbox_area
+
+
 def contour_inner_bbox(contour: np.ndarray, margin: int = 8) -> tuple[int, int, int, int] | None:
     """Compute a layout bbox inset from the contour boundary.
 
