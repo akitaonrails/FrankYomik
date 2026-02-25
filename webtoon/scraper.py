@@ -116,6 +116,8 @@ async def _browser_get_urls(url: str) -> tuple[list[str], str]:
     config = uc.Config()
     config.sandbox = False  # Required for some environments
     config.headless = True
+    config.add_argument("--disable-gpu")
+    config.add_argument("--disable-software-rasterizer")
     browser = await uc.start(config=config)
     try:
         page = await browser.get(url)
