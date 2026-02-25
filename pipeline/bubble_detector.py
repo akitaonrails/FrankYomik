@@ -54,7 +54,8 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         max_edge_density = 0.12
         max_mid_ratio = 0.40     # colored backgrounds have many mid-tones
         min_dark_ratio = 0.008
-        max_component_ratio = 0.10
+        max_component_ratio = 0.08
+        min_very_bright_ratio = 0.20  # reject colored faces (skin not >240)
         use_rect_fallback = True  # bounding rect fallback for dark check
     else:
         log.info("Grayscale page detected — using standard thresholds")
@@ -63,7 +64,8 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         max_edge_density = 0.12
         max_mid_ratio = 0.15
         min_dark_ratio = 0.008
-        max_component_ratio = 0.10
+        max_component_ratio = 0.08
+        min_very_bright_ratio = 0.0  # no extra check for grayscale
         use_rect_fallback = False
 
     # Edge map for texture analysis (computed once)
@@ -79,6 +81,8 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
 
     # Bright pixel threshold for uniformity check
     _, bright_thresh = cv2.threshold(gray, bright_level, 255, cv2.THRESH_BINARY)
+    # Very bright threshold (>240) for face rejection on color pages
+    _, very_bright_thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
 
     # Use RETR_TREE to find nested contours (bubbles inside panels)
     contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -123,6 +127,13 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         bright_ratio = bright_pixels / area
         if bright_ratio < min_bright_ratio:
             continue
+
+        # 2b. Very bright ratio (>240) — rejects colored faces/skin on color pages
+        if min_very_bright_ratio > 0:
+            vb_pixels = cv2.countNonZero(cv2.bitwise_and(very_bright_thresh, mask))
+            vb_ratio = vb_pixels / area
+            if vb_ratio < min_very_bright_ratio:
+                continue
 
         # 3. Mid-tone ratio
         mid_mask = cv2.inRange(gray, 80, 220)

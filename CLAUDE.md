@@ -34,12 +34,13 @@ Image → [Bubble Detection] → [OCR] → [Validation] → ┬→ [Furigana] �
 | Module | Purpose | Key Details |
 |--------|---------|-------------|
 | `config.py` | Constants | Model names, font paths, thresholds |
-| `bubble_detector.py` | Speech bubble detection | Pure OpenCV contour analysis with 5-layer false positive filtering |
-| `ocr.py` | Text extraction | manga-ocr (CPU-only to avoid VRAM conflicts) + Japanese validation |
+| `bubble_detector.py` | Speech bubble detection | Pure OpenCV contour analysis with 7-layer false positive filtering |
+| `ocr.py` | Text extraction | manga-ocr (CPU-only, thread-safe locks) + Japanese validation |
 | `furigana.py` | Kanji → hiragana | pykakasi wrapper, returns annotated segments |
 | `translator.py` | JP → EN translation | Ollama `qwen2.5vl:32b`, fallback to Google Translate |
 | `text_renderer.py` | Text rendering | Vertical JP with furigana, horizontal EN with hyphenation, vertical SFX |
 | `image_utils.py` | Image I/O | OpenCV/Pillow loaders, crop, clear, base64 conversion |
+| `processor.py` | Unified pipeline | Dataclasses, stage functions, ThreadPoolExecutor parallelization |
 
 ## Critical Technical Decisions
 
@@ -49,13 +50,15 @@ Uses pure OpenCV — VLM-based detection (Qwen2.5-VL) was tried first but produc
 
 **Detection flow**: Binary threshold (>200) → morphological cleanup → RETR_TREE contour hierarchy → filter by area, aspect ratio, convex hull solidity (>0.6), interior brightness (>200).
 
-**Five false-positive filters** (reject faces, clothing, white backgrounds):
+**False-positive filters** (reject faces, clothing, white backgrounds):
 
-1. **Edge density < 0.10** — Bubbles have sparse edges (just text strokes); faces have many (hair, eyes, nose)
-2. **Bright pixel ratio > 0.80** — Bubbles are >240 white; faces have gradients
-3. **Mid-tone ratio < 0.10** — Key discriminator. Faces have many pixels in 80-220 range (skin gradients). Bubbles are bimodal: mostly >240 white + some <80 black text, almost nothing in between
-4. **Circularity > 0.15** — Bubbles are round/elliptical; faces and clothing are irregular shapes. Formula: `4π × area / perimeter²`
-5. **Border darkness < 140** — Speech bubbles have dark ink outlines; faces don't
+1. **Edge density < 0.12** — Bubbles have sparse edges (just text strokes); faces have many (hair, eyes, nose)
+2. **Bright pixel ratio** — Bubbles are mostly white; faces have gradients. Threshold varies by page type (grayscale: >0.65 at 240, color: >0.50 at 220)
+3. **Very bright ratio > 0.20 (color pages only)** — Real bubbles have most pixels >240; colored faces/skin do not. Catches face FPs that pass the relaxed bright check
+4. **Mid-tone ratio** — Key discriminator. Faces have many pixels in 80-220 range (skin gradients). Bubbles are bimodal. Threshold: <0.15 grayscale, <0.40 color
+5. **Circularity > 0.15** — Bubbles are round/elliptical; faces and clothing are irregular shapes. Formula: `4π × area / perimeter²`
+6. **Border darkness < 160** — Speech bubbles have dark ink outlines; faces don't
+7. **Largest dark component < 0.08 × inner area** — Rejects face regions where one feature (eye, eyebrow) dominates. Text has many small, similarly-sized stroke components
 
 **Why NOT std dev**: Interior pixel standard deviation was tried but rejects real bubbles — text strokes (black on white) create high variance even in legitimate speech bubbles.
 

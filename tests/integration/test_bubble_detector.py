@@ -135,12 +135,30 @@ class TestFaceRejection:
         assert not _has_bubble_in_region(bboxes, (843, 508, 952, 656)), \
             "shounen5: girl face region (843,508,952,656) falsely detected"
 
+    def test_shounen2_no_girl_eye_face(self):
+        """Girl's eye/face in shounen2 upper area must not be detected."""
+        bboxes = _bboxes(_detect("shounen2"))
+        assert not _has_bubble_in_region(bboxes, (863, 113, 1011, 280)), \
+            "shounen2: girl eye/face region (863,113,1011,280) falsely detected"
+
+    def test_shounen4_no_blue_hair_face(self):
+        """Blue-haired girl's face in shounen4 must not be detected."""
+        bboxes = _bboxes(_detect("shounen4"))
+        assert not _has_bubble_in_region(bboxes, (1832, 204, 1965, 371)), \
+            "shounen4: blue-haired girl face (1832,204,1965,371) falsely detected"
+
     def test_shounen3_no_face_false_positives(self):
         """shounen3 has window/face regions that must not be detected."""
         bubbles = _detect("shounen3")
         # Should have reasonable count, not inflated by FPs
         assert len(bubbles) <= 12, \
             f"shounen3: too many detections ({len(bubbles)}), likely face FPs"
+
+    def test_shounen3_no_window_frame(self):
+        """Window frame in shounen3 must not be detected as a bubble."""
+        bboxes = _bboxes(_detect("shounen3"))
+        assert not _has_bubble_in_region(bboxes, (1326, 779, 1448, 1026)), \
+            "shounen3: window frame (1326,779,1448,1026) falsely detected"
 
 
 # --- Color vs grayscale page detection ---
