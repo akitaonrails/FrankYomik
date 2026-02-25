@@ -20,10 +20,17 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class WebtoonTextRegion:
-    """A validated and translated text region."""
+    """A validated and translated text region.
+
+    When a bubble contains multiple distinct text groups (e.g., two separate
+    speech boxes that got clustered together), group_detections holds the
+    subset of detections for this particular region.  When None, all of
+    bubble.text_regions are used.
+    """
     bubble: WebtoonBubble
     is_valid: bool = False
     english: str = ""
+    group_detections: list[TextDetection] | None = None
 
 
 @dataclass
@@ -95,33 +102,108 @@ def _is_title_text(bubble: WebtoonBubble) -> bool:
     return avg_h > 60 and avg_chars <= 2
 
 
-def validate_and_translate(page: WebtoonPageResult) -> None:
-    """Stage 4: Validate Korean text and translate to English."""
-    for bubble in page.bubbles:
-        region = WebtoonTextRegion(bubble=bubble)
+def _detect_subgroups(detections: list[TextDetection],
+                      gap_threshold: int = 20,
+                      x_offset_threshold: int = 50) -> list[list[TextDetection]]:
+    """Split detections into vertical sub-groups for separate rendering.
 
+    Uses two criteria to identify distinct speech boxes vs. lines in the
+    same box:
+    1. Vertical gap between groups exceeds gap_threshold
+    2. Horizontal center offset between groups exceeds x_offset_threshold
+
+    Both must be true to split.  This prevents splitting two lines of
+    the same message that happen to have a vertical gap (e.g., 039's
+    notification panel) while correctly splitting text from two separate
+    speech boxes (e.g., 059's two black boxes).
+    """
+    if len(detections) <= 1:
+        return [detections]
+
+    sorted_dets = sorted(detections, key=lambda d: d.bbox_rect[1])
+    groups: list[list[TextDetection]] = [[sorted_dets[0]]]
+
+    for det in sorted_dets[1:]:
+        prev_bottom = max(d.bbox_rect[3] for d in groups[-1])
+        gap = det.bbox_rect[1] - prev_bottom
+
+        if gap > gap_threshold:
+            # Check horizontal alignment with current group
+            prev_cx = sum(
+                (d.bbox_rect[0] + d.bbox_rect[2]) / 2 for d in groups[-1]
+            ) / len(groups[-1])
+            det_cx = (det.bbox_rect[0] + det.bbox_rect[2]) / 2
+            h_offset = abs(det_cx - prev_cx)
+
+            if h_offset > x_offset_threshold:
+                # Different X position → separate speech box
+                groups.append([det])
+            else:
+                # Same X position → just a bigger gap in same box
+                groups[-1].append(det)
+        else:
+            groups[-1].append(det)
+
+    return groups
+
+
+def validate_and_translate(page: WebtoonPageResult) -> None:
+    """Stage 4: Validate Korean text and translate to English.
+
+    When a bubble contains multiple distinct text groups (separated by a
+    significant vertical gap), each group is translated independently and
+    gets its own WebtoonTextRegion for separate rendering.
+    """
+    for bubble in page.bubbles:
         if _is_title_text(bubble):
             log.info("  Skipping title/logo text: %s", bubble.combined_text)
-            page.regions.append(region)
+            page.regions.append(WebtoonTextRegion(bubble=bubble))
             continue
 
         if not is_valid_korean(bubble.combined_text):
             if bubble.combined_text.strip():
                 log.info("  OCR noise (not Korean): %s", bubble.combined_text)
-            page.regions.append(region)
+            page.regions.append(WebtoonTextRegion(bubble=bubble))
             continue
 
-        region.is_valid = True
-        log.info("  KO: %s", bubble.combined_text)
+        # Check for sub-groups within the bubble
+        groups = _detect_subgroups(bubble.text_regions)
 
-        english = translate(bubble.combined_text)
-        if english.strip():
-            region.english = english
-            log.info("  EN: %s", english)
+        if len(groups) == 1:
+            # Single group — translate all text together
+            _translate_group(page, bubble, bubble.text_regions, None)
         else:
-            log.info("  Translation empty for '%s'", bubble.combined_text)
+            # Multiple groups — translate each separately
+            log.info("  Split bubble into %d sub-groups", len(groups))
+            for group_dets in groups:
+                _translate_group(page, bubble, group_dets, group_dets)
 
-        page.regions.append(region)
+
+def _translate_group(page: WebtoonPageResult, bubble: WebtoonBubble,
+                     detections: list[TextDetection],
+                     group_dets: list[TextDetection] | None) -> None:
+    """Validate and translate a group of detections within a bubble."""
+    group_text = " ".join(d.text for d in detections)
+
+    if not is_valid_korean(group_text):
+        if group_text.strip():
+            log.info("  OCR noise (not Korean): %s", group_text)
+        page.regions.append(WebtoonTextRegion(
+            bubble=bubble, group_detections=group_dets))
+        return
+
+    region = WebtoonTextRegion(
+        bubble=bubble, is_valid=True, group_detections=group_dets)
+    log.info("  KO: %s", group_text)
+
+    english = translate(group_text)
+    if english.strip():
+        region.english = english
+        log.info("  EN: %s", english)
+    else:
+        log.info("  Translation empty for '%s'", group_text)
+
+    page.regions.append(region)
 
 
 def render_page(page: WebtoonPageResult, out_dir: str,
@@ -132,28 +214,35 @@ def render_page(page: WebtoonPageResult, out_dir: str,
         debug_img.save(os.path.join(out_dir, f"{page.name}-debug.png"))
 
     page.output_img = page.img_pil.copy()
+    img_w, img_h = page.output_img.width, page.output_img.height
+
+    # Track which bubbles we've already cleared (avoid double-clearing when
+    # a bubble is split into multiple sub-group regions).
+    cleared_bubbles: set[int] = set()
 
     for region in page.regions:
         if not region.english:
             continue
 
         bubble = region.bubble
-        bg_color = bubble.bg_color
+        bubble_id = id(bubble)
 
-        # Compute text-region bbox: union of all OCR detection bboxes + padding.
-        # This is the actual area where Korean text lives (not the contour bbox
-        # which can be much larger and cause misplaced rendering).
-        text_bbox = _text_region_bbox(bubble, page.output_img.width,
-                                      page.output_img.height)
+        # Step 1: Clear Korean text (once per bubble, even if split).
+        if bubble_id not in cleared_bubbles:
+            _clear_bubble_text(page.output_img, bubble)
+            cleared_bubbles.add(bubble_id)
 
-        # Step 1: Clear Korean text per detection.
-        # For each text detection, clear within bubble mask if available,
-        # otherwise use rectangle fill.  This handles cases where some
-        # detections fall inside a contour and others are floating text
-        # that got clustered together.
-        _clear_bubble_text(page.output_img, bubble)
+        # Step 2: Compute render bbox from the region's detections.
+        # Use group_detections if the bubble was split into sub-groups.
+        render_dets = region.group_detections or bubble.text_regions
+        text_bbox = _text_region_bbox_from_dets(render_dets, img_w, img_h)
 
-        # Step 2: Render English text within the text-region bbox
+        # Step 2b: Expand render bbox horizontally when the bubble mask
+        # is significantly wider than the text area.  This gives English
+        # text more room in wide panels (e.g., notification bars).
+        text_bbox = _expand_render_bbox(text_bbox, bubble)
+
+        # Step 3: Render English text within the text-region bbox
         _render_webtoon_english(page.output_img, bubble, region.english,
                                 text_bbox)
 
@@ -256,22 +345,17 @@ def _clear_with_mask(img: Image.Image,
     img.paste(Image.fromarray(img_array))
 
 
-def _text_region_bbox(bubble: WebtoonBubble, img_w: int,
-                      img_h: int) -> tuple[int, int, int, int]:
-    """Compute the actual text area from OCR detection bboxes + padding.
+def _text_region_bbox_from_dets(detections: list[TextDetection],
+                                img_w: int,
+                                img_h: int) -> tuple[int, int, int, int]:
+    """Compute the text area bbox from a list of detections + padding."""
+    if not detections:
+        return (0, 0, img_w, img_h)
 
-    The bubble.bbox (from contour detection) can be much larger than the
-    actual text.  Using the tight union of detection bboxes + generous
-    padding gives a render/clear area that matches where the Korean text
-    actually is.
-    """
-    if not bubble.text_regions:
-        return bubble.bbox
-
-    x1 = min(d.bbox_rect[0] for d in bubble.text_regions)
-    y1 = min(d.bbox_rect[1] for d in bubble.text_regions)
-    x2 = max(d.bbox_rect[2] for d in bubble.text_regions)
-    y2 = max(d.bbox_rect[3] for d in bubble.text_regions)
+    x1 = min(d.bbox_rect[0] for d in detections)
+    y1 = min(d.bbox_rect[1] for d in detections)
+    x2 = max(d.bbox_rect[2] for d in detections)
+    y2 = max(d.bbox_rect[3] for d in detections)
 
     # Generous padding — Korean glyphs often extend beyond tight OCR bbox
     pad_x, pad_y = 14, 10
@@ -281,6 +365,59 @@ def _text_region_bbox(bubble: WebtoonBubble, img_w: int,
         min(img_w, x2 + pad_x),
         min(img_h, y2 + pad_y),
     )
+
+
+def _text_region_bbox(bubble: WebtoonBubble, img_w: int,
+                      img_h: int) -> tuple[int, int, int, int]:
+    """Compute the actual text area from a bubble's OCR detection bboxes."""
+    if not bubble.text_regions:
+        return bubble.bbox
+    return _text_region_bbox_from_dets(bubble.text_regions, img_w, img_h)
+
+
+def _expand_render_bbox(
+    text_bbox: tuple[int, int, int, int],
+    bubble: WebtoonBubble,
+) -> tuple[int, int, int, int]:
+    """Expand render bbox when bubble mask is significantly wider.
+
+    For wide panels (notification bars, narration boxes), the OCR detections
+    may only cover a narrow central strip.  Expanding horizontally gives
+    English text more room and avoids leaving visible Korean remnants at
+    the sides.
+
+    Expansion is based on the mask's actual horizontal extent at the text's
+    vertical range, not the full contour bbox (which can span the entire
+    image width).
+    """
+    mask = bubble.bubble_mask
+    if mask is None:
+        return text_bbox
+
+    tx1, ty1, tx2, ty2 = text_bbox
+    text_w = tx2 - tx1
+
+    # Sample the mask's horizontal extent at the text's vertical range
+    mask_row = mask[ty1:ty2, :]
+    mask_cols = np.where(mask_row.any(axis=0))[0]
+    if len(mask_cols) == 0:
+        return text_bbox
+
+    mask_x1 = int(mask_cols[0])
+    mask_x2 = int(mask_cols[-1]) + 1
+    mask_w = mask_x2 - mask_x1
+
+    # Only expand if the mask is at least 50% wider than the text bbox
+    if mask_w < text_w * 1.5:
+        return text_bbox
+
+    # Expand to 80% of mask width, centered on the text center
+    target_w = int(mask_w * 0.8)
+    text_cx = (tx1 + tx2) // 2
+    new_x1 = max(mask_x1, text_cx - target_w // 2)
+    new_x2 = min(mask_x2, text_cx + target_w // 2)
+
+    return (new_x1, ty1, new_x2, ty2)
 
 
 def _bg_luminance(color: tuple[int, int, int]) -> float:
