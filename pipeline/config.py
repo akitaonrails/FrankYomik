@@ -41,10 +41,18 @@ TRANSLATE_OPTIONS = {
 # think: false for qwen3 models; None means omit from request
 TRANSLATE_THINK = _translate_opts.get("think", None)
 
-# --- Font paths (Noto CJK on Arch Linux) ---
-FONT_JP = _fonts.get("jp", "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc")
-FONT_JP_BOLD = _fonts.get("jp_bold", "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc")
-FONT_EN = _fonts.get("en", "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc")
+# --- Font paths ---
+def _resolve_font(path: str) -> str:
+    """Resolve font path: absolute paths pass through, relative resolved from project root."""
+    if os.path.isabs(path):
+        return path
+    return os.path.join(_PROJECT_ROOT, path)
+
+
+FONT_JP = _resolve_font(_fonts.get("jp", "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"))
+FONT_JP_BOLD = _resolve_font(_fonts.get("jp_bold", "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc"))
+FONT_EN = _resolve_font(_fonts.get("en", "fonts/ComicNeue-Regular.otf"))
+FONT_EN_BOLD = _resolve_font(_fonts.get("en_bold", "fonts/ComicNeue-Bold.otf"))
 
 # --- Bubble detection thresholds ---
 MIN_BUBBLE_AREA = 2000        # Minimum contour area to consider a bubble

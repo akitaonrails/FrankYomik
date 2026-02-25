@@ -43,7 +43,8 @@ ollama:
 fonts:
   jp: "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"
   jp_bold: "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc"
-  en: "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"
+  en: "fonts/ComicNeue-Regular.otf"
+  en_bold: "fonts/ComicNeue-Bold.otf"
 
 ocr:
   device: "cuda"   # "cuda" for GPU (~350MB); "cpu" if VRAM is tight

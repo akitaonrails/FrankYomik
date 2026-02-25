@@ -14,6 +14,7 @@ from pipeline.config import (
     TRANSLATE_OPTIONS,
     TRANSLATE_THINK,
     FONT_EN,
+    FONT_EN_BOLD,
     FONT_JP_BOLD,
 )
 
@@ -85,6 +86,6 @@ INPAINT_STEPS = _inpaint_cfg.get("num_inference_steps", 28)
 INPAINT_PROMPT = _inpaint_cfg.get("prompt",
                                    "clean empty speech bubble interior, flat color")
 
-# --- Font (NotoSansCJK includes Korean glyphs) ---
+# --- Font (Comic Neue for English dialogue, NotoSansCJK Bold for SFX) ---
 FONT_KO = FONT_EN
-FONT_KO_BOLD = FONT_JP_BOLD
+FONT_KO_BOLD = FONT_EN_BOLD
