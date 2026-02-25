@@ -333,6 +333,26 @@ def _flood_fill_boundary(img_cv: np.ndarray,
     return bbox, fill_mask
 
 
+def _is_sfx_detection(det: TextDetection) -> bool:
+    """Detect artistic SFX (sound effect) text that should not enter clustering.
+
+    SFX in webtoons are drawn in heavy artistic styles with huge bounding
+    boxes.  If they enter clustering, they contaminate nearby dialogue
+    bubbles because their oversized bbox overlaps with dialogue lines.
+
+    Two-tier filter (avoids catching short dialogue like "뭐?" or "바로"):
+    - Single character AND >100px tall: always SFX/decorative
+    - 1-2 characters AND >200px tall: oversized artistic text
+    """
+    h = det.bbox_rect[3] - det.bbox_rect[1]
+    chars = len(det.text.strip())
+    if chars == 1 and h > 100:
+        return True
+    if chars <= 2 and h > 200:
+        return True
+    return False
+
+
 def detect_bubbles(img_cv: np.ndarray,
                    detections: list[TextDetection]) -> list[WebtoonBubble]:
     """Main entry point: cluster detections and find bubble boundaries.
@@ -344,7 +364,19 @@ def detect_bubbles(img_cv: np.ndarray,
     Returns:
         List of WebtoonBubble with text and boundary info.
     """
-    clusters = cluster_detections(detections)
+    # Filter out SFX detections before clustering to prevent their
+    # oversized bboxes from contaminating dialogue clusters.
+    dialogue_dets = []
+    for det in detections:
+        if _is_sfx_detection(det):
+            log.info("  Skipping SFX detection: '%s' (%dx%dpx)",
+                     det.text,
+                     det.bbox_rect[2] - det.bbox_rect[0],
+                     det.bbox_rect[3] - det.bbox_rect[1])
+        else:
+            dialogue_dets.append(det)
+
+    clusters = cluster_detections(dialogue_dets)
     bubbles = []
 
     for cluster in clusters:

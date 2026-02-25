@@ -3,6 +3,7 @@
 from webtoon.bubble_detector import (
     cluster_detections,
     _cluster_bbox,
+    _is_sfx_detection,
     _should_merge,
     _spans_image,
 )
@@ -122,3 +123,38 @@ class TestSpansImage:
         # 70% of 1000 = 700
         assert _spans_image((0, 0, 700, 700), 1000, 1000) is False  # equal not >
         assert _spans_image((0, 0, 701, 701), 1000, 1000) is True
+
+
+class TestIsSfxDetection:
+    """Pre-clustering SFX filter prevents oversized bboxes from
+    contaminating dialogue clusters.
+
+    Regression for 297/057: SFX "꽈양" (detected as "값", 230x318px)
+    overlapped vertically with dialogue "도우러 가자!" and got merged
+    into the same cluster, corrupting the speech bubble render.
+    """
+
+    def test_tall_single_char_is_sfx(self):
+        """Single character >100px tall is SFX."""
+        det = _make_det(15, 535, 245, 853, text="값")  # 318px tall
+        assert _is_sfx_detection(det) is True
+
+    def test_oversized_two_chars_is_sfx(self):
+        """Two characters >200px tall is SFX."""
+        det = _make_det(10, 10, 200, 226, text="하하")  # 216px tall
+        assert _is_sfx_detection(det) is True
+
+    def test_short_dialogue_not_sfx(self):
+        """Short dialogue like '뭐?' (114px, 2 chars) is NOT SFX."""
+        det = _make_det(300, 800, 450, 914, text="뭐?")  # 114px tall
+        assert _is_sfx_detection(det) is False
+
+    def test_normal_dialogue_not_sfx(self):
+        """Normal multi-char dialogue is never SFX."""
+        det = _make_det(100, 100, 400, 150, text="도우러 가자!")
+        assert _is_sfx_detection(det) is False
+
+    def test_small_single_char_not_sfx(self):
+        """Small single character (normal text) is not SFX."""
+        det = _make_det(100, 100, 130, 140, text="네")  # 40px tall
+        assert _is_sfx_detection(det) is False
