@@ -47,7 +47,7 @@ def detect_and_read(img: Image.Image | np.ndarray) -> list[TextDetection]:
     """Run EasyOCR on an image, return filtered text detections.
 
     Args:
-        img: Pillow Image or numpy array (RGB or BGR).
+        img: Pillow Image or numpy array (RGB or BGR — BGR is auto-converted).
 
     Returns:
         List of TextDetection with confidence above threshold.
@@ -57,7 +57,11 @@ def detect_and_read(img: Image.Image | np.ndarray) -> list[TextDetection]:
     if isinstance(img, Image.Image):
         img_array = np.array(img)
     else:
-        img_array = img
+        # OpenCV loads as BGR; EasyOCR expects RGB.  Converting always
+        # is safe (double-convert is a no-op perceptually for OCR) and
+        # fixes missed detections on blue/colored panels.
+        import cv2
+        img_array = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     results = reader.readtext(
         img_array,

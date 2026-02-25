@@ -255,18 +255,21 @@ def _clear_bubble_text(img: Image.Image, bubble: WebtoonBubble) -> None:
     """Clear Korean text in a bubble, respecting bubble mask when available.
 
     Two-phase clearing:
-    1. Clear the full text_region_bbox within the bubble mask (covers all text
-       inside the contour, including gaps between detection rects)
+    1. Clear the text_region_bbox within the bubble mask (covers detected
+       text + gaps between detection rects).  We do NOT fill the entire
+       mask because semi-transparent balloons (blue notification panels)
+       have artwork visible through them — solid-filling destroys that.
     2. Clear EVERY detection with a padded rectangle using locally-sampled
-       background color (catches anything the mask missed — floating text,
-       partial mask coverage, glyph strokes beyond mask edge)
+       background color (catches floating text outside the mask).
     """
     bg_color = bubble.bg_color
     pad = 14
     mask = bubble.bubble_mask
     img_w, img_h = img.width, img.height
 
-    # Phase 1: clear the full text region within the mask (bubble-aware)
+    # Phase 1: clear the text region within the mask (bubble-aware).
+    # Uses text_region_bbox (tight around OCR detections + padding), NOT
+    # bubble.bbox, to avoid destroying semi-transparent balloon artwork.
     if mask is not None:
         text_bbox = _text_region_bbox(bubble, img_w, img_h)
         _clear_with_mask(img, text_bbox, mask, bg_color)
@@ -407,12 +410,12 @@ def _expand_render_bbox(
     mask_x2 = int(mask_cols[-1]) + 1
     mask_w = mask_x2 - mask_x1
 
-    # Only expand if the mask is at least 50% wider than the text bbox
-    if mask_w < text_w * 1.5:
+    # Only expand if the mask is at least 20% wider than the text bbox
+    if mask_w < text_w * 1.2:
         return text_bbox
 
-    # Expand to 80% of mask width, centered on the text center
-    target_w = int(mask_w * 0.8)
+    # Expand to 90% of mask width, centered on the text center
+    target_w = int(mask_w * 0.9)
     text_cx = (tx1 + tx2) // 2
     new_x1 = max(mask_x1, text_cx - target_w // 2)
     new_x2 = min(mask_x2, text_cx + target_w // 2)
@@ -461,7 +464,10 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     # Shrink bbox by 4px to prevent edge overflow from font rendering.
     fit_h = bh - 4
     fit_w = bw - 6
-    target_font_size = max(10, min(28, int(fit_h * 0.45)))
+    # Start from a size proportional to the bbox height.  Korean text in
+    # webtoon balloons is typically 50-70% of the balloon height, so we
+    # target a similar ratio.  Cap at 48px to avoid overly large text.
+    target_font_size = max(10, min(48, int(fit_h * 0.7)))
 
     font = None
     lines: list[str] = []
@@ -511,24 +517,17 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     bg_x1 = bx1 + 1
     bg_x2 = bx2 - 2
 
+    # Render bg rectangle and text on a single RGBA overlay, then mask-clip
+    # both together.  This prevents text glyphs from leaking outside the
+    # bubble boundary (the bg rect was already clipped, but text was not).
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(overlay)
     overlay_draw.rounded_rectangle(
         (bg_x1, bg_y1, bg_x2, bg_y2), radius=3, fill=bg_rect_color,
     )
 
-    # Clip the overlay to the bubble mask to prevent the bg rectangle
-    # from leaking outside the bubble boundary (regression: 029).
-    if bubble.bubble_mask is not None:
-        overlay_arr = np.array(overlay)
-        # Zero out alpha channel outside the mask
-        overlay_arr[:, :, 3][bubble.bubble_mask == 0] = 0
-        overlay = Image.fromarray(overlay_arr)
-
-    img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
-
-    # Render text lines centered horizontally
-    draw = ImageDraw.Draw(img)
+    # Render text lines centered horizontally (on overlay)
+    font_color_rgba = font_color + (255,)
     y = text_y
     for line, lh in zip(lines, line_heights):
         bbox = font.getbbox(line)
@@ -537,8 +536,17 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
         # Hard clamp: don't draw below render bbox
         if y + lh > by2 - 2:
             break
-        draw.text((x, y), line, font=font, fill=font_color)
+        overlay_draw.text((x, y), line, font=font, fill=font_color_rgba)
         y += lh + 3
+
+    # Clip the entire overlay (bg rect + text) to the bubble mask to
+    # prevent any rendering from leaking outside the bubble boundary.
+    if bubble.bubble_mask is not None:
+        overlay_arr = np.array(overlay)
+        overlay_arr[:, :, 3][bubble.bubble_mask == 0] = 0
+        overlay = Image.fromarray(overlay_arr)
+
+    img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 
 
 def _wrap_text(text: str, font: ImageFont.FreeTypeFont,
