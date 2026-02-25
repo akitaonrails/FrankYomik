@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 TRANSLATE_MODEL = BUBBLE_DETECT_MODEL
 
 
-def translate(japanese_text: str, image_path: str | None = None) -> str:
+def translate(japanese_text: str) -> str:
     """Translate Japanese text to English using Ollama."""
     prompt = (
         "Translate this Japanese manga dialogue to natural English.\n"

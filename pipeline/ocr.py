@@ -2,25 +2,30 @@
 
 import logging
 import os
+import threading
 
 from PIL import Image
 
 log = logging.getLogger(__name__)
 
-# Singleton manga-ocr instance
+# Singleton manga-ocr instance with thread-safe initialization
 _mocr = None
+_init_lock = threading.Lock()
+_infer_lock = threading.Lock()
 
 
 def _get_ocr():
     """Lazy-load manga-ocr on first use. Runs on CPU to avoid VRAM conflicts."""
     global _mocr
     if _mocr is None:
-        # Force CPU before importing manga_ocr (which imports torch)
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
-        log.info("Loading manga-ocr model (CPU)...")
-        from manga_ocr import MangaOcr
-        _mocr = MangaOcr()
-        log.info("manga-ocr loaded")
+        with _init_lock:
+            if _mocr is None:
+                # Force CPU before importing manga_ocr (which imports torch)
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+                log.info("Loading manga-ocr model (CPU)...")
+                from manga_ocr import MangaOcr
+                _mocr = MangaOcr()
+                log.info("manga-ocr loaded")
     return _mocr
 
 
@@ -34,7 +39,8 @@ def extract_text(img: Image.Image) -> str:
         Extracted Japanese text string.
     """
     ocr = _get_ocr()
-    text = ocr(img)
+    with _infer_lock:
+        text = ocr(img)
     return text.strip()
 
 

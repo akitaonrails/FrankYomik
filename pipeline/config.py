@@ -33,5 +33,3 @@ EN_BASE_FONT_MAX = 24
 # File paths
 DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output")
-ADULT_INPUT = os.path.join(DOCS_DIR, "adult.png")
-SHOUNEN_INPUT = os.path.join(DOCS_DIR, "shounen.png")

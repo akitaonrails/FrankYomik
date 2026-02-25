@@ -12,20 +12,17 @@ import argparse
 import glob
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 
-from pipeline.config import DOCS_DIR, OUTPUT_DIR, EN_BASE_FONT_DIVISOR, EN_BASE_FONT_MIN, EN_BASE_FONT_MAX
-from pipeline.image_utils import (
-    load_image, load_image_pil, clear_text_in_region,
-    clear_text_in_contour, contour_inner_bbox, contour_fill_ratio,
-)
-from pipeline.bubble_detector import detect_bubbles
-from pipeline.ocr import extract_text_from_region, is_valid_japanese
-from pipeline.furigana import annotate as furigana_annotate
-from pipeline.translator import translate
-from pipeline.text_renderer import (
-    render_furigana_vertical,
-    render_english,
-    draw_debug_boxes,
+from pipeline.config import DOCS_DIR, OUTPUT_DIR
+from pipeline.processor import (
+    PipelineMode,
+    detect_page_bubbles,
+    load_page,
+    ocr_bubble,
+    render_page,
+    transform_furigana,
+    transform_translate,
 )
 
 logging.basicConfig(
@@ -41,116 +38,55 @@ def _find_images(prefix: str) -> list[str]:
     return sorted(glob.glob(pattern))
 
 
-def process_furigana(image_path: str, out_dir: str, debug: bool = False) -> None:
-    """Add furigana to kanji in a single manga page."""
-    name = os.path.splitext(os.path.basename(image_path))[0]
-    log.info("--- Furigana: %s ---", name)
+def run_pipeline(image_paths: list[str], mode: PipelineMode, out_dir: str,
+                 debug: bool = False) -> None:
+    """Run the full pipeline with parallelized stages."""
+    os.makedirs(out_dir, exist_ok=True)
 
-    img_cv = load_image(image_path)
-    img_pil = load_image_pil(image_path)
+    if not image_paths:
+        log.info("No images found for %s pipeline", mode.value)
+        return
 
-    log.info("Detecting speech bubbles...")
-    bubbles = detect_bubbles(img_cv)
-    log.info("Found %d bubbles", len(bubbles))
+    log.info("=== %s PIPELINE: %d images ===", mode.value.upper(), len(image_paths))
 
-    if debug:
-        debug_img = draw_debug_boxes(img_pil, bubbles)
-        debug_img.save(os.path.join(out_dir, f"{name}-debug.png"))
+    # Stage 1+2: Load and detect bubbles (OpenCV releases GIL, pages independent)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pages = list(pool.map(load_page, image_paths))
 
-    output_img = img_pil.copy()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(detect_page_bubbles, pages))
 
-    for i, bubble in enumerate(bubbles):
-        bbox = bubble["bbox"]
-        log.info("Bubble %d/%d: bbox=%s", i + 1, len(bubbles), bbox)
+    # Stage 3: OCR all bubbles (manga-ocr CPU singleton, lock-protected)
+    all_ocr_tasks = []
+    for page in pages:
+        for bubble in page.bubbles_raw:
+            all_ocr_tasks.append((page, bubble))
 
-        text = extract_text_from_region(img_pil, bbox)
-        if not text.strip():
-            log.info("  No text, skipping")
-            continue
-        if not is_valid_japanese(text):
-            log.info("  OCR noise (not Japanese): %s, skipping", text)
-            continue
-        log.info("  OCR: %s", text)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(ocr_bubble, page.img_pil, bubble)
+                   for page, bubble in all_ocr_tasks]
+        all_results = [f.result() for f in futures]
 
-        segments = furigana_annotate(text)
-        if not any(s["needs_furigana"] for s in segments):
-            log.info("  No kanji, skipping")
-            continue
+    # Assign bubble results back to pages
+    idx = 0
+    for page in pages:
+        count = len(page.bubbles_raw)
+        page.bubble_results = all_results[idx:idx + count]
+        idx += count
 
-        contour = bubble.get("contour")
-        layout_bbox = bbox
-        if contour is not None:
-            layout_bbox = contour_inner_bbox(contour) or bbox
-            if contour_fill_ratio(contour) >= 0.70:
-                clear_text_in_contour(output_img, contour)
-            else:
-                clear_text_in_region(output_img, layout_bbox)
-        else:
-            clear_text_in_region(output_img, bbox)
-        render_furigana_vertical(output_img, layout_bbox, segments)
+    # Stage 4: Transform (furigana or translate)
+    transform_fn = transform_furigana if mode == PipelineMode.FURIGANA else transform_translate
+    max_workers = 4 if mode == PipelineMode.FURIGANA else 2
+    all_brs = [br for page in pages for br in page.bubble_results if br.is_valid]
 
-    output_path = os.path.join(out_dir, f"{name}-furigana.png")
-    output_img.save(output_path)
-    log.info("Saved: %s", output_path)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        list(pool.map(transform_fn, all_brs))
 
+    # Stage 5: Render (sequential — mutates shared output_img per page)
+    for page in pages:
+        render_page(page, mode, out_dir, debug=debug)
 
-def process_translate(image_path: str, out_dir: str, debug: bool = False) -> None:
-    """Translate Japanese dialogue to English in a single manga page."""
-    name = os.path.splitext(os.path.basename(image_path))[0]
-    log.info("--- Translate: %s ---", name)
-
-    img_cv = load_image(image_path)
-    img_pil = load_image_pil(image_path)
-
-    log.info("Detecting speech bubbles...")
-    bubbles = detect_bubbles(img_cv)
-    log.info("Found %d bubbles", len(bubbles))
-
-    if debug:
-        debug_img = draw_debug_boxes(img_pil, bubbles)
-        debug_img.save(os.path.join(out_dir, f"{name}-debug.png"))
-
-    output_img = img_pil.copy()
-
-    # Compute a consistent base font size from the page height
-    page_height = img_pil.height
-    base_font_size = max(EN_BASE_FONT_MIN, min(EN_BASE_FONT_MAX, page_height // EN_BASE_FONT_DIVISOR))
-    log.info("Base English font size: %d (page height=%d)", base_font_size, page_height)
-
-    for i, bubble in enumerate(bubbles):
-        bbox = bubble["bbox"]
-        log.info("Bubble %d/%d: bbox=%s", i + 1, len(bubbles), bbox)
-
-        text = extract_text_from_region(img_pil, bbox)
-        if not text.strip():
-            log.info("  No text, skipping")
-            continue
-        if not is_valid_japanese(text):
-            log.info("  OCR noise (not Japanese): %s, skipping", text)
-            continue
-        log.info("  OCR: %s", text)
-
-        english = translate(text)
-        if not english.strip():
-            log.info("  Translation empty, skipping")
-            continue
-        log.info("  EN: %s", english)
-
-        contour = bubble.get("contour")
-        layout_bbox = bbox
-        if contour is not None:
-            layout_bbox = contour_inner_bbox(contour) or bbox
-            if contour_fill_ratio(contour) >= 0.70:
-                clear_text_in_contour(output_img, contour)
-            else:
-                clear_text_in_region(output_img, layout_bbox)
-        else:
-            clear_text_in_region(output_img, bbox)
-        render_english(output_img, layout_bbox, english, base_font_size=base_font_size)
-
-    output_path = os.path.join(out_dir, f"{name}-en.png")
-    output_img.save(output_path)
-    log.info("Saved: %s", output_path)
+    log.info("Done with %s pipeline!", mode.value)
 
 
 def main():
@@ -165,20 +101,12 @@ def main():
     translate_dir = os.path.join(OUTPUT_DIR, "translate")
 
     if args.command in ("furigana", "all"):
-        os.makedirs(furigana_dir, exist_ok=True)
         images = _find_images("adult")
-        log.info("=== FURIGANA PIPELINE: %d images ===", len(images))
-        for img_path in images:
-            process_furigana(img_path, furigana_dir, debug=args.debug)
+        run_pipeline(images, PipelineMode.FURIGANA, furigana_dir, debug=args.debug)
 
     if args.command in ("translate", "all"):
-        os.makedirs(translate_dir, exist_ok=True)
         images = _find_images("shounen")
-        log.info("=== TRANSLATION PIPELINE: %d images ===", len(images))
-        for img_path in images:
-            process_translate(img_path, translate_dir, debug=args.debug)
-
-    log.info("Done!")
+        run_pipeline(images, PipelineMode.TRANSLATE, translate_dir, debug=args.debug)
 
 
 if __name__ == "__main__":

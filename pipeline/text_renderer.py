@@ -187,9 +187,12 @@ def _render_vertical_sfx(img: Image.Image, bbox: tuple[int, int, int, int],
         ch_w = ch_bbox[2] - ch_bbox[0]
         ch_h = ch_bbox[3] - ch_bbox[1]
         tx = cx - ch_w // 2
+        # Offset background by bbox origin (font ascender shifts ink down/right)
+        bg_x = tx + ch_bbox[0]
+        bg_y = start_y + ch_bbox[1]
         draw.rectangle(
-            (tx - _TEXT_BG_PAD, start_y - _TEXT_BG_PAD,
-             tx + ch_w + _TEXT_BG_PAD, start_y + ch_h + _TEXT_BG_PAD),
+            (bg_x - _TEXT_BG_PAD, bg_y - _TEXT_BG_PAD,
+             bg_x + ch_w + _TEXT_BG_PAD, bg_y + ch_h + _TEXT_BG_PAD),
             fill="white",
         )
         draw.text((tx, start_y), ch, fill="black", font=font)
@@ -249,9 +252,12 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
         line_h = line_bbox[3] - line_bbox[1]
         text_x = x1 + TEXT_MARGIN + (bw - line_w) // 2
 
+        # Offset background by bbox origin (font ascender shifts ink down/right)
+        bg_x = text_x + line_bbox[0]
+        bg_y = text_y + line_bbox[1]
         draw.rectangle(
-            (text_x - _TEXT_BG_PAD, text_y - _TEXT_BG_PAD,
-             text_x + line_w + _TEXT_BG_PAD, text_y + line_h + _TEXT_BG_PAD),
+            (bg_x - _TEXT_BG_PAD, bg_y - _TEXT_BG_PAD,
+             bg_x + line_w + _TEXT_BG_PAD, bg_y + line_h + _TEXT_BG_PAD),
             fill="white",
         )
         draw.text((text_x, text_y), line, fill="black", font=font)
@@ -409,9 +415,12 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         main_bbox = draw.textbbox((0, 0), ch_info["char"], font=font)
         main_w = main_bbox[2] - main_bbox[0]
         main_h = main_bbox[3] - main_bbox[1]
+        # Offset background by bbox origin (font ascender shifts ink down/right)
+        mbg_x = col_x + main_bbox[0]
+        mbg_y = char_y + main_bbox[1]
         draw.rectangle(
-            (col_x - _TEXT_BG_PAD, char_y - _TEXT_BG_PAD,
-             col_x + main_w + _TEXT_BG_PAD, char_y + main_h + _TEXT_BG_PAD),
+            (mbg_x - _TEXT_BG_PAD, mbg_y - _TEXT_BG_PAD,
+             mbg_x + main_w + _TEXT_BG_PAD, mbg_y + main_h + _TEXT_BG_PAD),
             fill="white",
         )
         draw.text((col_x, char_y), ch_info["char"], fill="black", font=font)
@@ -426,9 +435,12 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                     fc_bbox = draw.textbbox((0, 0), fc, font=furi_font)
                     fc_w = fc_bbox[2] - fc_bbox[0]
                     fc_h = fc_bbox[3] - fc_bbox[1]
+                    # Offset background by bbox origin
+                    fbg_x = furi_x + fc_bbox[0]
+                    fbg_y = furi_y + fc_bbox[1]
                     draw.rectangle(
-                        (furi_x - 1, furi_y - 1,
-                         furi_x + fc_w + 1, furi_y + fc_h + 1),
+                        (fbg_x - 1, fbg_y - 1,
+                         fbg_x + fc_w + 1, fbg_y + fc_h + 1),
                         fill="white",
                     )
                     draw.text((furi_x, furi_y), fc, fill="black", font=furi_font)

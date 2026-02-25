@@ -4,13 +4,15 @@ Locks in known-good detection counts and ensures face false positives
 stay rejected.  Run after any threshold/filter changes.
 """
 
+import os
 import pytest
 from pipeline.image_utils import load_image
 from pipeline.bubble_detector import detect_bubbles, _is_color_page
+from tests.conftest import DOCS_DIR
 
 
 def _detect(name: str) -> list[dict]:
-    img = load_image(f"docs/{name}.png")
+    img = load_image(os.path.join(DOCS_DIR, f"{name}.png"))
     return detect_bubbles(img)
 
 
@@ -147,10 +149,10 @@ class TestColorDetection:
     def test_grayscale_pages(self):
         for name in ["adult", "adult2", "adult3", "shounen", "shounen2",
                       "shounen3", "shounen5"]:
-            img = load_image(f"docs/{name}.png")
+            img = load_image(os.path.join(DOCS_DIR, f"{name}.png"))
             assert not _is_color_page(img), f"{name} should be grayscale"
 
     def test_color_pages(self):
         for name in ["adult4", "shounen4"]:
-            img = load_image(f"docs/{name}.png")
+            img = load_image(os.path.join(DOCS_DIR, f"{name}.png"))
             assert _is_color_page(img), f"{name} should be color"
