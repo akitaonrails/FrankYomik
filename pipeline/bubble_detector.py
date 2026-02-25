@@ -61,7 +61,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         log.info("Grayscale page detected — using standard thresholds")
         bright_level = 240
         min_bright_ratio = 0.65
-        max_edge_density = 0.12
+        max_edge_density = 0.13  # slightly higher: furigana adds edge pixels
         max_mid_ratio = 0.15
         min_dark_ratio = 0.008
         max_component_ratio = 0.08

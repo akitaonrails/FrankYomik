@@ -2,18 +2,23 @@
 
 import logging
 import re
+import threading
 
 import pykakasi
 
 log = logging.getLogger(__name__)
 
 _kakasi = None
+_init_lock = threading.Lock()
+_convert_lock = threading.Lock()
 
 
 def _get_kakasi():
     global _kakasi
     if _kakasi is None:
-        _kakasi = pykakasi.kakasi()
+        with _init_lock:
+            if _kakasi is None:
+                _kakasi = pykakasi.kakasi()
     return _kakasi
 
 
@@ -31,7 +36,8 @@ def annotate(text: str) -> list[dict]:
         - needs_furigana: True if segment contains kanji
     """
     kakasi = _get_kakasi()
-    result = kakasi.convert(text)
+    with _convert_lock:
+        result = kakasi.convert(text)
 
     segments = []
     for item in result:

@@ -14,7 +14,6 @@ from .furigana import annotate as furigana_annotate
 from .image_utils import (
     clear_text_in_contour,
     clear_text_in_region,
-    contour_fill_ratio,
     contour_inner_bbox,
     load_image,
     load_image_pil,
@@ -129,14 +128,11 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
         if br.transformed is None:
             continue
 
-        # Clear text region
+        # Clear text region using contour shape when available
         layout_bbox = br.bbox
         if br.contour is not None:
             layout_bbox = contour_inner_bbox(br.contour) or br.bbox
-            if contour_fill_ratio(br.contour) >= 0.70:
-                clear_text_in_contour(page.output_img, br.contour)
-            else:
-                clear_text_in_region(page.output_img, layout_bbox)
+            clear_text_in_contour(page.output_img, br.contour)
         else:
             clear_text_in_region(page.output_img, br.bbox)
 

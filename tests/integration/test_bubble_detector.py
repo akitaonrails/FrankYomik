@@ -68,7 +68,7 @@ class TestMinimumDetectionCounts:
 
     def test_shounen_min_bubbles(self):
         bubbles = _detect("shounen")
-        assert len(bubbles) >= 6, f"shounen: expected >=6, got {len(bubbles)}"
+        assert len(bubbles) >= 7, f"shounen: expected >=7, got {len(bubbles)}"
 
     def test_shounen2_min_bubbles(self):
         bubbles = _detect("shounen2")
@@ -111,6 +111,12 @@ class TestKnownBubblePresence:
             "adult: missing key bubble near (730,143)"
         assert _has_bubble_near(bboxes, (892, 457, 1166, 699), tolerance=40), \
             "adult: missing key bubble near (892,457)"
+
+    def test_shounen_left_middle_bubble(self):
+        """Tall vertical bubble with furigana on left page must be detected."""
+        bboxes = _bboxes(_detect("shounen"))
+        assert _has_bubble_near(bboxes, (687, 588, 817, 819), tolerance=40), \
+            "shounen: missing left-middle bubble near (687,588)"
 
 
 # --- Face false positive tests ---

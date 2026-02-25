@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from pipeline.config import DOCS_DIR, OUTPUT_DIR
 from pipeline.processor import (
+    PageResult,
     PipelineMode,
     detect_page_bubbles,
     load_page,
@@ -38,9 +39,21 @@ def _find_images(prefix: str) -> list[str]:
     return sorted(glob.glob(pattern))
 
 
+def _process_page(path: str, mode: PipelineMode) -> "PageResult":
+    """Run load → detect → OCR → transform for a single page."""
+    page = load_page(path)
+    detect_page_bubbles(page)
+    page.bubble_results = [ocr_bubble(page.img_pil, b) for b in page.bubbles_raw]
+    transform_fn = transform_furigana if mode == PipelineMode.FURIGANA else transform_translate
+    for br in page.bubble_results:
+        if br.is_valid:
+            transform_fn(br)
+    return page
+
+
 def run_pipeline(image_paths: list[str], mode: PipelineMode, out_dir: str,
                  debug: bool = False) -> None:
-    """Run the full pipeline with parallelized stages."""
+    """Run the full pipeline with page-level parallelism."""
     os.makedirs(out_dir, exist_ok=True)
 
     if not image_paths:
@@ -49,42 +62,13 @@ def run_pipeline(image_paths: list[str], mode: PipelineMode, out_dir: str,
 
     log.info("=== %s PIPELINE: %d images ===", mode.value.upper(), len(image_paths))
 
-    # Stage 1+2: Load and detect bubbles (OpenCV releases GIL, pages independent)
+    # Process pages in parallel (each page flows through load→detect→OCR→transform)
     with ThreadPoolExecutor(max_workers=4) as pool:
-        pages = list(pool.map(load_page, image_paths))
+        pages = list(pool.map(lambda p: _process_page(p, mode), image_paths))
 
+    # Render pages in parallel (each page has its own independent output_img)
     with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(detect_page_bubbles, pages))
-
-    # Stage 3: OCR all bubbles (manga-ocr CPU singleton, lock-protected)
-    all_ocr_tasks = []
-    for page in pages:
-        for bubble in page.bubbles_raw:
-            all_ocr_tasks.append((page, bubble))
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(ocr_bubble, page.img_pil, bubble)
-                   for page, bubble in all_ocr_tasks]
-        all_results = [f.result() for f in futures]
-
-    # Assign bubble results back to pages
-    idx = 0
-    for page in pages:
-        count = len(page.bubbles_raw)
-        page.bubble_results = all_results[idx:idx + count]
-        idx += count
-
-    # Stage 4: Transform (furigana or translate)
-    transform_fn = transform_furigana if mode == PipelineMode.FURIGANA else transform_translate
-    max_workers = 4 if mode == PipelineMode.FURIGANA else 2
-    all_brs = [br for page in pages for br in page.bubble_results if br.is_valid]
-
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        list(pool.map(transform_fn, all_brs))
-
-    # Stage 5: Render (sequential — mutates shared output_img per page)
-    for page in pages:
-        render_page(page, mode, out_dir, debug=debug)
+        list(pool.map(lambda page: render_page(page, mode, out_dir, debug=debug), pages))
 
     log.info("Done with %s pipeline!", mode.value)
 

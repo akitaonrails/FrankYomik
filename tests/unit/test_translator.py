@@ -27,12 +27,15 @@ class TestTranslate:
     @patch("pipeline.translator.requests.post")
     def test_ollama_success(self, mock_post):
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {"response": "Hello"}
+        mock_resp.json.return_value = {"message": {"content": "Hello"}}
         mock_resp.raise_for_status = MagicMock()
         mock_post.return_value = mock_resp
 
         result = translate("こんにちは")
         assert result == "Hello"
+        # Verify chat API endpoint is used
+        call_url = mock_post.call_args[0][0]
+        assert call_url.endswith("/api/chat")
 
     @patch("pipeline.translator._fallback_translate", return_value="Fallback")
     @patch("pipeline.translator.requests.post", side_effect=Exception("timeout"))
@@ -45,7 +48,7 @@ class TestTranslate:
     @patch("pipeline.translator.requests.post")
     def test_fallback_on_empty_response(self, mock_post, mock_fallback):
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {"response": "<think>hmm</think>"}
+        mock_resp.json.return_value = {"message": {"content": "<think>hmm</think>"}}
         mock_resp.raise_for_status = MagicMock()
         mock_post.return_value = mock_resp
 
