@@ -14,7 +14,7 @@ Key learnings these tests lock in:
 """
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from webtoon.bubble_detector import WebtoonBubble
 from webtoon.ocr import TextDetection
@@ -30,6 +30,7 @@ from webtoon.processor import (
     _render_sfx,
     _render_webtoon_english,
     _sample_local_bg,
+    _sample_original_text_color,
     _sample_render_surface,
     _sample_sfx_color,
     _text_region_bbox,
@@ -963,3 +964,69 @@ class TestIsHangulText:
 
     def test_empty_rejected(self):
         assert _is_hangul_text("") is False
+
+
+class TestSampleOriginalTextColor:
+    """Detect distinctive text colors (gold, pink) from original Korean text."""
+
+    def _make_det(self, bbox):
+        return TextDetection(
+            bbox_poly=[[bbox[0], bbox[1]], [bbox[2], bbox[1]],
+                       [bbox[2], bbox[3]], [bbox[0], bbox[3]]],
+            text="테스트",
+            confidence=0.9,
+            bbox_rect=bbox,
+        )
+
+    def test_returns_gold_for_gold_text_on_dark_bg(self):
+        """Gold text on dark background should return a gold-ish color."""
+        img = Image.new("RGB", (200, 200), (20, 20, 30))
+        draw = ImageDraw.Draw(img)
+        # Draw gold-colored rectangles (simulating text strokes)
+        draw.rectangle((50, 50, 150, 70), fill=(210, 180, 60))
+        draw.rectangle((50, 80, 150, 100), fill=(220, 190, 70))
+
+        det = self._make_det((40, 40, 160, 110))
+        result = _sample_original_text_color(img, [det], (20, 20, 30))
+        assert result is not None
+        r, g, b = result
+        # Should be warm/gold: R > 150, G > 100, B < 120
+        assert r > 150, f"Red channel {r} too low for gold"
+        assert g > 100, f"Green channel {g} too low for gold"
+        assert b < 120, f"Blue channel {b} too high for gold"
+
+    def test_returns_none_for_white_text_on_dark_bg(self):
+        """White text on dark bg should return None (use default white)."""
+        img = Image.new("RGB", (200, 200), (20, 20, 30))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((50, 50, 150, 100), fill=(240, 240, 240))
+
+        det = self._make_det((40, 40, 160, 110))
+        result = _sample_original_text_color(img, [det], (20, 20, 30))
+        assert result is None
+
+    def test_returns_none_for_black_text_on_white_bg(self):
+        """Black text on white bg should return None (use default black)."""
+        img = Image.new("RGB", (200, 200), (240, 240, 240))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((50, 50, 150, 100), fill=(20, 20, 20))
+
+        det = self._make_det((40, 40, 160, 110))
+        result = _sample_original_text_color(img, [det], (240, 240, 240))
+        assert result is None
+
+    def test_returns_none_for_empty_detections(self):
+        img = Image.new("RGB", (200, 200), (0, 0, 0))
+        assert _sample_original_text_color(img, [], (0, 0, 0)) is None
+
+    def test_returns_pink_for_pink_text(self):
+        """Pink/red tinted text should return a pinkish color."""
+        img = Image.new("RGB", (200, 200), (10, 10, 20))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((50, 50, 150, 100), fill=(220, 130, 150))
+
+        det = self._make_det((40, 40, 160, 110))
+        result = _sample_original_text_color(img, [det], (10, 10, 20))
+        assert result is not None
+        r, g, b = result
+        assert r > 150, f"Red channel {r} too low for pink"

@@ -279,10 +279,12 @@ def render_page(page: WebtoonPageResult, out_dir: str,
         text_bbox = _expand_render_bbox(text_bbox, bubble)
 
         # Step 3: Render English text within the text-region bbox
+        log.debug("  Rendering '%s' for page %s", region.english[:30], page.name)
         _render_webtoon_english(page.output_img, bubble, region.english,
                                 text_bbox,
                                 skip_bg_rect=(bubble_id in inpainted_bubbles),
-                                color_ref_img=page.img_pil)
+                                color_ref_img=page.img_pil,
+                                detections=render_dets)
 
     # --- SFX overlay pass (after dialogue) ---
     for det in page.sfx_detections:
@@ -507,11 +509,138 @@ def _sample_render_surface(img: Image.Image,
     return (int(median[0]), int(median[1]), int(median[2]))
 
 
+def _sample_original_text_color(
+    original_img: Image.Image,
+    detections: list[TextDetection],
+    bg_color: tuple[int, int, int],
+) -> tuple[int, int, int] | None:
+    """Sample the dominant color of Korean text from the original image.
+
+    Looks at pixels within detection bboxes that differ significantly from the
+    background color.  If the text has a distinctive hue (gold, pink, blue),
+    returns that color for use as the English font color.
+
+    Returns None if text is plain white/black (no distinctive color detected).
+    """
+    import cv2 as _cv2
+
+    if not detections:
+        return None
+
+    # Collect text pixels from all detection bboxes
+    text_pixels = []
+    for det in detections:
+        x1, y1, x2, y2 = det.bbox_rect
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(original_img.width, x2)
+        y2 = min(original_img.height, y2)
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        crop = np.array(original_img.crop((x1, y1, x2, y2)))
+        if crop.size == 0:
+            continue
+
+        # Filter for pixels that differ from background (likely text strokes)
+        bg = np.array(bg_color, dtype=np.float32)
+        diff = np.linalg.norm(crop.reshape(-1, 3).astype(np.float32) - bg, axis=1)
+        # Text pixels differ from bg by at least 60 in RGB distance
+        mask = diff > 60
+        if mask.any():
+            text_pixels.append(crop.reshape(-1, 3)[mask])
+
+    if not text_pixels:
+        return None
+
+    all_pixels = np.concatenate(text_pixels)
+    if len(all_pixels) < 10:
+        return None
+
+    # Convert to HSV to check saturation
+    pixels_bgr = _cv2.cvtColor(
+        all_pixels.reshape(1, -1, 3).astype(np.uint8), _cv2.COLOR_RGB2BGR
+    )
+    pixels_hsv = _cv2.cvtColor(pixels_bgr, _cv2.COLOR_BGR2HSV).reshape(-1, 3)
+
+    saturations = pixels_hsv[:, 1]
+    values = pixels_hsv[:, 2]
+
+    # Check if text has distinctive color (saturation > 40 AND value > 100)
+    colored_mask = (saturations > 40) & (values > 100)
+    colored_ratio = colored_mask.sum() / len(saturations)
+
+    if colored_ratio < 0.15:
+        # Text is mostly white/gray/black — no distinctive color
+        return None
+
+    # Use median of the colored pixels as the representative text color
+    colored_pixels = all_pixels[colored_mask]
+    median_color = np.median(colored_pixels, axis=0).astype(int)
+
+    # Ensure the color is bright enough to be visible as text
+    lum = (0.299 * median_color[0] + 0.587 * median_color[1] +
+           0.114 * median_color[2]) / 255.0
+    if lum < 0.3:
+        # Too dark to use as text color
+        return None
+
+    # Reject if the sampled color is just a lighter/darker shade of the bg.
+    # White text on blue bg creates antialiased edge pixels with the same
+    # hue as the bg — these are not distinctive text colors.
+    result_bgr = _cv2.cvtColor(
+        np.array([[median_color]], dtype=np.uint8), _cv2.COLOR_RGB2BGR
+    )
+    result_hsv = _cv2.cvtColor(result_bgr, _cv2.COLOR_BGR2HSV)[0, 0]
+    bg_bgr = _cv2.cvtColor(
+        np.array([[bg_color]], dtype=np.uint8), _cv2.COLOR_RGB2BGR
+    )
+    bg_hsv = _cv2.cvtColor(bg_bgr, _cv2.COLOR_BGR2HSV)[0, 0]
+
+    # If bg has notable saturation AND brightness, check hue distance.
+    # Very dark backgrounds have unreliable hue (e.g., (6,3,1) gets
+    # hue=12 just because R > G > B by a few counts).
+    if bg_hsv[1] > 30 and bg_hsv[2] > 50:
+        hue_diff = abs(int(result_hsv[0]) - int(bg_hsv[0]))
+        hue_diff = min(hue_diff, 180 - hue_diff)  # Wrap around
+        if hue_diff < 25:
+            # Same hue family as background — just edge artifacts
+            return None
+
+    # Reject near-white and near-gray (these are just plain white text,
+    # not distinctively colored)
+    if result_hsv[1] < 50:
+        return None
+
+    # Reject if the sampled color doesn't have enough contrast against the
+    # background.  Blue-tinted text on blue bg looks terrible — WCAG 2.0
+    # minimum contrast ratio is 3:1 for large text.
+    def _relative_luminance(c: tuple) -> float:
+        vals = []
+        for v in c[:3]:
+            v_norm = v / 255.0
+            vals.append(v_norm / 12.92 if v_norm <= 0.04045
+                        else ((v_norm + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * vals[0] + 0.7152 * vals[1] + 0.0722 * vals[2]
+
+    lum_text = _relative_luminance(median_color)
+    lum_bg = _relative_luminance(bg_color)
+    lighter = max(lum_text, lum_bg)
+    darker = min(lum_text, lum_bg)
+    contrast_ratio = (lighter + 0.05) / (darker + 0.05)
+    if contrast_ratio < 3.0:
+        return None
+
+    return (int(median_color[0]), int(median_color[1]), int(median_color[2]))
+
+
 def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
                             text: str,
                             render_bbox: tuple[int, int, int, int],
                             skip_bg_rect: bool = False,
-                            color_ref_img: Image.Image | None = None) -> None:
+                            color_ref_img: Image.Image | None = None,
+                            detections: list[TextDetection] | None = None,
+                            ) -> None:
     """Render English text within the text-region bbox.
 
     Uses render_bbox (tight around OCR detections) instead of bubble.bbox
@@ -537,11 +666,22 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     surface_color = _sample_render_surface(ref, render_bbox)
     lum = _bg_luminance(surface_color)
 
-    # Font color: white on dark/medium, black on light.
-    # Threshold 0.65 matches the original Korean text color choices —
-    # blue notification panels (lum ~0.57) use white text, while truly
-    # light backgrounds (white, pale yellow) use black text.
-    if lum < 0.65:
+    # Try to match the original Korean text color (gold, pink, etc.)
+    original_text_color = None
+    if detections and color_ref_img is not None:
+        original_text_color = _sample_original_text_color(
+            color_ref_img, detections, surface_color,
+        )
+        if original_text_color is None:
+            log.debug("  Text color sampling returned None (bg=%s, %d dets)",
+                      surface_color, len(detections))
+
+    if original_text_color is not None:
+        font_color = original_text_color
+        log.debug("  Using sampled text color: %s (bg=%s)", font_color, surface_color)
+        # Use a dark bg rect for colored text to ensure readability
+        bg_rect_color = (0, 0, 0, 160)
+    elif lum < 0.65:
         font_color = (255, 255, 255)
         bg_rect_color = (0, 0, 0, 160)
     else:

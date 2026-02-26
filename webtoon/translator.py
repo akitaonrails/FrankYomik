@@ -1,6 +1,7 @@
 """Korean to English translation using Ollama."""
 
 import logging
+import re
 
 import requests
 
@@ -77,6 +78,8 @@ def translate_sfx(korean_text: str) -> str:
         resp.raise_for_status()
         raw = resp.json().get("message", {}).get("content", "")
         result = _clean_response(raw).strip().upper()
+        # Strip prefixes the LLM sometimes adds (e.g. "SFX: SHUSH")
+        result = re.sub(r'^(SFX\s*[:：]\s*)', '', result).strip()
         if result:
             return result
     except Exception as e:

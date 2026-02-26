@@ -79,6 +79,17 @@ class TestTranslateSfx:
         assert result == "CRASH"
         assert result == result.upper()
 
+    @patch("webtoon.translator.requests.post")
+    def test_sfx_strips_prefix(self, mock_post):
+        """LLM sometimes adds 'SFX:' prefix — must be stripped."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "SFX: SHUSH"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = translate_sfx("셈")
+        assert result == "SHUSH"
+
     @patch("webtoon.translator._fallback_translate_sfx", return_value="BOOM")
     @patch("webtoon.translator.requests.post", side_effect=Exception("timeout"))
     def test_sfx_fallback_on_failure(self, mock_post, mock_fallback):
