@@ -145,7 +145,7 @@ def _validate_on_original(candidate: dict, gray_orig: np.ndarray) -> bool:
     """Check if a CLAHE-detected candidate looks bubble-like on the original image.
 
     CLAHE pass 2 targets borderline-bright regions (mean near 200) that the
-    binary threshold missed.  Two key checks reject false positives:
+    binary threshold missed.  Three checks reject false positives:
 
     1. Upper brightness bound: if the original region is already very bright
        (mean > 215), pass 1 should have detected it.  The fact that it wasn't
@@ -155,6 +155,10 @@ def _validate_on_original(candidate: dict, gray_orig: np.ndarray) -> bool:
     2. Dark content requirement: real speech bubbles contain text strokes
        (dark pixels < 60).  Face/skin regions are uniformly bright with
        minimal dark content.
+
+    3. White pixel variance: real bubbles have text strokes creating sharp
+       black-on-white contrast, so the bright pixels (>200) have high std.
+       Face skin is uniformly bright with low variance.
     """
     x1, y1, x2, y2 = candidate["bbox"]
     roi = gray_orig[y1:y2, x1:x2]
@@ -177,6 +181,13 @@ def _validate_on_original(candidate: dict, gray_orig: np.ndarray) -> bool:
     dark_ratio = np.sum(roi < 60) / roi.size
     if dark_ratio < 0.07:
         return False
+
+    # White pixel variance: text strokes in bubbles create high std (>11).
+    # Face skin is uniformly bright with low std (<7).
+    white_pixels = roi[roi > 200]
+    if len(white_pixels) > 50:
+        if float(np.std(white_pixels)) < 9:
+            return False
 
     return True
 

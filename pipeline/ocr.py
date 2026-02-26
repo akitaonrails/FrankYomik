@@ -80,7 +80,7 @@ def is_valid_japanese(text: str) -> bool:
         else:
             other_chars += 1
 
-    if content_chars < 2:
+    if content_chars < 1:
         return False
 
     meaningful = content_chars + other_chars
