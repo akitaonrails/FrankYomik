@@ -1,4 +1,4 @@
-"""Regression tests for bubble detection.
+"""Regression tests for bubble detection and panel text detection.
 
 Locks in known-good detection counts and ensures face false positives
 stay rejected.  Run after any threshold/filter changes.
@@ -8,6 +8,7 @@ import os
 import pytest
 from pipeline.image_utils import load_image
 from pipeline.bubble_detector import detect_bubbles, _is_color_page
+from pipeline.text_detector import detect_panel_text
 from tests.conftest import DOCS_DIR
 
 
@@ -243,3 +244,36 @@ class TestColorDetection:
         for name in ["shounen4", "shounen8", "shounen9"]:
             img = load_image(os.path.join(DOCS_DIR, f"{name}.png"))
             assert _is_color_page(img), f"{name} should be color"
+
+
+# --- Panel text detection (text-stroke based) ---
+
+class TestPanelTextDetection:
+    def test_shounen7_finds_panel_text(self):
+        """shounen7 has two speech bubbles that merge with the panel background.
+
+        The bubble detector can't find them because they don't form separate
+        contours.  Text-stroke detection should recover them.
+        """
+        img = load_image(os.path.join(DOCS_DIR, "shounen7.png"))
+        bubbles = detect_bubbles(img)
+        bubble_bboxes = [b["bbox"] for b in bubbles]
+        panel_texts = detect_panel_text(img, bubble_bboxes)
+        assert len(panel_texts) >= 2, \
+            f"shounen7: expected >=2 panel texts, got {len(panel_texts)}"
+        # One should be in the top-right area of the left page
+        found_right = any(1000 < b[0] < 1200 and b[1] < 200
+                          for b in panel_texts)
+        assert found_right, \
+            "shounen7: missing 'shikashi...' panel text near (1035,127)"
+
+    def test_no_false_positives_on_other_pages(self):
+        """Panel text detection should not produce false positives."""
+        for name in ["shounen", "shounen2", "shounen3", "shounen6",
+                      "adult", "adult2", "adult3"]:
+            img = load_image(os.path.join(DOCS_DIR, f"{name}.png"))
+            bubbles = detect_bubbles(img)
+            bubble_bboxes = [b["bbox"] for b in bubbles]
+            panel_texts = detect_panel_text(img, bubble_bboxes)
+            assert len(panel_texts) == 0, \
+                f"{name}: unexpected panel text detection ({len(panel_texts)} found)"

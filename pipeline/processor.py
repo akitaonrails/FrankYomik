@@ -117,21 +117,27 @@ def transform_translate(br: BubbleResult) -> None:
 
 
 def detect_page_text(page: PageResult) -> None:
-    """Stage 2b: Detect text outside bubbles using EasyOCR (if enabled).
+    """Stage 2b: Detect text outside bubbles using EasyOCR and stroke analysis.
 
-    Runs EasyOCR Japanese text detection, finds text regions that don't
-    overlap with detected bubbles, and appends them to page.bubbles_raw
-    with an "is_artwork" flag.
+    Two detection approaches run if text detection is enabled:
+    1. EasyOCR — finds text on artwork (narration, signs, titles)
+    2. Text-stroke clustering — finds vertical text in white panel areas
+       where speech bubbles merge with the panel background
+
+    Appends results to page.bubbles_raw.
     """
     if not TEXT_DETECTION_ENABLED:
         return
 
-    from .text_detector import detect_text_regions, find_unbubbled_text
-
-    log.info("Running text detection: %s", page.name)
-    text_regions = detect_text_regions(page.img_cv)
+    from .text_detector import (
+        detect_panel_text, detect_text_regions, find_unbubbled_text,
+    )
 
     bubble_bboxes = [b["bbox"] for b in page.bubbles_raw]
+
+    # 1. EasyOCR detection for artwork text
+    log.info("Running text detection: %s", page.name)
+    text_regions = detect_text_regions(page.img_cv)
     unbubbled = find_unbubbled_text(text_regions, bubble_bboxes)
 
     for region in unbubbled:
@@ -144,6 +150,20 @@ def detect_page_text(page: PageResult) -> None:
     if unbubbled:
         log.info("Added %d artwork text regions for %s",
                  len(unbubbled), page.name)
+
+    # 2. Text-stroke detection for panel-embedded text
+    all_bboxes = [b["bbox"] for b in page.bubbles_raw]
+    panel_texts = detect_panel_text(page.img_cv, all_bboxes)
+
+    for bbox in panel_texts:
+        page.bubbles_raw.append({
+            "bbox": bbox,
+            "type": "speech_bubble",
+        })
+
+    if panel_texts:
+        log.info("Added %d panel text regions for %s",
+                 len(panel_texts), page.name)
 
 
 def render_page(page: PageResult, mode: PipelineMode, out_dir: str,

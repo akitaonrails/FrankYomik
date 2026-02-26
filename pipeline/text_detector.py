@@ -1,7 +1,10 @@
-"""Japanese text detection using EasyOCR for finding text outside speech bubbles.
+"""Japanese text detection for finding text outside speech bubbles.
 
-Detects text regions on manga pages that the contour-based bubble detector
-misses — typically narration overlaid on artwork, chapter titles on art, etc.
+Two detection approaches:
+1. EasyOCR — finds text overlaid on artwork (narration, titles, signs)
+2. Text-stroke clustering — finds vertical text columns in white panel areas
+   where the bubble detector fails because the speech bubble merges with
+   the panel background (no distinct contour to detect)
 
 Uses a separate EasyOCR instance from the Korean webtoon reader (different
 language, single pass, no text recognition — manga-ocr handles that).
@@ -130,3 +133,121 @@ def find_unbubbled_text(
     log.info("Found %d unbubbled text regions out of %d total",
              len(unbubbled), len(text_regions))
     return unbubbled
+
+
+def detect_panel_text(
+    img_cv: np.ndarray,
+    bubble_bboxes: list[tuple[int, int, int, int]],
+) -> list[tuple[int, int, int, int]]:
+    """Find vertical text columns in white panel areas that the bubble detector missed.
+
+    Some speech bubbles merge with the white panel background, preventing the
+    contour-based detector from isolating them.  This function works bottom-up:
+    find dark text strokes, cluster nearby vertical columns, then OCR-validate.
+
+    Args:
+        img_cv: OpenCV BGR image array.
+        bubble_bboxes: Bounding boxes from bubble detection (already handled).
+
+    Returns:
+        List of bboxes (x1, y1, x2, y2) for validated panel text regions.
+    """
+    import cv2
+    from PIL import Image
+
+    from .ocr import extract_text_from_region, is_valid_japanese
+
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+
+    # Invert: dark text strokes become white, white background becomes black
+    _, inv = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
+
+    # Small vertical dilation connects characters within a text column
+    # but not across panel gaps
+    kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 10))
+    dilated = cv2.dilate(inv, kernel_v, iterations=1)
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
+    dilated = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, kernel_close)
+
+    contours, _ = cv2.findContours(
+        dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Find individual vertical text columns
+    columns = []
+    for cnt in contours:
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        area = bw * bh
+        if bh < 40 or bw < 8 or area < 400 or area > 50000:
+            continue
+        # Must be vertical (taller than wide) — manga text columns
+        if bh / max(bw, 1) < 1.5:
+            continue
+        # Background must be white (text on white panel area)
+        roi = gray[y:y + bh, x:x + bw]
+        if roi.mean() < 180:
+            continue
+        # Must contain dark strokes (actual text content)
+        dark_pct = np.sum(roi < 100) / roi.size
+        if dark_pct < 0.05 or dark_pct > 0.50:
+            continue
+        # Skip columns inside already-detected bubbles
+        if any(_containment((x, y, x + bw, y + bh), bb) > 0.3
+               for bb in bubble_bboxes):
+            continue
+        columns.append((x, y, x + bw, y + bh))
+
+    if not columns:
+        return []
+
+    # Cluster nearby columns into text groups (speech bubble-level)
+    # Sort right-to-left (manga reading order)
+    columns.sort(key=lambda c: -c[0])
+    used: set[int] = set()
+    groups: list[list[tuple[int, int, int, int]]] = []
+
+    for i, col in enumerate(columns):
+        if i in used:
+            continue
+        group = [col]
+        used.add(i)
+        # Expand group with nearby columns
+        changed = True
+        while changed:
+            changed = False
+            for j, ocol in enumerate(columns):
+                if j in used:
+                    continue
+                for gcol in group:
+                    x_gap = min(abs(ocol[0] - gcol[2]),
+                                abs(gcol[0] - ocol[2]))
+                    y_overlap = min(gcol[3], ocol[3]) - max(gcol[1], ocol[1])
+                    if x_gap < 35 and y_overlap > 20:
+                        group.append(ocol)
+                        used.add(j)
+                        changed = True
+                        break
+        groups.append(group)
+
+    # OCR-validate each group
+    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+    img_pil = Image.fromarray(img_rgb)
+    results = []
+    for group in groups:
+        if len(group) < 2:
+            continue
+        gx1 = min(c[0] for c in group)
+        gy1 = min(c[1] for c in group)
+        gx2 = max(c[2] for c in group)
+        gy2 = max(c[3] for c in group)
+        pad = 10
+        bbox = (max(0, gx1 - pad), max(0, gy1 - pad),
+                min(w, gx2 + pad), min(h, gy2 + pad))
+        text = extract_text_from_region(img_pil, bbox)
+        if text.strip() and is_valid_japanese(text.strip()) and len(text.strip()) >= 3:
+            results.append(bbox)
+            log.info("Panel text at (%d,%d)-(%d,%d): %s",
+                     *bbox, text.strip()[:40])
+
+    log.info("Found %d panel text regions from stroke analysis", len(results))
+    return results
