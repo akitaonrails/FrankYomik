@@ -1,0 +1,6 @@
+Shippori Antique / Shippori Antique B1
+Copyright 2021 The Shippori Antique Project Authors
+(https://github.com/nicholasgasior/shippori-antique)
+
+Licensed under the SIL Open Font License, Version 1.1.
+https://scripts.sil.org/OFL

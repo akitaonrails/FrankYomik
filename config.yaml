@@ -41,8 +41,15 @@ ollama:
   # translate_model: "qwen2.5vl:32b"       # previous default, 21GB, no think param needed
 
 fonts:
-  jp: "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"
-  jp_bold: "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc"
+  # Japanese: GenEi Antique v5 — true manga antique gothic (SIL OFL)
+  #   P = proportional kana (standard dialogue), N = monospace kana
+  jp: "fonts/genei_antique/GenEiAntiquePv5-M.ttf"
+  jp_bold: "fonts/genei_antique/GenEiAntiquePv5-M.ttf"
+  # Alternatives:
+  # jp: "fonts/shippori_antique/ShipporiAntique-Regular.ttf"       # Shippori Antique (SIL OFL)
+  # jp: "fonts/shippori_antique/ShipporiAntiqueB1-Regular.ttf"     # Shippori Antique B1 (ink-pooling)
+  # jp: "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"       # Noto Sans CJK (system)
+  # jp_bold: "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc"
   en: "fonts/KomikaText-Regular.ttf"
   en_bold: "fonts/KomikaText-Bold.ttf"
   sfx: "fonts/BadaBoomBB.ttf"

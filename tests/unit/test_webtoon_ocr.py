@@ -83,15 +83,19 @@ class TestDetectAndReadColorConversion:
     background to verify detection works regardless of channel order.
     """
 
+    # System CJK font for synthetic Korean text in OCR tests.
+    # FONT_JP is a manga dialogue font (GenEi Antique) which may not
+    # render Korean glyphs in an OCR-friendly way.
+    _SYSTEM_CJK = "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"
+
     @staticmethod
     def _make_blue_panel_with_text() -> tuple[np.ndarray, np.ndarray]:
         """Create a blue panel with white Korean text, return (RGB, BGR)."""
-        from pipeline.config import FONT_JP  # CJK font for Korean glyphs
         # Blue background
         img = Image.new("RGB", (500, 120), (50, 160, 250))
         draw = ImageDraw.Draw(img)
         try:
-            font = ImageFont.truetype(FONT_JP, 32)
+            font = ImageFont.truetype(TestDetectAndReadColorConversion._SYSTEM_CJK, 32)
         except OSError:
             return None, None
         draw.text((40, 20), "당신은 제한 시간 동안", font=font, fill=(255, 255, 255))
@@ -119,11 +123,10 @@ class TestDetectAndReadColorConversion:
 
     def test_pil_input_still_works(self):
         """PIL Image input should still produce detections."""
-        from pipeline.config import FONT_JP  # CJK font for Korean glyphs
         img = Image.new("RGB", (500, 80), (50, 160, 250))
         draw = ImageDraw.Draw(img)
         try:
-            font = ImageFont.truetype(FONT_JP, 32)
+            font = ImageFont.truetype(self._SYSTEM_CJK, 32)
         except OSError:
             return
         draw.text((40, 20), "안녕하세요 테스트입니다", font=font, fill=(255, 255, 255))
