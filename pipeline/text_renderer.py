@@ -399,7 +399,20 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     char_height = int(font_size * 1.15)
 
     furi_space = furi_size + 2 if any(c["furigana"] for c in chars) else 0
-    start_x = x2 - TEXT_MARGIN - font_size - furi_space
+
+    # Center columns horizontally in the bubble.  Right-aligning pushes
+    # the first column against the right edge, which can overflow curved
+    # bubble walls (the bbox corresponds to the widest point, but the
+    # bubble narrows at top/bottom).  Centering distributes the margin
+    # equally on both sides.
+    chars_per_col = max(1, bh // char_height)
+    cols_needed = (len(chars) + chars_per_col - 1) // chars_per_col
+    block_width = font_size + furi_space + max(0, cols_needed - 1) * col_width
+    usable_center = x1 + TEXT_MARGIN + bw // 2
+    start_x = int(usable_center - font_size - furi_space + block_width / 2)
+    # Clamp so the block doesn't overflow on the right
+    max_start_x = x2 - TEXT_MARGIN - font_size - furi_space
+    start_x = min(start_x, max_start_x)
     start_y = y1 + TEXT_MARGIN
 
     col_x = start_x
