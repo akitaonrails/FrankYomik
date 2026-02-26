@@ -500,11 +500,14 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
 # --- Artwork text rendering ---
 
 def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
-                               text: str, base_font_size: int | None = None) -> None:
-    """Render English text on inpainted artwork with semi-transparent background.
+                               text: str, base_font_size: int | None = None,
+                               inpainted: bool = False) -> None:
+    """Render English text on artwork with background for readability.
 
-    Similar to render_english but adds a translucent white background
-    rectangle for readability on complex artwork backgrounds.
+    When inpainted=True (AI cleaned the background), uses a semi-transparent
+    overlay to preserve the restored artwork.  When inpainted=False (default),
+    fills the bbox with solid white first to fully cover the original Japanese
+    text, then renders English on top.
     """
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
@@ -529,20 +532,24 @@ def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
     line_height = int(font_size * 1.3)
     total_height = len(lines) * line_height
 
-    # Draw semi-transparent background for readability
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    overlay_draw = ImageDraw.Draw(overlay)
-    bg_pad = 6
-    bg_y1 = y1 + TEXT_MARGIN + (bh - total_height) // 2 - bg_pad
-    bg_y2 = bg_y1 + total_height + 2 * bg_pad
-    overlay_draw.rectangle(
-        (x1 + TEXT_MARGIN - bg_pad, bg_y1, x2 - TEXT_MARGIN + bg_pad, bg_y2),
-        fill=(255, 255, 255, 180),
-    )
-    img_rgba = img.convert("RGBA")
-    img_rgba = Image.alpha_composite(img_rgba, overlay)
-    # Paste back as RGB
-    img.paste(img_rgba.convert("RGB"))
+    if inpainted:
+        # Semi-transparent overlay preserves AI-restored background
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        bg_pad = 6
+        bg_y1 = y1 + TEXT_MARGIN + (bh - total_height) // 2 - bg_pad
+        bg_y2 = bg_y1 + total_height + 2 * bg_pad
+        overlay_draw.rectangle(
+            (x1 + TEXT_MARGIN - bg_pad, bg_y1,
+             x2 - TEXT_MARGIN + bg_pad, bg_y2),
+            fill=(255, 255, 255, 180),
+        )
+        img_rgba = img.convert("RGBA")
+        img_rgba = Image.alpha_composite(img_rgba, overlay)
+        img.paste(img_rgba.convert("RGB"))
+    else:
+        # Solid white fill to fully cover original Japanese text
+        draw.rectangle(bbox, fill="white")
 
     # Draw text on top
     draw = ImageDraw.Draw(img)

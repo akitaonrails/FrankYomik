@@ -169,12 +169,15 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
 
         # Artwork text: inpaint background then render with overlay
         if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
+            inpainted = False
             if MANGA_INPAINT_ENABLED:
                 from .inpainter import inpaint_region
                 page.output_img = inpaint_region(page.output_img, br.bbox)
+                inpainted = True
             render_english_on_artwork(page.output_img, br.bbox,
                                       br.transformed,
-                                      base_font_size=base_font_size)
+                                      base_font_size=base_font_size,
+                                      inpainted=inpainted)
             continue
 
         # Clear text region using contour shape when available

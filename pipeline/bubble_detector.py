@@ -98,12 +98,99 @@ def _try_split_merged(cnt, img_shape):
 
 
 def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
-    """Detect speech bubbles using OpenCV white-region contour analysis.
+    """Detect speech bubbles with two-pass approach.
 
-    Uses separate threshold profiles for grayscale vs color manga pages.
+    Pass 1: Original image.
+    Pass 2: CLAHE-enhanced image to catch bubbles with borderline brightness.
+    Merges results, keeping only genuinely new detections from pass 2.
 
-    Returns list of dicts with keys: bbox (x1,y1,x2,y2), type.
+    Returns list of dicts with keys: bbox (x1,y1,x2,y2), type, contour.
     """
+    filtered = _detect_bubbles_single(img_cv)
+    log.info("Detected %d bubbles (pass 1)", len(filtered))
+
+    # Pass 2: CLAHE contrast enhancement to catch bubbles with mean
+    # brightness just below the 200 threshold.  Validate candidates
+    # against the ORIGINAL image to reject face false positives that
+    # only pass because CLAHE artificially boosted their brightness.
+    enhanced_bgr = _clahe_enhance(img_cv)
+    pass2 = _detect_bubbles_single(enhanced_bgr)
+    gray_orig = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    new_count = 0
+    for c2 in pass2:
+        is_dup = False
+        for f in filtered:
+            if (_overlap_ratio(c2["bbox"], f["bbox"]) > 0.3 or
+                    _overlap_ratio(f["bbox"], c2["bbox"]) > 0.3):
+                is_dup = True
+                break
+        if is_dup:
+            continue
+        # Validate against original image: the region must still look
+        # bubble-like (bright interior, low mid-tones) on the unenhanced
+        # image.  CLAHE can make faces pass by boosting skin brightness.
+        if not _validate_on_original(c2, gray_orig):
+            continue
+        filtered.append(c2)
+        new_count += 1
+    if new_count:
+        log.info("Pass 2 (CLAHE) added %d new bubbles", new_count)
+
+    filtered.sort(key=lambda b: (b["bbox"][0], b["bbox"][1]))
+    log.info("Detected %d bubbles total", len(filtered))
+    return filtered
+
+
+def _validate_on_original(candidate: dict, gray_orig: np.ndarray) -> bool:
+    """Check if a CLAHE-detected candidate looks bubble-like on the original image.
+
+    CLAHE pass 2 targets borderline-bright regions (mean near 200) that the
+    binary threshold missed.  Two key checks reject false positives:
+
+    1. Upper brightness bound: if the original region is already very bright
+       (mean > 215), pass 1 should have detected it.  The fact that it wasn't
+       detected means pass 1's FP filters rejected it for good reason (e.g.
+       face skin, clothing).  CLAHE shouldn't circumvent those filters.
+
+    2. Dark content requirement: real speech bubbles contain text strokes
+       (dark pixels < 60).  Face/skin regions are uniformly bright with
+       minimal dark content.
+    """
+    x1, y1, x2, y2 = candidate["bbox"]
+    roi = gray_orig[y1:y2, x1:x2]
+    if roi.size == 0:
+        return False
+
+    mean_brightness = roi.mean()
+
+    # Too dark — not a bubble region at all
+    if mean_brightness < 160:
+        return False
+
+    # Already bright enough for pass 1 — if it was rejected there, it's
+    # a false positive (face, clothing, etc.) not a borderline bubble
+    if mean_brightness > 215:
+        return False
+
+    # Must have text strokes (dark pixels).  Real bubbles have dark_ratio
+    # >= 0.08; face/skin regions have < 0.06.
+    dark_ratio = np.sum(roi < 60) / roi.size
+    if dark_ratio < 0.07:
+        return False
+
+    return True
+
+
+def _clahe_enhance(img_cv: np.ndarray) -> np.ndarray:
+    """Apply CLAHE contrast enhancement, returning a BGR image."""
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+
+
+def _detect_bubbles_single(img_cv: np.ndarray) -> list[dict]:
+    """Core bubble detection on a single image variant."""
     h, w = img_cv.shape[:2]
     page_area = h * w
     gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
@@ -192,11 +279,16 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
             continue
 
         # 2b. Very bright ratio (>240) — rejects colored faces/skin on color pages
-        if min_very_bright_ratio > 0:
-            vb_pixels = cv2.countNonZero(cv2.bitwise_and(very_bright_thresh, mask))
-            vb_ratio = vb_pixels / area
-            if vb_ratio < min_very_bright_ratio:
-                continue
+        vb_pixels = cv2.countNonZero(cv2.bitwise_and(very_bright_thresh, mask))
+        vb_ratio = vb_pixels / area
+        if min_very_bright_ratio > 0 and vb_ratio < min_very_bright_ratio:
+            continue
+
+        # 2c. Empty interior — rejects blank face/skin regions where
+        # manga-ocr hallucinates text.  Real bubbles with text have
+        # measurable Canny edge density from character strokes.
+        if vb_ratio > 0.95 and edge_density < 0.02:
+            continue
 
         # 3. Mid-tone ratio
         mid_mask = cv2.inRange(gray, 80, 220)
@@ -288,10 +380,32 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
                      *c["bbox"], len(split))
             for sub_cnt in split:
                 sx, sy, sw, sh = cv2.boundingRect(sub_cnt)
+                sub_area = cv2.contourArea(sub_cnt)
+
+                # Re-filter split sub-contours: verify dark content
+                # exists inside the sub-region.  The parent contour
+                # passed all filters, but a split piece may be an
+                # empty white fragment (e.g. face skin area).
+                # Apply empty interior check to split pieces (same
+                # as filter 2c).  Rejects blank face/skin fragments
+                # that manga-ocr would hallucinate text from.
+                sub_mask = np.zeros(gray.shape, dtype=np.uint8)
+                cv2.drawContours(sub_mask, [sub_cnt], -1, 255, -1)
+                if sub_area > 500:
+                    vb_px = cv2.countNonZero(
+                        cv2.bitwise_and(very_bright_thresh, sub_mask))
+                    edge_px = cv2.countNonZero(
+                        cv2.bitwise_and(edges, edges, mask=sub_mask))
+                    if (vb_px / sub_area > 0.95 and
+                            edge_px / sub_area < 0.02):
+                        log.info("Discarding empty split piece at (%d,%d)",
+                                 sx, sy)
+                        continue
+
                 split_candidates.append({
                     "bbox": (sx, sy, sx + sw, sy + sh),
                     "type": "speech_bubble",
-                    "area": cv2.contourArea(sub_cnt),
+                    "area": sub_area,
                     "contour": sub_cnt,
                 })
         else:
