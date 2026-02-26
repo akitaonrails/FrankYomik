@@ -125,7 +125,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         bright_level = 240
         min_bright_ratio = 0.65
         max_edge_density = 0.13  # slightly higher: furigana adds edge pixels
-        max_mid_ratio = 0.16
+        max_mid_ratio = 0.15
         min_dark_ratio = 0.008
         max_component_ratio = 0.08
         min_very_bright_ratio = 0.0  # no extra check for grayscale
@@ -161,25 +161,11 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         if aspect > 4:
             continue
 
-        # Convex hull solidity check — borderline cases (0.4-0.5) may be
-        # overlapping bubbles whose concavity drops solidity; try splitting
-        # them before rejecting outright.
+        # Convex hull solidity check
         hull = cv2.convexHull(cnt)
         hull_area = cv2.contourArea(hull)
         solidity = area / hull_area if hull_area > 0 else 0
-        if solidity < 0.4:
-            continue
         if solidity < 0.5:
-            split = _try_split_merged(cnt, gray.shape)
-            if split:
-                for sub_cnt in split:
-                    sx, sy, sw, sh = cv2.boundingRect(sub_cnt)
-                    candidates.append({
-                        "bbox": (sx, sy, sx + sw, sy + sh),
-                        "type": "speech_bubble",
-                        "area": cv2.contourArea(sub_cnt),
-                        "contour": sub_cnt,
-                    })
             continue
 
         # Create interior mask
@@ -260,7 +246,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
                     # (too low = no text, too high = surrounding art).
                     rect_roi = gray[y:y+bh, x:x+bw]
                     rect_dark = np.sum(rect_roi < 60) / rect_roi.size
-                    if not (0.013 <= rect_dark <= 0.11):
+                    if not (0.013 <= rect_dark <= 0.10):
                         continue
                 else:
                     continue

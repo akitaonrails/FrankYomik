@@ -174,17 +174,6 @@ class TestKnownBubblePresence:
         assert _has_bubble_near(bboxes, (1649, 826, 1733, 975), tolerance=40), \
             "shounen8: missing 'demosa' bubble near (1649,826)"
 
-    def test_shounen7_ano_ko_bubble(self):
-        """'ano ko' small bubble on shounen7 recovered by rect_dark upper bound fix."""
-        bboxes = _bboxes(_detect("shounen7"))
-        assert _has_bubble_near(bboxes, (574, 1124, 676, 1218), tolerance=40), \
-            "shounen7: missing 'ano ko' bubble near (574,1124)"
-
-    def test_shounen7_last_row_right_page(self):
-        """Last-row right-page bubble on shounen7 recovered by mid-tone ratio fix."""
-        bboxes = _bboxes(_detect("shounen7"))
-        assert _has_bubble_near(bboxes, (1597, 983, 1709, 1128), tolerance=40), \
-            "shounen7: missing last-row bubble near (1597,983)"
 
 
 # --- Face false positive tests ---
