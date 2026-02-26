@@ -78,44 +78,53 @@ def detect_text_regions(img_cv: np.ndarray) -> list[TextRegion]:
     return regions
 
 
-def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
-    """Intersection over Union of two (x1, y1, x2, y2) rectangles."""
-    ix1 = max(a[0], b[0])
-    iy1 = max(a[1], b[1])
-    ix2 = min(a[2], b[2])
-    iy2 = min(a[3], b[3])
+def _containment(text_bbox: tuple[int, int, int, int],
+                  bubble_bbox: tuple[int, int, int, int]) -> float:
+    """Fraction of text_bbox area that falls inside bubble_bbox.
+
+    Returns 0.0-1.0.  A value of 1.0 means the text region is fully
+    contained within the bubble.  This is better than IoU for this use
+    case because text bboxes are much smaller than bubble bboxes.
+    """
+    ix1 = max(text_bbox[0], bubble_bbox[0])
+    iy1 = max(text_bbox[1], bubble_bbox[1])
+    ix2 = min(text_bbox[2], bubble_bbox[2])
+    iy2 = min(text_bbox[3], bubble_bbox[3])
     inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
     if inter == 0:
         return 0.0
-    area_a = (a[2] - a[0]) * (a[3] - a[1])
-    area_b = (b[2] - b[0]) * (b[3] - b[1])
-    return inter / (area_a + area_b - inter)
+    text_area = (text_bbox[2] - text_bbox[0]) * (text_bbox[3] - text_bbox[1])
+    if text_area == 0:
+        return 0.0
+    return inter / text_area
 
 
 def find_unbubbled_text(
     text_regions: list[TextRegion],
     bubble_bboxes: list[tuple[int, int, int, int]],
-    iou_threshold: float = 0.3,
+    containment_threshold: float = 0.5,
 ) -> list[TextRegion]:
-    """Return text regions that don't overlap with any detected bubble.
+    """Return text regions that aren't contained within any detected bubble.
 
-    These are artwork-text candidates: narration on art, chapter titles, etc.
+    Uses containment ratio (fraction of text region inside bubble) instead
+    of IoU, because text bboxes are much smaller than bubble bboxes.
 
     Args:
         text_regions: All EasyOCR text detections on the page.
         bubble_bboxes: Bounding boxes from bubble detection.
-        iou_threshold: Minimum IoU to consider a text region "inside" a bubble.
+        containment_threshold: Min fraction of text region inside a bubble
+            to consider it "already handled".
 
     Returns:
-        Text regions with no significant bubble overlap.
+        Text regions not significantly contained by any bubble.
     """
     unbubbled = []
     for region in text_regions:
-        overlaps_bubble = any(
-            _iou(region.bbox, bb) >= iou_threshold
+        inside_bubble = any(
+            _containment(region.bbox, bb) >= containment_threshold
             for bb in bubble_bboxes
         )
-        if not overlaps_bubble:
+        if not inside_bubble:
             unbubbled.append(region)
 
     log.info("Found %d unbubbled text regions out of %d total",

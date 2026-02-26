@@ -61,7 +61,7 @@ ocr:
   device: "cuda"   # "cuda" for GPU (~350MB); "cpu" if VRAM is tight
 
 text_detection:
-  enabled: false          # Off by default — opt-in feature
+  enabled: true           # EasyOCR Japanese text detection for artwork text
   confidence: 0.3         # EasyOCR confidence threshold
   gpu: true
 
