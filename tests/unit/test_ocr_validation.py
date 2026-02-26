@@ -45,17 +45,11 @@ class TestRejectNoise:
     def test_rejects_latin_only(self):
         assert not is_valid_japanese("Hello World")
 
-    def test_rejects_short_all_kanji(self):
-        """manga-ocr hallucinates kanji from face features."""
-        assert not is_valid_japanese("繊維")  # 2 kanji, no hiragana
-
-    def test_rejects_4char_all_kanji(self):
-        """Expanded kanji-only rejection up to 4 chars."""
-        assert not is_valid_japanese("繊維素材")  # 4 kanji, no hiragana
-
-    def test_accepts_5char_kanji(self):
-        """5+ kanji characters are allowed (real compound words exist)."""
-        assert is_valid_japanese("経済産業大臣")  # 6 kanji — real term
+    def test_accepts_short_kanji_dialogue(self):
+        """Short kanji phrases are valid manga dialogue (e.g. 一人？)."""
+        assert is_valid_japanese("一人？")
+        assert is_valid_japanese("繊維")
+        assert is_valid_japanese("経済産業大臣")
 
     def test_rejects_mostly_non_japanese(self):
         """Text that's mostly ASCII/non-Japanese."""
