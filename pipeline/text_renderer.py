@@ -429,6 +429,10 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             furi_x = col_x + font_size + 1
             furi_char_h = furi_size + 1
             furi_total_h = len(ch_info["furigana"]) * furi_char_h
+            # Compress furigana spacing when stack overflows char_height
+            if furi_total_h > char_height and len(ch_info["furigana"]) > 1:
+                furi_char_h = char_height // len(ch_info["furigana"])
+                furi_total_h = len(ch_info["furigana"]) * furi_char_h
             furi_y = char_y + (char_height - furi_total_h) // 2
             for fc in ch_info["furigana"]:
                 if furi_x + furi_size <= x2 - BUBBLE_PADDING:
