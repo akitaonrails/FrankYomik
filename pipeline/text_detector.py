@@ -351,6 +351,14 @@ def detect_small_bubbles(
         if dark_pct < 0.02 or dark_pct > 0.35:
             continue
 
+        # Reject colored regions (skin, hair).  Real text bubbles are
+        # black-on-white with near-zero saturation.  Skin/hair have
+        # colored pixels (saturation > 20) covering >10% of the area.
+        hsv_roi = cv2.cvtColor(img_cv[y:y + bh, x:x + bw], cv2.COLOR_BGR2HSV)
+        colored_pct = np.sum(hsv_roi[:, :, 1] > 20) / hsv_roi[:, :, 1].size
+        if colored_pct > 0.10:
+            continue
+
         # Skip if overlapping existing detections
         if _overlap_any(bbox, bubble_bboxes):
             continue
