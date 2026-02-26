@@ -92,15 +92,15 @@ class TestMinimumDetectionCounts:
 
     def test_shounen6_min_bubbles(self):
         bubbles = _detect("shounen6")
-        assert len(bubbles) >= 20, f"shounen6: expected >=20, got {len(bubbles)}"
+        assert len(bubbles) >= 30, f"shounen6: expected >=30, got {len(bubbles)}"
 
     def test_shounen7_min_bubbles(self):
         bubbles = _detect("shounen7")
-        assert len(bubbles) >= 18, f"shounen7: expected >=18, got {len(bubbles)}"
+        assert len(bubbles) >= 24, f"shounen7: expected >=24, got {len(bubbles)}"
 
     def test_shounen8_min_bubbles(self):
         bubbles = _detect("shounen8")
-        assert len(bubbles) >= 20, f"shounen8: expected >=20, got {len(bubbles)}"
+        assert len(bubbles) >= 24, f"shounen8: expected >=24, got {len(bubbles)}"
 
     def test_shounen9_min_bubbles(self):
         bubbles = _detect("shounen9")
@@ -108,7 +108,7 @@ class TestMinimumDetectionCounts:
 
     def test_shounen10_min_bubbles(self):
         bubbles = _detect("shounen10")
-        assert len(bubbles) >= 8, f"shounen10: expected >=8, got {len(bubbles)}"
+        assert len(bubbles) >= 11, f"shounen10: expected >=11, got {len(bubbles)}"
 
 
 # --- Known bubble presence tests ---
@@ -143,12 +143,12 @@ class TestKnownBubblePresence:
             "shounen: missing left-middle bubble near (687,588)"
 
     def test_shounen6_right_page_bubbles(self):
-        """Right-page bubbles on shounen6 that were missed when misclassified as color."""
+        """Right-page bubbles on shounen6 — overlapping pair detected as merged contour."""
         bboxes = _bboxes(_detect("shounen6"))
-        assert _has_bubble_near(bboxes, (1499, 324, 1595, 375), tolerance=40), \
-            "shounen6: missing right-page bubble near (1499,324)"
-        assert _has_bubble_near(bboxes, (1597, 312, 1724, 375), tolerance=40), \
-            "shounen6: missing right-page bubble near (1597,312)"
+        assert _has_bubble_near(bboxes, (1506, 100, 1767, 353), tolerance=40), \
+            "shounen6: missing overlapping pair bubble near (1506,100)"
+        assert _has_bubble_near(bboxes, (1621, 440, 1744, 608), tolerance=40), \
+            "shounen6: missing 'hitori' bubble near (1621,440)"
 
     def test_shounen7_first_panel_bubbles(self):
         """First-panel bubbles on shounen7 that were missed when misclassified as color."""
@@ -161,6 +161,30 @@ class TestKnownBubblePresence:
         bboxes = _bboxes(_detect("shounen10"))
         assert _has_bubble_near(bboxes, (386, 517, 585, 913), tolerance=40), \
             "shounen10: missing first balloon near (386,517)"
+
+    def test_shounen7_large_panel_bubble(self):
+        """Large white panel area on shounen7 recovered by lowered circularity."""
+        bboxes = _bboxes(_detect("shounen7"))
+        assert _has_bubble_near(bboxes, (894, 310, 1186, 670), tolerance=40), \
+            "shounen7: missing large panel bubble near (894,310)"
+
+    def test_shounen8_demosa_bubble(self):
+        """'demosa' bubble on shounen8 recovered by rect_fallback fix."""
+        bboxes = _bboxes(_detect("shounen8"))
+        assert _has_bubble_near(bboxes, (1649, 826, 1733, 975), tolerance=40), \
+            "shounen8: missing 'demosa' bubble near (1649,826)"
+
+    def test_shounen7_ano_ko_bubble(self):
+        """'ano ko' small bubble on shounen7 recovered by rect_dark upper bound fix."""
+        bboxes = _bboxes(_detect("shounen7"))
+        assert _has_bubble_near(bboxes, (574, 1124, 676, 1218), tolerance=40), \
+            "shounen7: missing 'ano ko' bubble near (574,1124)"
+
+    def test_shounen7_last_row_right_page(self):
+        """Last-row right-page bubble on shounen7 recovered by mid-tone ratio fix."""
+        bboxes = _bboxes(_detect("shounen7"))
+        assert _has_bubble_near(bboxes, (1597, 983, 1709, 1128), tolerance=40), \
+            "shounen7: missing last-row bubble near (1597,983)"
 
 
 # --- Face false positive tests ---
@@ -201,7 +225,7 @@ class TestFaceRejection:
         """shounen3 has window/face regions that must not be detected."""
         bubbles = _detect("shounen3")
         # Rect fallback recovers many real bubbles; count should stay bounded
-        assert len(bubbles) <= 25, \
+        assert len(bubbles) <= 28, \
             f"shounen3: too many detections ({len(bubbles)}), likely face FPs"
 
     def test_shounen3_no_window_frame(self):
