@@ -893,9 +893,9 @@ class TestRenderSfx:
         if diff.any():
             changed_ys = np.where(diff.any(axis=1))[0]
             changed_xs = np.where(diff.any(axis=0))[0]
-            # Allow tolerance for stroke_width=3 (both sides) + shadow=2 + font metrics
+            # Allow tolerance for stroke_width=3 (both sides) + shadow=2 + larger font
             x1, y1, x2, y2 = det.bbox_rect
-            tolerance = 20
+            tolerance = 30
             assert changed_ys.min() >= y1 - tolerance, (
                 f"SFX extends too far above: {changed_ys.min()} < {y1 - tolerance}"
             )

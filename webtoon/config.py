@@ -15,7 +15,7 @@ from pipeline.config import (
     TRANSLATE_THINK,
     FONT_EN,
     FONT_EN_BOLD,
-    FONT_JP_BOLD,
+    FONT_SFX,
 )
 
 # Re-export for use within webtoon package
@@ -86,6 +86,6 @@ INPAINT_STEPS = _inpaint_cfg.get("num_inference_steps", 28)
 INPAINT_PROMPT = _inpaint_cfg.get("prompt",
                                    "clean empty speech bubble interior, flat color")
 
-# --- Font (Comic Neue for English dialogue, NotoSansCJK Bold for SFX) ---
-FONT_KO = FONT_EN
-FONT_KO_BOLD = FONT_EN_BOLD
+# --- Fonts ---
+FONT_KO = FONT_EN              # Dialogue text (Komika Text)
+FONT_KO_BOLD = FONT_SFX        # SFX overlay (BadaBoom BB)

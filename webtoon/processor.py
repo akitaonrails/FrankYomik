@@ -760,8 +760,8 @@ def _render_sfx(img: Image.Image, det: TextDetection, english: str,
     det_h = y2 - y1
     det_w = x2 - x1
 
-    # Font size: ~70% of detection height, capped
-    font_size = max(16, min(80, int(det_h * 0.7)))
+    # Font size: ~90% of detection height for prominent SFX, capped at 120px
+    font_size = max(20, min(120, int(det_h * 0.9)))
     try:
         font = ImageFont.truetype(FONT_KO_BOLD, font_size)
     except OSError:
