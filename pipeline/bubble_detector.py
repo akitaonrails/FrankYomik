@@ -165,7 +165,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         hull = cv2.convexHull(cnt)
         hull_area = cv2.contourArea(hull)
         solidity = area / hull_area if hull_area > 0 else 0
-        if solidity < 0.5:
+        if solidity < 0.6:
             continue
 
         # Create interior mask
@@ -205,13 +205,11 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         if mid_ratio > max_mid_ratio:
             continue
 
-        # 4. Contour circularity (skip for page-edge contours whose
-        #    circularity is artificially low from the straight page border)
+        # 4. Contour circularity
         perimeter = cv2.arcLength(cnt, True)
-        touches_edge = (x <= 5 or y <= 5 or x + bw >= w - 5 or y + bh >= h - 5)
-        if perimeter > 0 and not touches_edge:
+        if perimeter > 0:
             circularity = 4 * np.pi * area / (perimeter * perimeter)
-            if circularity < 0.05:
+            if circularity < 0.15:
                 continue
 
         # 5. Border darkness
@@ -240,13 +238,19 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
             very_dark = np.sum((inner_mask > 0) & (gray < 60))
             dark_ratio_60 = very_dark / inner_area
             if dark_ratio_60 < min_dark_ratio:
-                if use_rect_fallback and bw * bh > 0:
+                if use_rect_fallback and very_dark == 0 and bw * bh > 0:
                     # Rect fallback: contour may not encompass text
                     # strokes. Check bounding rect with band-pass filter
                     # (too low = no text, too high = surrounding art).
                     rect_roi = gray[y:y+bh, x:x+bw]
                     rect_dark = np.sum(rect_roi < 60) / rect_roi.size
                     if not (0.013 <= rect_dark <= 0.10):
+                        continue
+                    # Verify contour interior has some dark content
+                    # (< 120).  Rejects empty white regions where only
+                    # panel borders contribute dark pixels to the rect.
+                    inner_dark = np.sum((inner_mask > 0) & (gray < 120))
+                    if inner_dark == 0:
                         continue
                 else:
                     continue
@@ -290,31 +294,17 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
             split_candidates.append(c)
     candidates = split_candidates
 
-    # Remove overlapping detections: keep smaller (more specific) ones,
-    # but don't let tiny fragments kill much larger real bubbles.
+    # Remove overlapping detections: keep smaller (more specific) ones
     candidates.sort(key=lambda b: b["area"])
     filtered = []
     for c in candidates:
         is_dup = False
-        to_replace = []
-        for i, f in enumerate(filtered):
-            c_in_f = _overlap_ratio(c["bbox"], f["bbox"])
-            f_in_c = _overlap_ratio(f["bbox"], c["bbox"])
-            if c_in_f > 0.5:
-                # c is mostly inside f — standard dedup, keep smaller
+        for f in filtered:
+            if (_overlap_ratio(c["bbox"], f["bbox"]) > 0.5 or
+                    _overlap_ratio(f["bbox"], c["bbox"]) > 0.5):
                 is_dup = True
                 break
-            if f_in_c > 0.5:
-                if c["area"] > f["area"] * 8:
-                    # f is a tiny fragment inside c — mark for replacement
-                    to_replace.append(i)
-                else:
-                    # Similar-sized overlap — standard dedup, keep smaller
-                    is_dup = True
-                    break
         if not is_dup:
-            for i in reversed(to_replace):
-                filtered.pop(i)
             filtered.append(c)
 
     # Clean up internal keys
