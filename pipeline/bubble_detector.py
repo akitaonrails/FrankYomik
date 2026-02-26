@@ -26,12 +26,75 @@ def _overlap_ratio(a: tuple, b: tuple) -> float:
 def _is_color_page(img_cv: np.ndarray) -> bool:
     """Detect if a page is color (vs grayscale manga).
 
-    Uses HSV saturation: color pages have >10% of pixels with saturation > 30.
-    Grayscale manga has near-zero saturation everywhere.
+    Uses HSV saturation: color pages have >10% of bright pixels with
+    saturation > 30.  Near-black pixels (value < 40) are excluded because
+    they produce meaningless high saturation in HSV, causing grayscale
+    manga scans to be misclassified as color.
     """
     hsv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2HSV)
-    pct_saturated = np.sum(hsv[:, :, 1] > 30) / hsv[:, :, 1].size
+    bright_enough = hsv[:, :, 2] >= 40
+    n_bright = bright_enough.sum()
+    if n_bright == 0:
+        return False
+    pct_saturated = np.sum((hsv[:, :, 1] > 30) & bright_enough) / n_bright
     return pct_saturated > 0.10
+
+
+def _try_split_merged(cnt, img_shape):
+    """Split a contour if it represents two or more merged bubbles.
+
+    Uses progressive erosion: if the mask splits into 2+ substantial
+    components, the contour likely covers overlapping bubbles.  Watershed
+    assigns each original pixel to the nearest component for clean cuts.
+
+    Returns a list of split contours, or None if no split was found.
+    """
+    mask = np.zeros(img_shape[:2], dtype=np.uint8)
+    cv2.drawContours(mask, [cnt], -1, 255, -1)
+
+    erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    for iters in range(1, 9):
+        eroded = cv2.erode(mask, erode_k, iterations=iters)
+        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(eroded)
+        n_components = n_labels - 1
+        if n_components == 0:
+            break
+        if n_components < 2:
+            continue
+
+        # Keep only substantial components (not tiny erosion remnants)
+        valid_ids = [
+            j for j in range(1, n_labels)
+            if stats[j, cv2.CC_STAT_AREA] > 500
+        ]
+        if len(valid_ids) < 2:
+            continue
+
+        # Build markers for watershed
+        markers = np.zeros(img_shape[:2], dtype=np.int32)
+        for new_id, j in enumerate(valid_ids, start=1):
+            markers[labels == j] = new_id
+
+        mask_3ch = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        markers = cv2.watershed(mask_3ch, markers)
+
+        # Extract contour for each watershed region (clipped to original mask)
+        split_contours = []
+        for new_id in range(1, len(valid_ids) + 1):
+            region_mask = np.zeros(img_shape[:2], dtype=np.uint8)
+            region_mask[(markers == new_id) & (mask > 0)] = 255
+            region_cnts, _ = cv2.findContours(
+                region_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if region_cnts:
+                largest = max(region_cnts, key=cv2.contourArea)
+                if cv2.contourArea(largest) >= MIN_BUBBLE_AREA:
+                    split_contours.append(largest)
+
+        if len(split_contours) >= 2:
+            return split_contours
+        return None
+
+    return None
 
 
 def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
@@ -66,7 +129,7 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
         min_dark_ratio = 0.008
         max_component_ratio = 0.08
         min_very_bright_ratio = 0.0  # no extra check for grayscale
-        use_rect_fallback = False
+        use_rect_fallback = True
 
     # Edge map for texture analysis (computed once)
     edges = cv2.Canny(gray, 50, 150)
@@ -176,12 +239,12 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
             dark_ratio_60 = very_dark / inner_area
             if dark_ratio_60 < min_dark_ratio:
                 if use_rect_fallback and very_dark == 0 and bw * bh > 0:
-                    # Color page fallback: contour may not encompass text
+                    # Rect fallback: contour may not encompass text
                     # strokes. Check bounding rect with band-pass filter
                     # (too low = no text, too high = surrounding art).
                     rect_roi = gray[y:y+bh, x:x+bw]
                     rect_dark = np.sum(rect_roi < 60) / rect_roi.size
-                    if not (0.013 <= rect_dark <= 0.08):
+                    if not (0.013 <= rect_dark <= 0.10):
                         continue
                 else:
                     continue
@@ -205,6 +268,25 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
             "area": area,
             "contour": cnt,
         })
+
+    # Try to split merged bubbles (two overlapping bubbles detected as one)
+    split_candidates = []
+    for c in candidates:
+        split = _try_split_merged(c["contour"], gray.shape)
+        if split:
+            log.info("Split merged bubble at (%d,%d)-(%d,%d) into %d parts",
+                     *c["bbox"], len(split))
+            for sub_cnt in split:
+                sx, sy, sw, sh = cv2.boundingRect(sub_cnt)
+                split_candidates.append({
+                    "bbox": (sx, sy, sx + sw, sy + sh),
+                    "type": "speech_bubble",
+                    "area": cv2.contourArea(sub_cnt),
+                    "contour": sub_cnt,
+                })
+        else:
+            split_candidates.append(c)
+    candidates = split_candidates
 
     # Remove overlapping detections: keep smaller (more specific) ones
     candidates.sort(key=lambda b: b["area"])

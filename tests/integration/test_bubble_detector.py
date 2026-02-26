@@ -52,39 +52,63 @@ def _has_bubble_in_region(bboxes, region, min_overlap=0.3):
 class TestMinimumDetectionCounts:
     def test_adult_min_bubbles(self):
         bubbles = _detect("adult")
-        assert len(bubbles) >= 8, f"adult: expected >=8, got {len(bubbles)}"
+        assert len(bubbles) >= 10, f"adult: expected >=10, got {len(bubbles)}"
 
     def test_adult2_min_bubbles(self):
         bubbles = _detect("adult2")
-        assert len(bubbles) >= 14, f"adult2: expected >=14, got {len(bubbles)}"
+        assert len(bubbles) >= 20, f"adult2: expected >=20, got {len(bubbles)}"
 
     def test_adult3_min_bubbles(self):
         bubbles = _detect("adult3")
-        assert len(bubbles) >= 5, f"adult3: expected >=5, got {len(bubbles)}"
+        assert len(bubbles) >= 10, f"adult3: expected >=10, got {len(bubbles)}"
 
     def test_adult4_min_bubbles(self):
         bubbles = _detect("adult4")
-        assert len(bubbles) >= 16, f"adult4: expected >=16, got {len(bubbles)}"
+        assert len(bubbles) >= 22, f"adult4: expected >=22, got {len(bubbles)}"
+
+    def test_adult5_min_bubbles(self):
+        bubbles = _detect("adult5")
+        assert len(bubbles) >= 12, f"adult5: expected >=12, got {len(bubbles)}"
 
     def test_shounen_min_bubbles(self):
         bubbles = _detect("shounen")
-        assert len(bubbles) >= 7, f"shounen: expected >=7, got {len(bubbles)}"
+        assert len(bubbles) >= 8, f"shounen: expected >=8, got {len(bubbles)}"
 
     def test_shounen2_min_bubbles(self):
         bubbles = _detect("shounen2")
-        assert len(bubbles) >= 10, f"shounen2: expected >=10, got {len(bubbles)}"
+        assert len(bubbles) >= 18, f"shounen2: expected >=18, got {len(bubbles)}"
 
     def test_shounen3_min_bubbles(self):
         bubbles = _detect("shounen3")
-        assert len(bubbles) >= 6, f"shounen3: expected >=6, got {len(bubbles)}"
+        assert len(bubbles) >= 15, f"shounen3: expected >=15, got {len(bubbles)}"
 
     def test_shounen4_min_bubbles(self):
         bubbles = _detect("shounen4")
-        assert len(bubbles) >= 15, f"shounen4: expected >=15, got {len(bubbles)}"
+        assert len(bubbles) >= 28, f"shounen4: expected >=28, got {len(bubbles)}"
 
     def test_shounen5_min_bubbles(self):
         bubbles = _detect("shounen5")
-        assert len(bubbles) >= 10, f"shounen5: expected >=10, got {len(bubbles)}"
+        assert len(bubbles) >= 12, f"shounen5: expected >=12, got {len(bubbles)}"
+
+    def test_shounen6_min_bubbles(self):
+        bubbles = _detect("shounen6")
+        assert len(bubbles) >= 20, f"shounen6: expected >=20, got {len(bubbles)}"
+
+    def test_shounen7_min_bubbles(self):
+        bubbles = _detect("shounen7")
+        assert len(bubbles) >= 18, f"shounen7: expected >=18, got {len(bubbles)}"
+
+    def test_shounen8_min_bubbles(self):
+        bubbles = _detect("shounen8")
+        assert len(bubbles) >= 20, f"shounen8: expected >=20, got {len(bubbles)}"
+
+    def test_shounen9_min_bubbles(self):
+        bubbles = _detect("shounen9")
+        assert len(bubbles) >= 10, f"shounen9: expected >=10, got {len(bubbles)}"
+
+    def test_shounen10_min_bubbles(self):
+        bubbles = _detect("shounen10")
+        assert len(bubbles) >= 8, f"shounen10: expected >=8, got {len(bubbles)}"
 
 
 # --- Known bubble presence tests ---
@@ -117,6 +141,26 @@ class TestKnownBubblePresence:
         bboxes = _bboxes(_detect("shounen"))
         assert _has_bubble_near(bboxes, (687, 588, 817, 819), tolerance=40), \
             "shounen: missing left-middle bubble near (687,588)"
+
+    def test_shounen6_right_page_bubbles(self):
+        """Right-page bubbles on shounen6 that were missed when misclassified as color."""
+        bboxes = _bboxes(_detect("shounen6"))
+        assert _has_bubble_near(bboxes, (1499, 324, 1595, 375), tolerance=40), \
+            "shounen6: missing right-page bubble near (1499,324)"
+        assert _has_bubble_near(bboxes, (1597, 312, 1724, 375), tolerance=40), \
+            "shounen6: missing right-page bubble near (1597,312)"
+
+    def test_shounen7_first_panel_bubbles(self):
+        """First-panel bubbles on shounen7 that were missed when misclassified as color."""
+        bboxes = _bboxes(_detect("shounen7"))
+        assert _has_bubble_near(bboxes, (512, 302, 574, 380), tolerance=40), \
+            "shounen7: missing first-panel bubble near (512,302)"
+
+    def test_shounen10_first_balloon(self):
+        """First balloon on shounen10 must be detected."""
+        bboxes = _bboxes(_detect("shounen10"))
+        assert _has_bubble_near(bboxes, (386, 517, 585, 913), tolerance=40), \
+            "shounen10: missing first balloon near (386,517)"
 
 
 # --- Face false positive tests ---
@@ -156,8 +200,8 @@ class TestFaceRejection:
     def test_shounen3_no_face_false_positives(self):
         """shounen3 has window/face regions that must not be detected."""
         bubbles = _detect("shounen3")
-        # Should have reasonable count, not inflated by FPs
-        assert len(bubbles) <= 12, \
+        # Rect fallback recovers many real bubbles; count should stay bounded
+        assert len(bubbles) <= 25, \
             f"shounen3: too many detections ({len(bubbles)}), likely face FPs"
 
     def test_shounen3_no_window_frame(self):
@@ -171,12 +215,13 @@ class TestFaceRejection:
 
 class TestColorDetection:
     def test_grayscale_pages(self):
-        for name in ["adult", "adult2", "adult3", "shounen", "shounen2",
-                      "shounen3", "shounen5"]:
+        for name in ["adult", "adult2", "adult3", "adult4", "adult5",
+                      "shounen", "shounen2", "shounen3", "shounen5",
+                      "shounen6", "shounen7", "shounen10"]:
             img = load_image(os.path.join(DOCS_DIR, f"{name}.png"))
             assert not _is_color_page(img), f"{name} should be grayscale"
 
     def test_color_pages(self):
-        for name in ["adult4", "shounen4"]:
+        for name in ["shounen4", "shounen8", "shounen9"]:
             img = load_image(os.path.join(DOCS_DIR, f"{name}.png"))
             assert _is_color_page(img), f"{name} should be color"

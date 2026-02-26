@@ -22,6 +22,13 @@ _convert_lock = threading.Lock()
 # Katakana → hiragana offset (ア=0x30A1, あ=0x3041, diff=0x60)
 _KATA_TO_HIRA = 0x60
 
+# UniDic reading overrides for manga dialogue.
+# UniDic returns formal/canonical readings that differ from natural
+# manga speech — e.g. 私→ワタクシ (formal) instead of ワタシ (casual).
+_READING_OVERRIDES = {
+    "私": "ワタシ",
+}
+
 
 def _get_tagger() -> fugashi.Tagger:
     global _tagger
@@ -119,7 +126,7 @@ def annotate(text: str) -> list[dict]:
     segments = []
     for word in words:
         surface = word.surface
-        kana = word.feature.kana
+        kana = _READING_OVERRIDES.get(surface, word.feature.kana)
 
         if not surface.strip():
             continue
