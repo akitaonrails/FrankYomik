@@ -130,7 +130,8 @@ def detect_page_text(page: PageResult) -> None:
         return
 
     from .text_detector import (
-        detect_panel_text, detect_text_regions, find_unbubbled_text,
+        detect_panel_text, detect_small_bubbles, detect_text_regions,
+        find_unbubbled_text,
     )
 
     bubble_bboxes = [b["bbox"] for b in page.bubbles_raw]
@@ -164,6 +165,20 @@ def detect_page_text(page: PageResult) -> None:
     if panel_texts:
         log.info("Added %d panel text regions for %s",
                  len(panel_texts), page.name)
+
+    # 3. Small bubble recovery via morphological gradient
+    all_bboxes2 = [b["bbox"] for b in page.bubbles_raw]
+    small_bubbles = detect_small_bubbles(page.img_cv, all_bboxes2)
+
+    for bbox in small_bubbles:
+        page.bubbles_raw.append({
+            "bbox": bbox,
+            "type": "speech_bubble",
+        })
+
+    if small_bubbles:
+        log.info("Added %d small bubble regions for %s",
+                 len(small_bubbles), page.name)
 
 
 def render_page(page: PageResult, mode: PipelineMode, out_dir: str,

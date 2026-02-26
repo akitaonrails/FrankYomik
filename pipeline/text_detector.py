@@ -251,3 +251,128 @@ def detect_panel_text(
 
     log.info("Found %d panel text regions from stroke analysis", len(results))
     return results
+
+
+def _overlap_any(
+    bbox: tuple[int, int, int, int],
+    existing: list[tuple[int, int, int, int]],
+    threshold: float = 0.3,
+) -> bool:
+    """Check if bbox overlaps significantly with any existing bbox (bi-directional)."""
+    x1, y1, x2, y2 = bbox
+    a_area = (x2 - x1) * (y2 - y1)
+    if a_area == 0:
+        return True
+    for bx1, by1, bx2, by2 in existing:
+        b_area = (bx2 - bx1) * (by2 - by1)
+        ix1 = max(x1, bx1)
+        iy1 = max(y1, by1)
+        ix2 = min(x2, bx2)
+        iy2 = min(y2, by2)
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        if a_area > 0 and inter / a_area > threshold:
+            return True
+        if b_area > 0 and inter / b_area > threshold:
+            return True
+    return False
+
+
+def detect_small_bubbles(
+    img_cv: np.ndarray,
+    bubble_bboxes: list[tuple[int, int, int, int]],
+) -> list[tuple[int, int, int, int]]:
+    """Find small speech bubbles whose borders merge with panel lines.
+
+    Uses morphological gradient to find enclosed white regions, then
+    OCR-validates with a consistency check (same text at 3 padding levels)
+    to reject manga-ocr hallucinations from non-text regions.
+
+    Args:
+        img_cv: OpenCV BGR image array.
+        bubble_bboxes: All bounding boxes already detected.
+
+    Returns:
+        List of bboxes (x1, y1, x2, y2) for validated small bubbles.
+    """
+    import cv2
+    from PIL import Image
+
+    from .ocr import extract_text_from_region, is_valid_japanese
+
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+
+    # Morphological gradient highlights edges (bubble borders + panel lines)
+    gradient = cv2.morphologyEx(
+        gray, cv2.MORPH_GRADIENT,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+    _, edge_mask = cv2.threshold(gradient, 30, 255, cv2.THRESH_BINARY)
+
+    # Dilate to close small gaps in bubble outlines
+    close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    edge_closed = cv2.dilate(edge_mask, close_k, iterations=2)
+
+    # Invert: enclosed white regions become foreground
+    enclosed = cv2.bitwise_not(edge_closed)
+
+    n_labels, _, stats, _ = cv2.connectedComponentsWithStats(
+        enclosed, connectivity=4)
+
+    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+    img_pil = Image.fromarray(img_rgb)
+    results = []
+
+    for i in range(1, n_labels):
+        x = int(stats[i, cv2.CC_STAT_LEFT])
+        y = int(stats[i, cv2.CC_STAT_TOP])
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        area = int(stats[i, cv2.CC_STAT_AREA])
+
+        # Size filters: small bubble candidates only
+        if area < 800 or area > 25000:
+            continue
+        if bw * bh > 16000:
+            continue
+        if max(bw, bh) / max(min(bw, bh), 1) > 5:
+            continue
+        if bw < 20 or bh < 20:
+            continue
+
+        bbox = (x, y, x + bw, y + bh)
+
+        # Bright interior (white bubble background)
+        roi = gray[y:y + bh, x:x + bw]
+        if roi.mean() < 190:
+            continue
+
+        # Must have dark text strokes
+        dark_pct = np.sum(roi < 100) / roi.size
+        if dark_pct < 0.02 or dark_pct > 0.35:
+            continue
+
+        # Skip if overlapping existing detections
+        if _overlap_any(bbox, bubble_bboxes):
+            continue
+
+        # OCR consistency check: crop at 3 padding levels; all must
+        # produce the same text.  Real text is stable; hallucinations
+        # from non-text regions change with every crop size.
+        texts = []
+        for pad in (5, 10, 15):
+            crop = (max(0, x - pad), max(0, y - pad),
+                    min(w, x + bw + pad), min(h, y + bh + pad))
+            text = extract_text_from_region(img_pil, crop).strip()
+            texts.append(text)
+
+        if not texts[0] or not all(t == texts[0] for t in texts):
+            continue
+        if not is_valid_japanese(texts[0]) or len(texts[0]) < 2:
+            continue
+
+        results.append(bbox)
+        log.info("Small bubble at (%d,%d)-(%d,%d): %s",
+                 *bbox, texts[0][:40])
+
+    log.info("Found %d small bubbles from gradient analysis", len(results))
+    return results

@@ -8,7 +8,7 @@ import os
 import pytest
 from pipeline.image_utils import load_image
 from pipeline.bubble_detector import detect_bubbles, _is_color_page
-from pipeline.text_detector import detect_panel_text
+from pipeline.text_detector import detect_panel_text, detect_small_bubbles
 from tests.conftest import DOCS_DIR
 
 
@@ -277,3 +277,37 @@ class TestPanelTextDetection:
             panel_texts = detect_panel_text(img, bubble_bboxes)
             assert len(panel_texts) == 0, \
                 f"{name}: unexpected panel text detection ({len(panel_texts)} found)"
+
+
+# --- Small bubble detection (morphological gradient based) ---
+
+class TestSmallBubbleDetection:
+    def _all_bboxes(self, name: str):
+        """Get all detected bboxes (bubbles + panel text) for a page."""
+        img = load_image(os.path.join(DOCS_DIR, f"{name}.png"))
+        bubbles = detect_bubbles(img)
+        bboxes = [b["bbox"] for b in bubbles]
+        panel_texts = detect_panel_text(img, bboxes)
+        return img, bboxes + panel_texts
+
+    def test_shounen7_finds_small_bubbles(self):
+        """shounen7 has small speech bubbles whose borders merge with panels."""
+        img, all_bboxes = self._all_bboxes("shounen7")
+        small = detect_small_bubbles(img, all_bboxes)
+        assert len(small) >= 2, \
+            f"shounen7: expected >=2 small bubbles, got {len(small)}"
+        # "はい！" bubble in top-right area of right page
+        assert _has_bubble_in_region([b for b in small], (1270, 240, 1370, 340)), \
+            "shounen7: missing 'hai!' small bubble near (1292,253)"
+        # "あの子。" bubble in lower area of left page
+        assert _has_bubble_in_region([b for b in small], (880, 940, 980, 1090)), \
+            "shounen7: missing 'ano ko' small bubble near (897,960)"
+
+    def test_no_false_positives_on_other_pages(self):
+        """Small bubble detection should not produce false positives."""
+        for name in ["shounen", "shounen2", "shounen3", "shounen5",
+                      "shounen6", "shounen10", "adult", "adult3"]:
+            img, all_bboxes = self._all_bboxes(name)
+            small = detect_small_bubbles(img, all_bboxes)
+            assert len(small) == 0, \
+                f"{name}: unexpected small bubble detection ({len(small)} found)"
