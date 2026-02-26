@@ -92,6 +92,21 @@ def cluster_and_find_bubbles(page: WebtoonPageResult) -> None:
              len(page.bubbles), len(page.sfx_detections), page.name)
 
 
+def _is_hangul_text(text: str) -> bool:
+    """Check if text contains at least one Hangul character.
+
+    Filters out OCR garbage like '@', '_', '(', '0', '7' that get
+    misdetected as SFX from artistic brush strokes.
+    """
+    for ch in text:
+        cp = ord(ch)
+        if (0xAC00 <= cp <= 0xD7AF or     # Hangul Syllables (가-힣)
+            0x1100 <= cp <= 0x11FF or     # Hangul Jamo
+            0x3130 <= cp <= 0x318F):      # Hangul Compatibility Jamo
+            return True
+    return False
+
+
 def _is_title_text(bubble: WebtoonBubble) -> bool:
     """Detect decorative title/logo text that should not be translated.
 
@@ -271,6 +286,9 @@ def render_page(page: WebtoonPageResult, out_dir: str,
 
     # --- SFX overlay pass (after dialogue) ---
     for det in page.sfx_detections:
+        if not _is_hangul_text(det.text):
+            log.info("  Skipping non-Korean SFX: '%s'", det.text)
+            continue
         sfx_english = translate_sfx(det.text)
         if sfx_english.strip():
             log.info("  SFX: '%s' → '%s'", det.text, sfx_english)

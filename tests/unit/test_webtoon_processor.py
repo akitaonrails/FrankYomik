@@ -24,6 +24,7 @@ from webtoon.processor import (
     _clear_with_mask,
     _detect_subgroups,
     _expand_render_bbox,
+    _is_hangul_text,
     _is_title_text,
     _line_spacing,
     _render_sfx,
@@ -923,3 +924,42 @@ class TestRenderSfx:
         det = _make_det(50, 50, 150, 150, text="값")
         _render_sfx(img, det, "", original)
         # No crash = pass
+
+
+class TestIsHangulText:
+    """Filter out OCR garbage from SFX detections.
+
+    Regression: pages 038, 043, 044, etc. had OCR artifacts like '@',
+    '_', '(', '0', '7' misdetected as SFX from artistic brush strokes.
+    These got translated to nonsense ("SFX ONE", "@") and rendered.
+    """
+
+    def test_hangul_syllable_accepted(self):
+        """Single Hangul syllable is valid SFX text."""
+        assert _is_hangul_text("값") is True
+        assert _is_hangul_text("쾅") is True
+
+    def test_hangul_jamo_accepted(self):
+        """Hangul Jamo (ㅋ, ㅎ) is valid SFX text."""
+        assert _is_hangul_text("ㅋ") is True
+
+    def test_multi_char_hangul_accepted(self):
+        """Two-character Korean SFX is valid."""
+        assert _is_hangul_text("꽈양") is True
+        assert _is_hangul_text("적자") is True
+
+    def test_ascii_garbage_rejected(self):
+        """OCR garbage like '@', '_', '(' must be filtered out."""
+        assert _is_hangul_text("@") is False
+        assert _is_hangul_text("_") is False
+        assert _is_hangul_text("(") is False
+
+    def test_digits_rejected(self):
+        """Numbers misread from panel art must be filtered out."""
+        assert _is_hangul_text("0") is False
+        assert _is_hangul_text("1") is False
+        assert _is_hangul_text("7") is False
+        assert _is_hangul_text("4") is False
+
+    def test_empty_rejected(self):
+        assert _is_hangul_text("") is False
