@@ -72,11 +72,11 @@ class TestMinimumDetectionCounts:
 
     def test_shounen_min_bubbles(self):
         bubbles = _detect("shounen")
-        assert len(bubbles) >= 8, f"shounen: expected >=8, got {len(bubbles)}"
+        assert len(bubbles) >= 11, f"shounen: expected >=11, got {len(bubbles)}"
 
     def test_shounen2_min_bubbles(self):
         bubbles = _detect("shounen2")
-        assert len(bubbles) >= 14, f"shounen2: expected >=14, got {len(bubbles)}"
+        assert len(bubbles) >= 16, f"shounen2: expected >=16, got {len(bubbles)}"
 
     def test_shounen3_min_bubbles(self):
         bubbles = _detect("shounen3")
@@ -92,11 +92,11 @@ class TestMinimumDetectionCounts:
 
     def test_shounen6_min_bubbles(self):
         bubbles = _detect("shounen6")
-        assert len(bubbles) >= 20, f"shounen6: expected >=20, got {len(bubbles)}"
+        assert len(bubbles) >= 24, f"shounen6: expected >=24, got {len(bubbles)}"
 
     def test_shounen7_min_bubbles(self):
         bubbles = _detect("shounen7")
-        assert len(bubbles) >= 18, f"shounen7: expected >=18, got {len(bubbles)}"
+        assert len(bubbles) >= 19, f"shounen7: expected >=19, got {len(bubbles)}"
 
     def test_shounen8_min_bubbles(self):
         bubbles = _detect("shounen8")
@@ -104,11 +104,11 @@ class TestMinimumDetectionCounts:
 
     def test_shounen9_min_bubbles(self):
         bubbles = _detect("shounen9")
-        assert len(bubbles) >= 10, f"shounen9: expected >=10, got {len(bubbles)}"
+        assert len(bubbles) >= 11, f"shounen9: expected >=11, got {len(bubbles)}"
 
     def test_shounen10_min_bubbles(self):
         bubbles = _detect("shounen10")
-        assert len(bubbles) >= 8, f"shounen10: expected >=8, got {len(bubbles)}"
+        assert len(bubbles) >= 13, f"shounen10: expected >=13, got {len(bubbles)}"
 
 
 # --- Known bubble presence tests ---
@@ -161,6 +161,12 @@ class TestKnownBubblePresence:
         bboxes = _bboxes(_detect("shounen10"))
         assert _has_bubble_near(bboxes, (386, 517, 585, 913), tolerance=40), \
             "shounen10: missing first balloon near (386,517)"
+
+    def test_shounen10_top_right_balloon(self):
+        """Top-right balloon on shounen10, recovered via page-edge circularity exemption."""
+        bboxes = _bboxes(_detect("shounen10"))
+        assert _has_bubble_in_region(bboxes, (1900, 0, 2100, 350)), \
+            "shounen10: missing top-right balloon in region (1900,0,2100,350)"
 
 
 # --- Face false positive tests ---

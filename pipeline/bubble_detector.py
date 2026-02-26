@@ -206,10 +206,14 @@ def detect_bubbles(img_cv: np.ndarray) -> list[dict]:
             continue
 
         # 4. Contour circularity
+        # Page-edge contours get artificially low circularity because
+        # the page border creates a long straight edge.  Skip the check
+        # for them — the remaining filters still reject non-bubbles.
+        touches_edge = (x <= 5 or y <= 5 or x + bw >= w - 5 or y + bh >= h - 5)
         perimeter = cv2.arcLength(cnt, True)
-        if perimeter > 0:
+        if perimeter > 0 and not touches_edge:
             circularity = 4 * np.pi * area / (perimeter * perimeter)
-            if circularity < 0.15:
+            if circularity < 0.10:
                 continue
 
         # 5. Border darkness
