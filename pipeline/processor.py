@@ -9,7 +9,10 @@ import numpy as np
 from PIL import Image
 
 from .bubble_detector import detect_bubbles
-from .config import EN_BASE_FONT_DIVISOR, EN_BASE_FONT_MAX, EN_BASE_FONT_MIN
+from .config import (
+    EN_BASE_FONT_DIVISOR, EN_BASE_FONT_MAX, EN_BASE_FONT_MIN,
+    MANGA_INPAINT_ENABLED, TEXT_DETECTION_ENABLED,
+)
 from .furigana import annotate as furigana_annotate
 from .image_utils import (
     clear_text_in_contour,
@@ -19,7 +22,10 @@ from .image_utils import (
     load_image_pil,
 )
 from .ocr import extract_text_from_region, is_valid_japanese
-from .text_renderer import draw_debug_boxes, render_english, render_furigana_vertical
+from .text_renderer import (
+    draw_debug_boxes, render_english, render_english_on_artwork,
+    render_furigana_vertical,
+)
 from .translator import translate
 
 log = logging.getLogger(__name__)
@@ -37,6 +43,7 @@ class BubbleResult:
     ocr_text: str = ""
     is_valid: bool = False
     transformed: object = None  # furigana segments or english string
+    is_artwork_text: bool = False  # True if text found on artwork (no bubble)
 
 
 @dataclass
@@ -75,13 +82,15 @@ def ocr_bubble(img_pil: Image.Image, bubble: dict) -> BubbleResult:
     """Stage 3: OCR + validation for a single bubble."""
     bbox = bubble["bbox"]
     contour = bubble.get("contour")
+    is_artwork = bubble.get("is_artwork", False)
     text = extract_text_from_region(img_pil, bbox)
     valid = bool(text.strip()) and is_valid_japanese(text)
     if text.strip() and not valid:
         log.info("  OCR noise (not Japanese): %s, skipping", text)
     elif valid:
         log.info("  OCR: %s", text)
-    return BubbleResult(bbox=bbox, contour=contour, ocr_text=text, is_valid=valid)
+    return BubbleResult(bbox=bbox, contour=contour, ocr_text=text,
+                        is_valid=valid, is_artwork_text=is_artwork)
 
 
 def transform_furigana(br: BubbleResult) -> None:
@@ -107,6 +116,36 @@ def transform_translate(br: BubbleResult) -> None:
         log.info("  Translation empty for '%s', skipping", br.ocr_text)
 
 
+def detect_page_text(page: PageResult) -> None:
+    """Stage 2b: Detect text outside bubbles using EasyOCR (if enabled).
+
+    Runs EasyOCR Japanese text detection, finds text regions that don't
+    overlap with detected bubbles, and appends them to page.bubbles_raw
+    with an "is_artwork" flag.
+    """
+    if not TEXT_DETECTION_ENABLED:
+        return
+
+    from .text_detector import detect_text_regions, find_unbubbled_text
+
+    log.info("Running text detection: %s", page.name)
+    text_regions = detect_text_regions(page.img_cv)
+
+    bubble_bboxes = [b["bbox"] for b in page.bubbles_raw]
+    unbubbled = find_unbubbled_text(text_regions, bubble_bboxes)
+
+    for region in unbubbled:
+        page.bubbles_raw.append({
+            "bbox": region.bbox,
+            "type": "artwork_text",
+            "is_artwork": True,
+        })
+
+    if unbubbled:
+        log.info("Added %d artwork text regions for %s",
+                 len(unbubbled), page.name)
+
+
 def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
                 debug: bool = False) -> None:
     """Stage 5: Clear bubbles, render transformed text, save output."""
@@ -126,6 +165,16 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
 
     for br in page.bubble_results:
         if br.transformed is None:
+            continue
+
+        # Artwork text: inpaint background then render with overlay
+        if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
+            if MANGA_INPAINT_ENABLED:
+                from .inpainter import inpaint_region
+                page.output_img = inpaint_region(page.output_img, br.bbox)
+            render_english_on_artwork(page.output_img, br.bbox,
+                                      br.transformed,
+                                      base_font_size=base_font_size)
             continue
 
         # Clear text region using contour shape when available

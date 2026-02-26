@@ -497,6 +497,65 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
     return best
 
 
+# --- Artwork text rendering ---
+
+def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
+                               text: str, base_font_size: int | None = None) -> None:
+    """Render English text on inpainted artwork with semi-transparent background.
+
+    Similar to render_english but adds a translucent white background
+    rectangle for readability on complex artwork backgrounds.
+    """
+    x1, y1, x2, y2 = bbox
+    bw = x2 - x1 - 2 * TEXT_MARGIN
+    bh = y2 - y1 - 2 * TEXT_MARGIN
+
+    if bw < 10 or bh < 10 or not text.strip():
+        return
+
+    layout = _choose_layout(text)
+    if layout == "vertical_sfx":
+        _render_vertical_sfx(img, bbox, text)
+        return
+
+    font_size = _fit_horizontal_english_size(text, bw, bh, base_font_size)
+    font = _load_font(FONT_EN, font_size)
+    draw = ImageDraw.Draw(img)
+
+    lines = _word_wrap(text, font, bw, draw)
+    if not lines:
+        return
+
+    line_height = int(font_size * 1.3)
+    total_height = len(lines) * line_height
+
+    # Draw semi-transparent background for readability
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    bg_pad = 6
+    bg_y1 = y1 + TEXT_MARGIN + (bh - total_height) // 2 - bg_pad
+    bg_y2 = bg_y1 + total_height + 2 * bg_pad
+    overlay_draw.rectangle(
+        (x1 + TEXT_MARGIN - bg_pad, bg_y1, x2 - TEXT_MARGIN + bg_pad, bg_y2),
+        fill=(255, 255, 255, 180),
+    )
+    img_rgba = img.convert("RGBA")
+    img_rgba = Image.alpha_composite(img_rgba, overlay)
+    # Paste back as RGB
+    img.paste(img_rgba.convert("RGB"))
+
+    # Draw text on top
+    draw = ImageDraw.Draw(img)
+    text_y = y1 + TEXT_MARGIN + (bh - total_height) // 2
+
+    for line in lines:
+        line_bbox = draw.textbbox((0, 0), line, font=font)
+        line_w = line_bbox[2] - line_bbox[0]
+        text_x = x1 + TEXT_MARGIN + (bw - line_w) // 2
+        draw.text((text_x, text_y), line, fill="black", font=font)
+        text_y += line_height
+
+
 # --- Debug ---
 
 def draw_debug_boxes(img: Image.Image, bubbles: list[dict]) -> Image.Image:

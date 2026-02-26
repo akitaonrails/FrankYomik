@@ -60,6 +60,15 @@ fonts:
 ocr:
   device: "cuda"   # "cuda" for GPU (~350MB); "cpu" if VRAM is tight
 
+text_detection:
+  enabled: false          # Off by default — opt-in feature
+  confidence: 0.3         # EasyOCR confidence threshold
+  gpu: true
+
+manga_inpainting:
+  enabled: false          # Off by default
+  pad: 20                 # Padding around text region for inpainting
+
 webtoon:
   data_dir: "webtoon_data"          # Downloaded images root
   output_dir: "output/webtoon"      # Translated output

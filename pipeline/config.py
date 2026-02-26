@@ -23,6 +23,8 @@ _yaml = _load_yaml_config()
 _ollama = _yaml.get("ollama", {})
 _fonts = _yaml.get("fonts", {})
 _ocr = _yaml.get("ocr", {})
+_text_det = _yaml.get("text_detection", {})
+_manga_inp = _yaml.get("manga_inpainting", {})
 
 # --- Ollama settings ---
 # Environment variable takes highest priority
@@ -73,6 +75,15 @@ TEXT_MARGIN = 8               # Margin inside bubble for text placement
 EN_BASE_FONT_DIVISOR = 55
 EN_BASE_FONT_MIN = 14
 EN_BASE_FONT_MAX = 24
+
+# --- Text detection (EasyOCR Japanese) ---
+TEXT_DETECTION_ENABLED = _text_det.get("enabled", False)
+TEXT_DETECTION_CONFIDENCE = _text_det.get("confidence", 0.3)
+TEXT_DETECTION_GPU = _text_det.get("gpu", True)
+
+# --- Manga inpainting (artwork text) ---
+MANGA_INPAINT_ENABLED = _manga_inp.get("enabled", False)
+MANGA_INPAINT_PAD = _manga_inp.get("pad", 20)
 
 # --- File paths ---
 DOCS_DIR = os.path.join(_PROJECT_ROOT, "docs")
