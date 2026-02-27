@@ -2,12 +2,13 @@
 
 ## What This Is
 
-Manga and webtoon translation system with three components:
+Manga and webtoon translation system with four components:
 1. **Manga pipeline** (`pipeline/`): Detect speech bubbles, OCR Japanese text, add furigana or translate to English
 2. **Webtoon pipeline** (`webtoon/`): Detect Korean text, translate to English, render with color-aware typography
 3. **Web service** (`cmd/server/` + `worker/`): Go API server + Python workers connected via Redis streams for async processing
+4. **Flutter client** (`frank_client/`): Cross-platform app (Android + Linux) — WebView-based reader for Kindle/Webtoon with inline translation overlay
 
-The CLI tools (`process_manga.py`, `process_webtoon.py`) process local files. The web service accepts images via HTTP, queues them through Redis, and returns translated pages — designed for browser extensions on read.amazon.co.jp and webtoon.com.
+The CLI tools (`process_manga.py`, `process_webtoon.py`) process local files. The web service accepts images via HTTP, queues them through Redis, and returns translated pages. The Flutter client wraps Kindle (read.amazon.co.jp) and Webtoon (webtoons.com) in a WebView, captures pages, submits them to the API, and overlays translated images.
 
 ## Quick Start
 
@@ -44,6 +45,17 @@ curl -X POST -H "Authorization: Bearer secret" \
   http://localhost:8080/api/v1/jobs
 ```
 
+### Flutter Client
+
+```bash
+cd frank_client
+flutter pub get
+flutter run -d linux       # Desktop
+flutter run -d <device>    # Android (connected device or emulator)
+```
+
+Requires the web service running (Go API + Redis + worker).
+
 ## Architecture
 
 ### CLI Pipeline
@@ -53,10 +65,13 @@ Image → [Bubble Detection] → [OCR] → [Validation] → ┬→ [Furigana] �
                                                       └→ [Translate] → [English Render]
 ```
 
-### Web Service
+### Web Service + Flutter Client
 
 ```
-Browser Extension
+Flutter Client (frank_client/)
+    ├── WebView: read.amazon.co.jp / webtoons.com
+    ├── JS Bridge: page detection + image capture
+    ├── Local SQLite cache (SHA256-keyed)
     ↕ HTTPS + WebSocket (Bearer token)
 Go API Server (cmd/server/)
     ↕ Redis Streams (priority queues) + Pub/Sub (notifications)
@@ -112,6 +127,43 @@ frank_manga/
     websocket.go                # WebSocket upgrade, subscribe/notify
     types.go                    # Job, Result, Health types
 
+  frank_client/                 # Flutter client app (Android + Linux)
+    lib/
+      main.dart                 # Entry point, ProviderScope
+      app.dart                  # MaterialApp, dark Material 3 theme
+      models/
+        server_settings.dart    # Server URL, auth token, pipeline selection
+        page_job.dart           # Job lifecycle tracking (pending→completed)
+        site_config.dart        # Kindle + Webtoon site definitions
+      services/
+        api_service.dart        # REST client (all /api/v1/* endpoints)
+        websocket_service.dart  # WS client, auto-reconnect, subscribe/unsubscribe
+        cache_service.dart      # SQLite FFI cache (hash + metadata lookup)
+        image_capture_service.dart  # WebView screenshot + JS image extraction
+      providers/
+        settings_provider.dart  # SharedPreferences persistence
+        connection_provider.dart # Health check + WS handshake state
+        jobs_provider.dart      # Job submission, polling fallback, cache
+      screens/
+        home_screen.dart        # URL bar + quick-launch cards
+        reader_screen.dart      # WebView + JS bridge + overlay
+        settings_screen.dart    # Server config + pipeline selection
+        jobs_screen.dart        # Job history + status badges
+        inspector_screen.dart   # DOM debug view
+      webview/
+        js_bridge.dart          # Strategy manager, URL detection
+        overlay_controller.dart # Image src swap (original ↔ translated)
+        dom_inspector.dart      # JS element logger
+        strategies/
+          base_strategy.dart    # Abstract SiteStrategy interface
+          kindle_strategy.dart  # Screenshot capture, ASIN extraction
+          webtoon_strategy.dart # IntersectionObserver, JS fetch to base64
+      widgets/                  # connection_banner, progress_indicator, page_status_badge
+    test/
+      widget_test.dart          # Model + strategy unit tests
+    android/                    # Android platform (com.frankmanga.frank_client)
+    linux/                      # Linux platform (GTK, Wayland/X11 aware)
+
   tests/
     unit/                       # Pure logic tests (no external deps)
     integration/                # Tests using real images
@@ -145,6 +197,20 @@ Uses pure OpenCV — VLM-based detection (Qwen2.5-VL) was tried first but produc
 - Strips `<think>...</think>` tags and XML artifacts
 - Fallback: `deep-translator` (Google Translate) on Ollama failure
 - A/B tested: qwen3:8b leaks Japanese, translategemma:12b flattens tone, qwen3:30b not worth VRAM
+
+### Flutter Client (frank_client/)
+
+**State management**: Riverpod v2 — `settingsProvider`, `connectionProvider`, `jobsProvider`, `cacheServiceProvider`, `apiServiceProvider`, `wsServiceProvider`.
+
+**Site strategy pattern**: `SiteStrategy` base class with `KindleStrategy` and `WebtoonStrategy`. Each defines URL regex, JS detection script, capture script, and URL metadata parsing. Strategy selected at runtime by matching current WebView URL.
+
+**Image capture**: Kindle uses Flutter `takeScreenshot()` (bypasses DRM canvas restrictions). Webtoon uses JS `fetch()` + `FileReader` to extract `<img>` elements as base64.
+
+**Dual-path job tracking**: Before submitting, checks local SQLite cache by SHA256 hash and by metadata (title/chapter/page). On server response, subscribes to WebSocket for real-time updates with 3s polling fallback.
+
+**Overlay**: Webtoon replaces `<img>` src with blob URL of translated image, click toggles original/translated. Kindle overlay is TODO (needs coordinate tracking from JS).
+
+**Cache**: SQLite3 FFI with filesystem storage at app support directory. Keyed by image hash + pipeline. No TTL (never expires).
 
 ### Web Service Design
 
@@ -193,6 +259,7 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 - **manga-ocr** — Japanese OCR (configurable CPU/GPU via `config.yaml`)
 - **EasyOCR** — Korean OCR + Japanese text detection (GPU)
 - **Go 1.21+** with `go-redis/v9` and `gorilla/websocket`
+- **Flutter 3.11+** with `flutter_inappwebview`, `flutter_riverpod`, `web_socket_channel`, `sqflite_common_ffi`
 
 ## Configuration
 
@@ -213,6 +280,7 @@ All settings in `config.yaml`:
 pytest tests/unit/ -v              # Fast — pure logic (318 tests)
 pytest tests/integration/ -v       # Slower — uses real images
 go test ./cmd/server/ -v           # Go API + middleware + subscribe/notify
+cd frank_client && flutter test    # Flutter model + strategy tests
 ```
 
 ### Test coverage
@@ -223,6 +291,7 @@ go test ./cmd/server/ -v           # Go API + middleware + subscribe/notify
 - `tests/unit/test_bytes_io.py` — encode/decode bytes, render_page_to_bytes, load_page_from_memory
 - `tests/unit/test_worker_*.py` — job routing, consumer priority logic, health checks
 - `cmd/server/handlers_test.go` — all REST endpoints, auth middleware, subscribe/notify
+- `frank_client/test/widget_test.dart` — ServerSettings, PageJob states, SiteConfig, strategy URL parsing
 
 **Workflow for adjustments**:
 1. Run existing tests before making changes
