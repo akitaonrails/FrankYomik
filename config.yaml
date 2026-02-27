@@ -103,3 +103,4 @@ worker:
   consumer_group: "workers"
   heartbeat_interval: 30
   job_timeout: 300
+  cache_dir: "./cache"

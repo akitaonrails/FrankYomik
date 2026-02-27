@@ -45,11 +45,14 @@ def main() -> None:
     # Pre-load heavy models so first job doesn't pay startup cost
     _preload_models(args.pipeline)
 
+    cache_dir = worker_cfg.get("cache_dir", "./cache")
+
     consumer = Consumer(
         redis_url=redis_url,
         consumer_group=consumer_group,
         heartbeat_interval=heartbeat_interval,
         job_timeout=job_timeout,
+        cache_dir=cache_dir,
     )
     consumer.connect()
     consumer.run()

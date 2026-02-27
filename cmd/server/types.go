@@ -12,6 +12,10 @@ type Job struct {
 	ImageHash  string    `json:"-"`
 	CreatedAt  time.Time `json:"created_at"`
 	DedupHit   bool      `json:"dedup_hit,omitempty"`
+	Title      string    `json:"title,omitempty"`
+	Chapter    string    `json:"chapter,omitempty"`
+	PageNumber string    `json:"page_number,omitempty"`
+	SourceURL  string    `json:"source_url,omitempty"`
 }
 
 // JobResponse is the API response for job creation/status.
@@ -19,6 +23,8 @@ type JobResponse struct {
 	JobID    string `json:"job_id"`
 	Status   string `json:"status"`
 	DedupHit bool   `json:"dedup_hit,omitempty"`
+	Cached   bool   `json:"cached,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 // JobStatusResponse is the API response for job status queries.
@@ -60,6 +66,10 @@ type WSNotification struct {
 	Status   string `json:"status,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
 	Error    string `json:"error,omitempty"`
+	Stage    string `json:"stage,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	Percent  int    `json:"percent,omitempty"`
+	Cached   bool   `json:"cached,omitempty"`
 }
 
 // Valid pipeline values.

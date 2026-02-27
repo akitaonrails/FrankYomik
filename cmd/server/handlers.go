@@ -19,6 +19,7 @@ const maxImageSize = 20 << 20 // 20 MB
 type Server struct {
 	queue   *Queue
 	results *Results
+	cache   *Cache
 	rdb     *redis.Client
 
 	// WebSocket subscriptions
@@ -27,10 +28,11 @@ type Server struct {
 }
 
 // NewServer creates a new Server instance.
-func NewServer(rdb *redis.Client) *Server {
+func NewServer(rdb *redis.Client, cacheDir string) *Server {
 	return &Server{
 		queue:       NewQueue(rdb),
 		results:     NewResults(rdb),
+		cache:       NewCache(cacheDir),
 		rdb:         rdb,
 		subscribers: make(map[string]map[chan WSNotification]struct{}),
 	}
@@ -42,6 +44,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/jobs/{id}", s.handleGetJob)
 	mux.HandleFunc("GET /api/v1/jobs/{id}/image", s.handleGetJobImage)
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", s.handleDeleteJob)
+	mux.HandleFunc("GET /api/v1/cache/{pipeline}/{title}/{chapter}/{page}/image", s.handleCacheImage)
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/ws", s.handleWebSocket)
 }
@@ -70,6 +73,30 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse optional metadata
+	meta := &JobMetadata{
+		Title:      r.FormValue("title"),
+		Chapter:    r.FormValue("chapter"),
+		PageNumber: r.FormValue("page_number"),
+		SourceURL:  r.FormValue("source_url"),
+	}
+
+	// Check filesystem cache if metadata is provided
+	if meta.Title != "" && meta.Chapter != "" && meta.PageNumber != "" {
+		if _, ok := s.cache.Lookup(pipeline, meta.Title, meta.Chapter, meta.PageNumber); ok {
+			cacheJobID := fmt.Sprintf("cached-%s-%s-%s-%s", pipeline, slugify(meta.Title), meta.Chapter, meta.PageNumber)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(JobResponse{
+				JobID:    cacheJobID,
+				Status:   "completed",
+				Cached:   true,
+				ImageURL: fmt.Sprintf("/api/v1/cache/%s/%s/%s/%s/image", pipeline, slugify(meta.Title), meta.Chapter, meta.PageNumber),
+			})
+			return
+		}
+	}
+
 	file, _, err := r.FormFile("image")
 	if err != nil {
 		jsonError(w, "missing 'image' field", http.StatusBadRequest)
@@ -87,7 +114,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID, dedupHit, err := s.queue.SubmitJob(r.Context(), imageBytes, pipeline, priority)
+	jobID, dedupHit, err := s.queue.SubmitJob(r.Context(), imageBytes, pipeline, priority, meta)
 	if err != nil {
 		log.Printf("ERROR submitting job: %v", err)
 		jsonError(w, "internal error", http.StatusInternalServerError)
@@ -130,6 +157,12 @@ func (s *Server) handleGetJobImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For cached job IDs, serve from filesystem cache
+	if strings.HasPrefix(jobID, "cached-") {
+		s.serveCachedJobImage(w, jobID)
+		return
+	}
+
 	imageBytes, err := s.results.GetJobImage(r.Context(), jobID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -137,6 +170,74 @@ func (s *Server) handleGetJobImage(w http.ResponseWriter, r *http.Request) {
 		} else {
 			jsonError(w, "internal error", http.StatusInternalServerError)
 		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(imageBytes)))
+	w.Write(imageBytes)
+}
+
+// serveCachedJobImage serves an image from the filesystem cache for a cached-* job ID.
+// cached-{pipeline}-{title}-{chapter}-{page} format.
+func (s *Server) serveCachedJobImage(w http.ResponseWriter, jobID string) {
+	// Parse: cached-{pipeline}-{title}-{chapter}-{page}
+	// Pipeline names contain underscores, not hyphens, so split carefully.
+	// Format: "cached-manga_translate-one-piece-1084-003"
+	rest := strings.TrimPrefix(jobID, "cached-")
+
+	// Find pipeline by checking known prefixes
+	var pipeline, remainder string
+	for p := range validPipelines {
+		prefix := p + "-"
+		if strings.HasPrefix(rest, prefix) {
+			pipeline = p
+			remainder = strings.TrimPrefix(rest, prefix)
+			break
+		}
+	}
+	if pipeline == "" {
+		jsonError(w, "invalid cached job id", http.StatusBadRequest)
+		return
+	}
+
+	// remainder = "one-piece-1084-003" — last segment is page, second-to-last is chapter
+	parts := strings.Split(remainder, "-")
+	if len(parts) < 3 {
+		jsonError(w, "invalid cached job id format", http.StatusBadRequest)
+		return
+	}
+
+	page := parts[len(parts)-1]
+	chapter := parts[len(parts)-2]
+	title := strings.Join(parts[:len(parts)-2], "-")
+
+	imageBytes, ok := s.cache.Lookup(pipeline, title, chapter, page)
+	if !ok {
+		jsonError(w, "cached image not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(imageBytes)))
+	w.Write(imageBytes)
+}
+
+// handleCacheImage handles GET /api/v1/cache/{pipeline}/{title}/{chapter}/{page}/image
+func (s *Server) handleCacheImage(w http.ResponseWriter, r *http.Request) {
+	pipeline := r.PathValue("pipeline")
+	title := r.PathValue("title")
+	chapter := r.PathValue("chapter")
+	page := r.PathValue("page")
+
+	if pipeline == "" || title == "" || chapter == "" || page == "" {
+		jsonError(w, "missing path parameters", http.StatusBadRequest)
+		return
+	}
+
+	imageBytes, ok := s.cache.Lookup(pipeline, title, chapter, page)
+	if !ok {
+		jsonError(w, "cached image not found", http.StatusNotFound)
 		return
 	}
 
@@ -261,6 +362,28 @@ func (s *Server) StartRedisSubscriber(ctx context.Context) {
 				continue
 			}
 
+			msgType, _ := meta["type"].(string)
+
+			// Progress events
+			if msgType == "progress" {
+				stage, _ := meta["stage"].(string)
+				detail, _ := meta["detail"].(string)
+				percent := 0
+				if p, ok := meta["percent"].(float64); ok {
+					percent = int(p)
+				}
+				notif := WSNotification{
+					Type:    "job_progress",
+					JobID:   jobID,
+					Stage:   stage,
+					Detail:  detail,
+					Percent: percent,
+				}
+				s.notify(jobID, notif)
+				continue
+			}
+
+			// Completion events
 			status, _ := meta["status"].(string)
 			errMsg, _ := meta["error"].(string)
 

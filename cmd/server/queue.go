@@ -30,9 +30,17 @@ func NewQueue(rdb *redis.Client) *Queue {
 	return &Queue{rdb: rdb}
 }
 
+// JobMetadata holds optional metadata for a job submission.
+type JobMetadata struct {
+	Title      string
+	Chapter    string
+	PageNumber string
+	SourceURL  string
+}
+
 // SubmitJob stores the image, deduplicates, and enqueues a job.
 // Returns (job_id, dedup_hit, error).
-func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, priority string) (string, bool, error) {
+func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, priority string, meta *JobMetadata) (string, bool, error) {
 	// Compute SHA256 for dedup
 	hash := fmt.Sprintf("%x", sha256.Sum256(imageBytes))
 
@@ -60,15 +68,30 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 	}
 
 	// Enqueue
+	values := map[string]interface{}{
+		"job_id":    jobID,
+		"pipeline":  pipeline,
+		"image_key": imageKey,
+	}
+	if meta != nil {
+		if meta.Title != "" {
+			values["title"] = meta.Title
+		}
+		if meta.Chapter != "" {
+			values["chapter"] = meta.Chapter
+		}
+		if meta.PageNumber != "" {
+			values["page_number"] = meta.PageNumber
+		}
+		if meta.SourceURL != "" {
+			values["source_url"] = meta.SourceURL
+		}
+	}
 	err = q.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: stream,
 		MaxLen: maxLen,
 		Approx: true,
-		Values: map[string]interface{}{
-			"job_id":    jobID,
-			"pipeline":  pipeline,
-			"image_key": imageKey,
-		},
+		Values: values,
 	}).Err()
 	if err != nil {
 		return "", false, fmt.Errorf("enqueuing job: %w", err)

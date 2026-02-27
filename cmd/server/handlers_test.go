@@ -43,7 +43,8 @@ func newTestServer(t *testing.T) (*Server, *redis.Client) {
 		rdb.Close()
 	})
 
-	return NewServer(rdb), rdb
+	cacheDir := t.TempDir()
+	return NewServer(rdb, cacheDir), rdb
 }
 
 func makePNGBytes() []byte {
@@ -768,6 +769,283 @@ func TestJsonErrorFormat(t *testing.T) {
 
 // ==================================
 // Helpers
+// ==================================
+
+// ==================================
+// Cache Tests
+// ==================================
+
+func TestCreateJobCacheHit(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	// Pre-populate cache
+	imgData := makePNGBytes()
+	if err := srv.cache.Store("manga_translate", "one-piece", "1084", "003", imgData); err != nil {
+		t.Fatalf("cache store: %v", err)
+	}
+
+	// Submit with metadata that matches cache
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("pipeline", "manga_translate")
+	writer.WriteField("title", "One Piece")
+	writer.WriteField("chapter", "1084")
+	writer.WriteField("page_number", "003")
+	part, _ := writer.CreateFormFile("image", "test.png")
+	part.Write(imgData)
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/jobs", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	var resp JobResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if !resp.Cached {
+		t.Error("expected cached=true")
+	}
+	if resp.Status != "completed" {
+		t.Errorf("got status %q, want 'completed'", resp.Status)
+	}
+	if !strings.HasPrefix(resp.JobID, "cached-") {
+		t.Errorf("expected cached- prefix, got %s", resp.JobID)
+	}
+	if resp.ImageURL == "" {
+		t.Error("expected image_url for cached response")
+	}
+}
+
+func TestCreateJobCacheMiss(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	// Submit with metadata but no cache entry
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("pipeline", "manga_translate")
+	writer.WriteField("title", "One Piece")
+	writer.WriteField("chapter", "1084")
+	writer.WriteField("page_number", "003")
+	part, _ := writer.CreateFormFile("image", "test.png")
+	part.Write(makePNGBytes())
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/jobs", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201", w.Code)
+	}
+
+	var resp JobResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Cached {
+		t.Error("expected cached=false on cache miss")
+	}
+	if resp.Status != "queued" {
+		t.Errorf("got status %q, want 'queued'", resp.Status)
+	}
+}
+
+func TestCreateJobMetadataPassthrough(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("pipeline", "manga_translate")
+	writer.WriteField("title", "test-manga")
+	writer.WriteField("chapter", "5")
+	writer.WriteField("page_number", "2")
+	writer.WriteField("source_url", "https://example.com")
+	part, _ := writer.CreateFormFile("image", "test.png")
+	part.Write(makePNGBytes())
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/jobs", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201", w.Code)
+	}
+
+	// Verify metadata was passed to the stream
+	ctx := context.Background()
+	msgs, err := rdb.XRange(ctx, streamHigh, "-", "+").Result()
+	if err != nil {
+		t.Fatalf("xrange: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one stream message")
+	}
+
+	last := msgs[len(msgs)-1]
+	if last.Values["title"] != "test-manga" {
+		t.Errorf("title: got %q, want 'test-manga'", last.Values["title"])
+	}
+	if last.Values["chapter"] != "5" {
+		t.Errorf("chapter: got %q, want '5'", last.Values["chapter"])
+	}
+	if last.Values["page_number"] != "2" {
+		t.Errorf("page_number: got %q, want '2'", last.Values["page_number"])
+	}
+	if last.Values["source_url"] != "https://example.com" {
+		t.Errorf("source_url: got %q", last.Values["source_url"])
+	}
+}
+
+func TestCacheImageEndpoint(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	imgData := makePNGBytes()
+	srv.cache.Store("manga_translate", "one-piece", "1", "001", imgData)
+
+	req := httptest.NewRequest("GET", "/api/v1/cache/manga_translate/one-piece/1/001/image", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+	if w.Header().Get("Content-Type") != "image/png" {
+		t.Errorf("content-type: %q", w.Header().Get("Content-Type"))
+	}
+	if !bytes.Equal(w.Body.Bytes(), imgData) {
+		t.Error("image bytes mismatch")
+	}
+}
+
+func TestCacheImageNotFound(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/v1/cache/manga_translate/ghost/1/001/image", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("got %d, want 404", w.Code)
+	}
+}
+
+func TestCachedJobImageServing(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	imgData := makePNGBytes()
+	srv.cache.Store("manga_translate", "test", "1", "001", imgData)
+
+	// Request using cached-{pipeline}-{title}-{chapter}-{page} format
+	req := httptest.NewRequest("GET", "/api/v1/jobs/cached-manga_translate-test-1-001/image", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Equal(w.Body.Bytes(), imgData) {
+		t.Error("image bytes mismatch")
+	}
+}
+
+// ==================================
+// Progress Notification Tests
+// ==================================
+
+func TestProgressNotificationForwarded(t *testing.T) {
+	srv := &Server{
+		subscribers: make(map[string]map[chan WSNotification]struct{}),
+	}
+
+	ch := make(chan WSNotification, 10)
+	srv.subscribe("job-p1", ch)
+
+	// Simulate a progress event from Redis
+	progressPayload := `{"type":"progress","job_id":"job-p1","stage":"translating","detail":"3/7 bubbles","percent":43}`
+	var meta map[string]any
+	json.Unmarshal([]byte(progressPayload), &meta)
+
+	msgType, _ := meta["type"].(string)
+	if msgType != "progress" {
+		t.Fatal("expected progress type")
+	}
+
+	stage, _ := meta["stage"].(string)
+	detail, _ := meta["detail"].(string)
+	percent := 0
+	if p, ok := meta["percent"].(float64); ok {
+		percent = int(p)
+	}
+
+	notif := WSNotification{
+		Type:    "job_progress",
+		JobID:   "job-p1",
+		Stage:   stage,
+		Detail:  detail,
+		Percent: percent,
+	}
+	srv.notify("job-p1", notif)
+
+	select {
+	case received := <-ch:
+		if received.Type != "job_progress" {
+			t.Errorf("type: got %q, want 'job_progress'", received.Type)
+		}
+		if received.Stage != "translating" {
+			t.Errorf("stage: got %q, want 'translating'", received.Stage)
+		}
+		if received.Detail != "3/7 bubbles" {
+			t.Errorf("detail: got %q", received.Detail)
+		}
+		if received.Percent != 43 {
+			t.Errorf("percent: got %d, want 43", received.Percent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for notification")
+	}
+}
+
+// ==================================
+// Cache Utility Tests
+// ==================================
+
+func TestSlugify(t *testing.T) {
+	tests := []struct {
+		in, out string
+	}{
+		{"One Piece", "one-piece"},
+		{"tower-of-god", "tower-of-god"},
+		{"Test Manga!@#", "test-manga"},
+		{"  spaces  ", "spaces"},
+		{"UPPER CASE", "upper-case"},
+	}
+	for _, tt := range tests {
+		got := slugify(tt.in)
+		if got != tt.out {
+			t.Errorf("slugify(%q) = %q, want %q", tt.in, got, tt.out)
+		}
+	}
+}
+
+// ==================================
+// JSON error helper
 // ==================================
 
 func assertJSONError(t *testing.T, body *bytes.Buffer, contains string) {

@@ -36,6 +36,26 @@ class TestProcessingJobDataclass:
         )
         assert job.priority == "low"
 
+    def test_metadata_defaults(self):
+        job = ProcessingJob(
+            job_id="m-1", pipeline="manga_translate", image_bytes=b"x",
+        )
+        assert job.title == ""
+        assert job.chapter == ""
+        assert job.page_number == ""
+        assert job.source_url == ""
+
+    def test_metadata_fields(self):
+        job = ProcessingJob(
+            job_id="m-2", pipeline="manga_translate", image_bytes=b"x",
+            title="One Piece", chapter="1084", page_number="003",
+            source_url="https://example.com",
+        )
+        assert job.title == "One Piece"
+        assert job.chapter == "1084"
+        assert job.page_number == "003"
+        assert job.source_url == "https://example.com"
+
 
 class TestProcessingResultDataclass:
     def test_defaults(self):

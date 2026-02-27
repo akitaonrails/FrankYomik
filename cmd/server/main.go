@@ -17,6 +17,7 @@ func main() {
 	addr := getEnv("LISTEN_ADDR", ":8080")
 	redisURL := getEnv("REDIS_URL", "redis://localhost:6379")
 	authToken := getEnv("AUTH_TOKEN", "")
+	cacheDir := getEnv("CACHE_DIR", "./cache")
 
 	if authToken == "" {
 		log.Fatal("AUTH_TOKEN environment variable is required")
@@ -38,7 +39,8 @@ func main() {
 	log.Printf("Connected to Redis: %s", redisURL)
 
 	// Server
-	server := NewServer(rdb)
+	server := NewServer(rdb, cacheDir)
+	log.Printf("Cache directory: %s", cacheDir)
 
 	// Start Redis Pub/Sub subscriber for WebSocket notifications
 	go server.StartRedisSubscriber(ctx)

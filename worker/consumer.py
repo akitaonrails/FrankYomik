@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import signal
 import time
 
@@ -20,10 +21,24 @@ RESULT_KEY_PREFIX = "frank:results:"
 RESULT_IMG_PREFIX = "frank:results:img:"
 NOTIFY_PREFIX = "frank:notify:"
 HEARTBEAT_PREFIX = "frank:worker:"
+PROGRESS_PREFIX = "frank:progress:"
 
 # TTLs
 RESULT_TTL = 3600  # 1 hour
 HEARTBEAT_TTL = 60  # seconds
+PROGRESS_TTL = 60  # seconds
+
+
+_SLUG_RE = re.compile(r"[^a-z0-9\-]")
+
+
+def _slugify(s: str) -> str:
+    """Convert a string to a lowercase, hyphen-separated slug."""
+    s = s.lower().strip().replace(" ", "-")
+    s = _SLUG_RE.sub("", s)
+    while "--" in s:
+        s = s.replace("--", "-")
+    return s.strip("-")
 
 
 class Consumer:
@@ -32,12 +47,14 @@ class Consumer:
     def __init__(self, redis_url: str, consumer_group: str = "workers",
                  consumer_name: str | None = None,
                  heartbeat_interval: int = 30,
-                 job_timeout: int = 300):
+                 job_timeout: int = 300,
+                 cache_dir: str = "./cache"):
         self.redis_url = redis_url
         self.consumer_group = consumer_group
         self.consumer_name = consumer_name or f"worker-{os.getpid()}"
         self.heartbeat_interval = heartbeat_interval
         self.job_timeout = job_timeout
+        self.cache_dir = cache_dir
         self._running = False
         self._rdb: redis.Redis | None = None
         self._last_heartbeat = 0.0
@@ -130,6 +147,10 @@ class Consumer:
         job_id = self._decode_field(fields, b"job_id")
         pipeline = self._decode_field(fields, b"pipeline")
         image_key = self._decode_field(fields, b"image_key")
+        title = self._decode_field(fields, b"title")
+        chapter = self._decode_field(fields, b"chapter")
+        page_number = self._decode_field(fields, b"page_number")
+        source_url = self._decode_field(fields, b"source_url")
 
         if not job_id or not pipeline:
             log.warning("Malformed message %s: missing job_id or pipeline", msg_id)
@@ -150,13 +171,26 @@ class Consumer:
             self._rdb.xack(stream, self.consumer_group, msg_id)
             return
 
+        # Progress callback
+        def progress_cb(stage: str, detail: str, percent: int):
+            self._publish_progress(job_id, stage, detail, percent)
+
         # Process
         job = ProcessingJob(
             job_id=job_id,
             pipeline=pipeline,
             image_bytes=image_bytes,
+            title=title,
+            chapter=chapter,
+            page_number=page_number,
+            source_url=source_url,
         )
-        result = process_job(job)
+        result = process_job(job, progress_cb=progress_cb)
+
+        # Save to filesystem cache if metadata is present
+        if result.image_bytes and title and chapter and page_number:
+            self._cache_to_filesystem(pipeline, title, chapter, page_number,
+                                      result.image_bytes)
 
         # Store result and notify
         self._store_result(result)
@@ -185,6 +219,38 @@ class Consumer:
         # Publish notification for WebSocket subscribers
         notify_channel = f"{NOTIFY_PREFIX}{result.job_id}"
         self._rdb.publish(notify_channel, json.dumps(meta))
+
+    def _publish_progress(self, job_id: str, stage: str, detail: str,
+                          percent: int) -> None:
+        """Publish a progress update via Redis SET + Pub/Sub."""
+        progress = {
+            "type": "progress",
+            "job_id": job_id,
+            "stage": stage,
+            "detail": detail,
+            "percent": percent,
+        }
+        progress_json = json.dumps(progress)
+        # Store current progress (for polling)
+        progress_key = f"{PROGRESS_PREFIX}{job_id}"
+        self._rdb.set(progress_key, progress_json, ex=PROGRESS_TTL)
+        # Publish for WebSocket subscribers
+        notify_channel = f"{NOTIFY_PREFIX}{job_id}"
+        self._rdb.publish(notify_channel, progress_json)
+
+    def _cache_to_filesystem(self, pipeline: str, title: str, chapter: str,
+                             page_number: str, image_bytes: bytes) -> None:
+        """Save processed image to filesystem cache."""
+        slug = _slugify(title)
+        cache_path = os.path.join(self.cache_dir, pipeline, slug, chapter,
+                                  f"{page_number}.png")
+        try:
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            with open(cache_path, "wb") as f:
+                f.write(image_bytes)
+            log.info("Cached result to %s", cache_path)
+        except OSError as e:
+            log.warning("Failed to cache result: %s", e)
 
     def _heartbeat(self) -> None:
         """Update worker heartbeat key in Redis."""

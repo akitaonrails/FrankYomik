@@ -9,12 +9,15 @@ from worker.consumer import (
     HEARTBEAT_PREFIX,
     IMAGE_KEY_PREFIX,
     NOTIFY_PREFIX,
+    PROGRESS_PREFIX,
+    PROGRESS_TTL,
     RESULT_IMG_PREFIX,
     RESULT_KEY_PREFIX,
     RESULT_TTL,
     HEARTBEAT_TTL,
     STREAM_HIGH,
     STREAM_LOW,
+    _slugify,
 )
 from worker.job import ProcessingResult
 
@@ -473,3 +476,179 @@ class TestStreamConstants:
     def test_ttls(self):
         assert RESULT_TTL == 3600
         assert HEARTBEAT_TTL == 60
+
+    def test_progress_constants(self):
+        assert PROGRESS_PREFIX == "frank:progress:"
+        assert PROGRESS_TTL == 60
+
+
+# --- _slugify ---
+
+
+class TestSlugify:
+    def test_basic(self):
+        assert _slugify("One Piece") == "one-piece"
+
+    def test_already_slugified(self):
+        assert _slugify("tower-of-god") == "tower-of-god"
+
+    def test_strips_special_chars(self):
+        assert _slugify("Test Manga!@#") == "test-manga"
+
+    def test_strips_whitespace(self):
+        assert _slugify("  spaces  ") == "spaces"
+
+    def test_collapses_hyphens(self):
+        assert _slugify("a---b") == "a-b"
+
+
+# --- _publish_progress ---
+
+
+class TestPublishProgress:
+    def test_publishes_set_and_pubsub(self):
+        c = _make_consumer()
+        c._publish_progress("j-1", "translating", "3/7 bubbles", 43)
+
+        # Should SET progress key
+        set_call = c._rdb.set.call_args
+        assert set_call[0][0] == f"{PROGRESS_PREFIX}j-1"
+        progress = json.loads(set_call[0][1])
+        assert progress["type"] == "progress"
+        assert progress["stage"] == "translating"
+        assert progress["detail"] == "3/7 bubbles"
+        assert progress["percent"] == 43
+        assert set_call[1]["ex"] == PROGRESS_TTL
+
+        # Should PUBLISH notification
+        c._rdb.publish.assert_called_once()
+        channel = c._rdb.publish.call_args[0][0]
+        assert channel == f"{NOTIFY_PREFIX}j-1"
+
+    def test_progress_payload_json(self):
+        c = _make_consumer()
+        c._publish_progress("j-2", "detecting_bubbles", "", 10)
+
+        payload = json.loads(c._rdb.publish.call_args[0][1])
+        assert payload["job_id"] == "j-2"
+        assert payload["stage"] == "detecting_bubbles"
+        assert payload["percent"] == 10
+
+
+# --- _cache_to_filesystem ---
+
+
+class TestCacheToFilesystem:
+    def test_creates_file(self, tmp_path):
+        c = _make_consumer(cache_dir=str(tmp_path))
+        c._cache_to_filesystem("manga_translate", "One Piece", "1", "003",
+                               b"fake-png")
+
+        cached_file = tmp_path / "manga_translate" / "one-piece" / "1" / "003.png"
+        assert cached_file.exists()
+        assert cached_file.read_bytes() == b"fake-png"
+
+    def test_handles_special_chars_in_title(self, tmp_path):
+        c = _make_consumer(cache_dir=str(tmp_path))
+        c._cache_to_filesystem("webtoon", "Tower of God!", "297", "038",
+                               b"img-data")
+
+        cached_file = tmp_path / "webtoon" / "tower-of-god" / "297" / "038.png"
+        assert cached_file.exists()
+
+    def test_no_error_on_bad_path(self, tmp_path):
+        """Should log warning but not raise on write failure."""
+        c = _make_consumer(cache_dir="/nonexistent/readonly/path")
+        # This should not raise
+        c._cache_to_filesystem("manga_translate", "test", "1", "1", b"data")
+
+
+# --- _process_message with metadata ---
+
+
+class TestProcessMessageMetadata:
+    @patch("worker.consumer.process_job")
+    def test_decodes_metadata_fields(self, mock_process):
+        c = _make_consumer(cache_dir="/tmp/test_cache")
+        c._rdb.get.return_value = b"fake-png-bytes"
+        mock_process.return_value = ProcessingResult(
+            job_id="j-meta", status="completed", image_bytes=b"result",
+        )
+
+        fields = {
+            b"job_id": b"j-meta",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:abc",
+            b"title": b"One Piece",
+            b"chapter": b"1084",
+            b"page_number": b"003",
+            b"source_url": b"https://example.com",
+        }
+        c._process_message(STREAM_HIGH, b"1-0", fields)
+
+        job = mock_process.call_args[0][0]
+        assert job.title == "One Piece"
+        assert job.chapter == "1084"
+        assert job.page_number == "003"
+        assert job.source_url == "https://example.com"
+
+    @patch("worker.consumer.process_job")
+    def test_passes_progress_callback(self, mock_process):
+        c = _make_consumer()
+        c._rdb.get.return_value = b"fake-png"
+        mock_process.return_value = ProcessingResult(
+            job_id="j-cb", status="completed",
+        )
+
+        fields = {
+            b"job_id": b"j-cb",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:abc",
+        }
+        c._process_message(STREAM_HIGH, b"2-0", fields)
+
+        # process_job should be called with progress_cb kwarg
+        _, kwargs = mock_process.call_args
+        assert "progress_cb" in kwargs
+        assert callable(kwargs["progress_cb"])
+
+    @patch("worker.consumer.process_job")
+    def test_caches_to_filesystem_on_success(self, mock_process, tmp_path):
+        c = _make_consumer(cache_dir=str(tmp_path))
+        c._rdb.get.return_value = b"fake-png"
+        mock_process.return_value = ProcessingResult(
+            job_id="j-cache", status="completed", image_bytes=b"png-result",
+        )
+
+        fields = {
+            b"job_id": b"j-cache",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:abc",
+            b"title": b"test-manga",
+            b"chapter": b"1",
+            b"page_number": b"001",
+        }
+        c._process_message(STREAM_HIGH, b"3-0", fields)
+
+        cached = tmp_path / "manga_translate" / "test-manga" / "1" / "001.png"
+        assert cached.exists()
+        assert cached.read_bytes() == b"png-result"
+
+    @patch("worker.consumer.process_job")
+    def test_no_cache_without_metadata(self, mock_process, tmp_path):
+        c = _make_consumer(cache_dir=str(tmp_path))
+        c._rdb.get.return_value = b"fake-png"
+        mock_process.return_value = ProcessingResult(
+            job_id="j-nocache", status="completed", image_bytes=b"png-result",
+        )
+
+        fields = {
+            b"job_id": b"j-nocache",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:abc",
+            # No title/chapter/page_number
+        }
+        c._process_message(STREAM_HIGH, b"4-0", fields)
+
+        # No files should be created in cache
+        assert list(tmp_path.iterdir()) == []
