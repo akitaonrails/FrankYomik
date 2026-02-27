@@ -1,0 +1,71 @@
+# Stage 1: Install Python dependencies
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 python3.12-venv python3.12-dev \
+        build-essential \
+        libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN python3.12 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt .
+# Install deps excluding simple-lama-inpainting (its pinned deps conflict),
+# then install it separately with --no-deps
+RUN pip install --no-cache-dir --upgrade pip && \
+    grep -v simple-lama requirements.txt | pip install --no-cache-dir -r /dev/stdin && \
+    pip install --no-cache-dir --no-deps simple-lama-inpainting
+
+# Stage 2: Runtime
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 \
+        libgl1 libglib2.0-0 \
+    && apt-get purge -y software-properties-common \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user
+RUN groupadd -r worker && useradd -r -g worker -m -d /home/worker worker
+
+# Copy venv from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Copy application code — paths must match _PROJECT_ROOT resolution
+# pipeline/config.py:9 resolves _PROJECT_ROOT = parent of pipeline/ = /app/
+WORKDIR /app
+COPY config.yaml .
+COPY fonts/genei_antique/ fonts/genei_antique/
+COPY fonts/KomikaText-Regular.ttf fonts/KomikaText-Bold.ttf fonts/
+COPY fonts/BadaBoomBB.ttf fonts/
+COPY pipeline/ pipeline/
+COPY webtoon/ webtoon/
+COPY worker/ worker/
+
+# Model cache directories (mount as volumes for persistence)
+RUN mkdir -p /home/worker/.cache/huggingface \
+             /home/worker/.cache/manga_ocr \
+             /home/worker/.EasyOCR/model \
+             /app/cache \
+    && chown -R worker:worker /home/worker /app
+
+USER worker
+ENV HOME=/home/worker
+ENV HF_HOME=/home/worker/.cache/huggingface
+
+ENTRYPOINT ["python3.12", "-m", "worker"]
+CMD ["--pipeline", "both"]

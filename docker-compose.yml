@@ -1,0 +1,85 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+      AUTH_TOKEN: ${AUTH_TOKEN:?Set AUTH_TOKEN in .env or environment}
+      CACHE_DIR: /data/cache
+    volumes:
+      - shared-cache:/data/cache:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
+    volumes:
+      - shared-cache:/app/cache
+      - mangaocr-cache:/home/worker/.cache/manga_ocr
+      - huggingface-cache:/home/worker/.cache/huggingface
+      - easyocr-cache:/home/worker/.EasyOCR
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  ollama-models:
+  shared-cache:
+  mangaocr-cache:
+  huggingface-cache:
+  easyocr-cache:

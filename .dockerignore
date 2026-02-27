@@ -1,0 +1,44 @@
+# VCS
+.git/
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Flutter client (separate build)
+frank_client/
+
+# Tests and test data
+tests/
+output/
+
+# Python artifacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# IDE / editor
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Font sources (only need .ttf/.otf for runtime)
+fonts/comic-neue.zip
+fonts/komika.zip
+fonts/badaboom.zip
+fonts/comicneue-master/
+fonts/komika_text/
+fonts/badaboom/
+fonts/genei-mirror/
+
+# Compiled Go binaries
+cmd/server/server
+
+# Webtoon data / scratch
+webtoon_data/
