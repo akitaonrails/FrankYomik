@@ -93,7 +93,7 @@ class TestMinimumDetectionCounts:
 
     def test_shounen6_min_bubbles(self):
         bubbles = _detect("shounen6")
-        assert len(bubbles) >= 23, f"shounen6: expected >=23, got {len(bubbles)}"
+        assert len(bubbles) >= 20, f"shounen6: expected >=20, got {len(bubbles)}"
 
     def test_shounen7_min_bubbles(self):
         bubbles = _detect("shounen7")
@@ -209,6 +209,12 @@ class TestFaceRejection:
         bboxes = _bboxes(_detect("shounen6"))
         assert not _has_bubble_in_region(bboxes, (440, 1180, 749, 1339)), \
             "shounen6: face region (440,1180,749,1339) falsely detected"
+
+    def test_shounen6_no_sunglasses_face(self):
+        """Sunglasses guy's face in shounen6 must not be detected."""
+        bboxes = _bboxes(_detect("shounen6"))
+        assert not _has_bubble_in_region(bboxes, (592, 769, 748, 890)), \
+            "shounen6: sunglasses face (592,769,748,890) falsely detected"
 
     def test_shounen7_no_face_first_panel(self):
         """Face region in shounen7 first panel must not be detected."""

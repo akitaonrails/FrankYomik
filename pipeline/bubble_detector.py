@@ -259,6 +259,11 @@ def _detect_bubbles_single(img_cv: np.ndarray) -> list[dict]:
         if aspect > 4:
             continue
 
+        # Reject very short horizontal strips (e.g. speed lines at page bottom).
+        # Real horizontal speech bubbles need at least 50px height for text.
+        if bw > bh and bh < 50:
+            continue
+
         # Convex hull solidity check
         hull = cv2.convexHull(cnt)
         hull_area = cv2.contourArea(hull)
@@ -314,9 +319,14 @@ def _detect_bubbles_single(img_cv: np.ndarray) -> list[dict]:
         # for them — the remaining filters still reject non-bubbles.
         touches_edge = (x <= 5 or y <= 5 or x + bw >= w - 5 or y + bh >= h - 5)
         perimeter = cv2.arcLength(cnt, True)
+        circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
         if perimeter > 0 and not touches_edge:
-            circularity = 4 * np.pi * area / (perimeter * perimeter)
             if circularity < 0.10:
+                continue
+            # Combined check: very low solidity AND low circularity
+            # indicates irregular shapes (faces, clothing) that pass
+            # each individual check by narrow margins.
+            if solidity < 0.63 and circularity < 0.20:
                 continue
 
         # 5. Border darkness
@@ -349,6 +359,16 @@ def _detect_bubbles_single(img_cv: np.ndarray) -> list[dict]:
                     # Rect fallback: contour may not encompass text
                     # strokes. Check bounding rect with band-pass filter
                     # (too low = no text, too high = surrounding art).
+                    #
+                    # Large rect-fallback regions: the bounding rect may
+                    # pick up dark pixels from distant panel borders, not
+                    # text belonging to this contour.  Require substantial
+                    # dark content inside the actual contour to confirm.
+                    if bw * bh > 30000:
+                        inner_dark_120 = np.sum(
+                            (inner_mask > 0) & (gray < 120))
+                        if inner_dark_120 / inner_area < 0.01:
+                            continue
                     rect_roi = gray[y:y+bh, x:x+bw]
                     rect_dark = np.sum(rect_roi < 60) / rect_roi.size
                     if not (0.013 <= rect_dark <= 0.10):
