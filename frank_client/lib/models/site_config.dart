@@ -23,10 +23,10 @@ class SiteConfig {
       defaultPipeline: 'manga_translate',
     ),
     SiteConfig(
-      name: 'webtoon',
-      displayName: 'Webtoon',
-      homeUrl: 'https://www.webtoons.com',
-      urlPattern: r'webtoons?\.com',
+      name: 'naver_webtoon',
+      displayName: 'Naver Webtoon (KR)',
+      homeUrl: 'https://m.comic.naver.com/webtoon',
+      urlPattern: r'comic\.naver\.com',
       defaultPipeline: 'webtoon',
     ),
   ];

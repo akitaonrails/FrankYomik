@@ -1,4 +1,4 @@
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'platform/app_webview_controller.dart';
 
 /// DOM inspector for debugging site rendering.
 /// Injects JS to log DOM elements, highlight tapped elements, and capture network requests.
@@ -9,12 +9,12 @@ class DomInspector {
   List<Map<String, dynamic>> get logs => List.unmodifiable(_logs);
 
   /// Inject inspector JS into the WebView.
-  Future<void> inject(InAppWebViewController controller) async {
+  Future<void> inject(AppWebViewController controller) async {
     await controller.evaluateJavascript(source: _inspectorScript);
   }
 
   /// Register the log handler on the controller.
-  void attach(InAppWebViewController controller) {
+  void attach(AppWebViewController controller) {
     controller.addJavaScriptHandler(
       handlerName: 'onInspectorLog',
       callback: (args) {

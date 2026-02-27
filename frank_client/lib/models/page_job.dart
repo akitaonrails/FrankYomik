@@ -7,6 +7,7 @@ class PageJob {
   final String? chapter;
   final String? pageNumber;
   final String? sourceUrl;
+  final String? pipeline;
   final Uint8List? originalImage;
 
   String? jobId;
@@ -25,6 +26,7 @@ class PageJob {
     this.chapter,
     this.pageNumber,
     this.sourceUrl,
+    this.pipeline,
     this.originalImage,
     this.jobId,
     this.status = PageJobStatus.pending,

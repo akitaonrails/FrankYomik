@@ -18,6 +18,9 @@ abstract class SiteStrategy {
   String get siteName;
   String get urlPattern;
 
+  /// The pipeline to use for this site, or null to use user's setting.
+  String? get defaultPipeline => null;
+
   /// JavaScript to inject for detecting pages and scroll monitoring.
   String get detectionScript;
 

@@ -15,6 +15,7 @@ class ApiService {
   Future<Map<String, dynamic>> submitJob({
     required ServerSettings settings,
     required Uint8List imageBytes,
+    String? pipeline,
     String? title,
     String? chapter,
     String? pageNumber,
@@ -24,7 +25,7 @@ class ApiService {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/jobs');
     final request = http.MultipartRequest('POST', uri)
       ..headers.addAll(_headers(settings))
-      ..fields['pipeline'] = settings.pipeline
+      ..fields['pipeline'] = pipeline ?? settings.pipeline
       ..fields['priority'] = priority
       ..files.add(http.MultipartFile.fromBytes('image', imageBytes,
           filename: 'page.png'));

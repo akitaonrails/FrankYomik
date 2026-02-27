@@ -1,17 +1,18 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import '../providers/jobs_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/image_capture_service.dart';
 import '../webview/dom_inspector.dart';
 import '../webview/js_bridge.dart';
 import '../webview/overlay_controller.dart';
+import '../webview/platform/app_webview.dart';
+import '../webview/platform/app_webview_controller.dart';
 import '../webview/strategies/kindle_strategy.dart';
-import '../widgets/connection_banner.dart';
 import '../widgets/progress_indicator.dart';
 import 'inspector_screen.dart';
 
@@ -40,7 +41,7 @@ class ReaderScreen extends ConsumerStatefulWidget {
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen>
     with WidgetsBindingObserver {
-  InAppWebViewController? _webController;
+  AppWebViewController? _webController;
   final _jsBridge = JsBridge();
   final _inspector = DomInspector();
   final _overlay = OverlayController();
@@ -49,6 +50,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   String _currentUrl = '';
   bool _inspectorMode = false;
   bool _showOverlay = true;
+
+  /// Whether the floating toolbar is visible.
+  bool _toolbarVisible = false;
 
   /// Active Kindle overlays keyed by pageId.
   final Map<String, _KindleOverlay> _kindleOverlays = {};
@@ -62,6 +66,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   /// Last-known stack size for detecting layout changes.
   Size? _stackSize;
 
+  // --- Webtoon batching state ---
+  static const _batchSize = 5;
+  static const _prefetchThreshold = 2;
+
+  /// All detected webtoon page infos, keyed by index.
+  final Map<int, Map<String, dynamic>> _detectedWebtoonPages = {};
+
+  /// Highest webtoon page index that has been submitted (inclusive).
+  int _batchSubmittedUpTo = -1;
+
+  /// Whether a batch submission is currently in progress.
+  bool _batchInProgress = false;
+
+  /// Track active listenManual subscriptions so we can cancel them.
+  final Map<String, ProviderSubscription> _completionListeners = {};
+
   @override
   void initState() {
     super.initState();
@@ -71,7 +91,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    for (final sub in _completionListeners.values) {
+      sub.close();
+    }
+    _completionListeners.clear();
     super.dispose();
+  }
+
+  void _showToolbar() {
+    if (_toolbarVisible) return;
+    setState(() => _toolbarVisible = true);
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted && _toolbarVisible) {
+        setState(() => _toolbarVisible = false);
+      }
+    });
   }
 
   @override
@@ -89,121 +123,167 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         .where((j) => j.isActive)
         .toList()
       ..sort((a, b) => b.percent.compareTo(a.percent));
+    final topPadding = MediaQuery.of(context).padding.top;
 
     return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 0,
-        title: Text(
-          _currentUrl.isEmpty ? widget.initialUrl : _currentUrl,
-          style: const TextStyle(fontSize: 13),
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          // Toggle overlay visibility
-          IconButton(
-            icon: Icon(_showOverlay ? Icons.visibility : Icons.visibility_off),
-            tooltip: _showOverlay ? 'Hide translations' : 'Show translations',
-            onPressed: () {
-              setState(() {
-                _showOverlay = !_showOverlay;
-                // Toggle all Kindle overlays visibility
-                for (final o in _kindleOverlays.values) {
-                  o.visible = _showOverlay;
-                }
-              });
-            },
-          ),
-          // Translate current page manually
-          IconButton(
-            icon: const Icon(Icons.translate),
-            tooltip: 'Translate current page',
-            onPressed: _captureAndTranslate,
-          ),
-          // Inspector toggle
-          IconButton(
-            icon: Icon(_inspectorMode ? Icons.bug_report : Icons.pest_control),
-            tooltip: _inspectorMode ? 'Disable inspector' : 'Enable inspector',
-            onPressed: _toggleInspector,
-          ),
-          // Open inspector logs
-          if (_inspectorMode)
-            IconButton(
-              icon: const Icon(Icons.list),
-              tooltip: 'Inspector logs',
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => InspectorScreen(inspector: _inspector),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final newSize =
+              Size(constraints.maxWidth, constraints.maxHeight);
+          _checkStackSizeChanged(newSize);
+          return Stack(
+            children: [
+              // WebView fills entire screen
+              AppWebView(
+                initialUrl: widget.initialUrl,
+                userAgent:
+                    'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+                onWebViewCreated: (controller) {
+                  _webController = controller;
+                  _jsBridge.attach(controller);
+                  _inspector.attach(controller);
+                  _registerToolbarHandler(controller);
+                  _jsBridge.onPageDetected = _onPageDetected;
+                },
+                onLoadStop: (controller, url) {
+                  final urlStr = url ?? '';
+                  setState(() => _currentUrl = urlStr);
+                  // Reset webtoon batch state on new page
+                  _detectedWebtoonPages.clear();
+                  _batchSubmittedUpTo = -1;
+                  _batchInProgress = false;
+                  // Cancel all completion listeners from previous page
+                  for (final sub in _completionListeners.values) {
+                    sub.close();
+                  }
+                  _completionListeners.clear();
+                  _jsBridge.onUrlChanged(controller, urlStr);
+                  _injectDesktopViewportFit(controller);
+                  // Sync auto-translate button state after toolbar injection
+                  Future.delayed(const Duration(milliseconds: 500), () {
+                    _syncAutoButtonState();
+                  });
+                  if (_inspectorMode) {
+                    _inspector.inject(controller);
+                    _injectKindleDiagnosticIfNeeded(controller);
+                  }
+                },
+                onUpdateVisitedHistory: (controller, url, isReload) {
+                  final urlStr = url ?? '';
+                  setState(() => _currentUrl = urlStr);
+                  _jsBridge.onUrlChanged(controller, urlStr);
+                },
+              ),
+              // Kindle overlay widgets
+              if (_showOverlay)
+                ..._kindleOverlays.values
+                    .where((o) => o.visible)
+                    .map(_buildKindleOverlay),
+              // Hover zone at top to reveal toolbar (desktop)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 32,
+                child: MouseRegion(
+                  onEnter: (_) => _showToolbar(),
+                  child: GestureDetector(
+                    onTap: _showToolbar,
+                    behavior: HitTestBehavior.translucent,
+                  ),
                 ),
               ),
-            ),
-        ],
-      ),
-      body: Column(
-        children: [
-          const ConnectionBanner(),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final newSize =
-                    Size(constraints.maxWidth, constraints.maxHeight);
-                _checkStackSizeChanged(newSize);
-                return Stack(
-                  children: [
-                    InAppWebView(
-                      initialUrlRequest:
-                          URLRequest(url: WebUri(widget.initialUrl)),
-                      initialSettings: InAppWebViewSettings(
-                        javaScriptEnabled: true,
-                        domStorageEnabled: true,
-                        userAgent:
-                            'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-                        mixedContentMode:
-                            MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+              // Floating toolbar
+              if (_toolbarVisible)
+                Positioned(
+                  top: topPadding,
+                  left: 0,
+                  right: 0,
+                  child: Material(
+                    elevation: 4,
+                    color: Theme.of(context)
+                        .colorScheme
+                        .surface
+                        .withAlpha(230),
+                    child: SafeArea(
+                      bottom: false,
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.arrow_back),
+                            tooltip: 'Back',
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                          Expanded(
+                            child: Text(
+                              _currentUrl.isEmpty
+                                  ? widget.initialUrl
+                                  : _currentUrl,
+                              style: const TextStyle(fontSize: 12),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(_showOverlay
+                                ? Icons.visibility
+                                : Icons.visibility_off),
+                            tooltip: _showOverlay
+                                ? 'Hide translations'
+                                : 'Show translations',
+                            onPressed: () {
+                              setState(() {
+                                _showOverlay = !_showOverlay;
+                                for (final o in _kindleOverlays.values) {
+                                  o.visible = _showOverlay;
+                                }
+                              });
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.translate),
+                            tooltip: 'Translate current page',
+                            onPressed: _captureAndTranslate,
+                          ),
+                          IconButton(
+                            icon: Icon(_inspectorMode
+                                ? Icons.bug_report
+                                : Icons.pest_control),
+                            tooltip: _inspectorMode
+                                ? 'Disable inspector'
+                                : 'Enable inspector',
+                            onPressed: _toggleInspector,
+                          ),
+                          if (_inspectorMode)
+                            IconButton(
+                              icon: const Icon(Icons.list),
+                              tooltip: 'Inspector logs',
+                              onPressed: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      InspectorScreen(inspector: _inspector),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
-                      onWebViewCreated: (controller) {
-                        _webController = controller;
-                        _jsBridge.attach(controller);
-                        _inspector.attach(controller);
-                        _jsBridge.onPageDetected = _onPageDetected;
-                      },
-                      onLoadStop: (controller, url) {
-                        final urlStr = url?.toString() ?? '';
-                        setState(() => _currentUrl = urlStr);
-                        _jsBridge.onUrlChanged(controller, urlStr);
-                        if (_inspectorMode) {
-                          _inspector.inject(controller);
-                          _injectKindleDiagnosticIfNeeded(controller);
-                        }
-                      },
-                      onUpdateVisitedHistory: (controller, url, isReload) {
-                        final urlStr = url?.toString() ?? '';
-                        setState(() => _currentUrl = urlStr);
-                        _jsBridge.onUrlChanged(controller, urlStr);
-                      },
                     ),
-                    // Kindle overlay widgets
-                    if (_showOverlay)
-                      ..._kindleOverlays.values
-                          .where((o) => o.visible)
-                          .map(_buildKindleOverlay),
-                    // Progress chip overlay
-                    if (latestActive.isNotEmpty)
-                      Positioned(
-                        bottom: 16,
-                        left: 16,
-                        right: 16,
-                        child: Center(
-                          child: TranslationProgressChip(
-                              job: latestActive.first),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-          ),
-        ],
+                  ),
+                ),
+              // Progress chip overlay
+              if (latestActive.isNotEmpty)
+                Positioned(
+                  bottom: 16,
+                  left: 16,
+                  right: 16,
+                  child: Center(
+                    child: TranslationProgressChip(
+                        job: latestActive.first),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -274,6 +354,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   }
 
   void _onPageDetected(Map<String, dynamic> pageInfo) {
+    debugPrint('[Reader] _onPageDetected: $pageInfo');
     final pageId = pageInfo['pageId'] as String?;
     if (pageId == null) return;
 
@@ -323,12 +404,41 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     }
 
     final settings = ref.read(settingsProvider);
-    if (!settings.autoTranslate) return;
 
-    // For spread pages, check both left and right sub-page jobs
+    // For spread pages (Kindle), check both left and right sub-page jobs
     final pageMode = pageInfo['pageMode'] as String?;
     if (pageMode == 'spread') {
+      if (!settings.autoTranslate) return;
       _handleSpreadDetection(pageId, pageInfo);
+      return;
+    }
+
+    // Webtoon batching: store detected page and trigger batch if needed
+    final index = (pageInfo['index'] as num?)?.toInt();
+    if (index != null && pageId.startsWith('wt-')) {
+      _detectedWebtoonPages[index] = pageInfo;
+      final detected = _detectedWebtoonPages.length;
+      final submitted = _batchSubmittedUpTo + 1;
+      _updateInPageStatus('Page $pageId ($submitted/$detected queued)');
+
+      if (!settings.autoTranslate) {
+        debugPrint('[Reader] Auto-translate OFF, detected $pageId');
+        _updateInPageStatus('Auto-translate OFF');
+        return;
+      }
+
+      // First detection → submit initial batch
+      // Or user scrolled close to batch boundary → submit next batch
+      if (_batchSubmittedUpTo < 0 ||
+          index >= _batchSubmittedUpTo - _prefetchThreshold) {
+        _submitNextBatch();
+      }
+      return;
+    }
+
+    // Non-webtoon single page (Kindle single)
+    if (!settings.autoTranslate) {
+      _updateInPageStatus('Auto-translate OFF');
       return;
     }
 
@@ -383,6 +493,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   Future<void> _capturePageImage(
       String pageId, Map<String, dynamic> pageInfo) async {
+    debugPrint('[Reader] _capturePageImage pageId=$pageId type=${pageInfo['type']}');
     final controller = _webController;
     if (controller == null) return;
 
@@ -443,9 +554,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final meta = _jsBridge.parseCurrentUrl(_currentUrl);
 
         // Submit left and right halves as separate jobs
+        final spreadPipeline = _jsBridge.activeStrategy?.defaultPipeline;
         await ref.read(jobsProvider.notifier).submitPage(
               pageId: leftId,
               imageBytes: halves.$1,
+              pipeline: spreadPipeline,
               title: meta?.title,
               chapter: meta?.chapter,
               pageNumber: '${pageInfo['index']}-L',
@@ -454,6 +567,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         await ref.read(jobsProvider.notifier).submitPage(
               pageId: rightId,
               imageBytes: halves.$2,
+              pipeline: spreadPipeline,
               title: meta?.title,
               chapter: meta?.chapter,
               pageNumber: '${pageInfo['index']}-R',
@@ -464,47 +578,167 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         return;
       }
     } else {
-      // Webtoon: JS-based capture
-      final captureJs = _jsBridge.getCaptureScript(pageId);
-      if (captureJs != null) {
-        final result =
-            await controller.evaluateJavascript(source: captureJs);
-        if (result is String) {
-          try {
-            imageBytes = base64Decode(result);
-          } catch (_) {}
+      // Webtoon: download image directly from src URL
+      final src = pageInfo['src'] as String?;
+      if (src != null && src.isNotEmpty) {
+        debugPrint('[Reader] Downloading image for $pageId from $src');
+        try {
+          final response = await http.get(
+            Uri.parse(src),
+            headers: {'Referer': _currentUrl},
+          );
+          if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+            imageBytes = response.bodyBytes;
+            debugPrint('[Reader] Downloaded ${imageBytes!.length} bytes for $pageId');
+          } else {
+            debugPrint('[Reader] Download failed for $pageId: HTTP ${response.statusCode}');
+          }
+        } catch (e) {
+          debugPrint('[Reader] Download error for $pageId: $e');
         }
       }
     }
 
-    if (imageBytes == null || imageBytes.isEmpty) return;
+    if (imageBytes == null || imageBytes.isEmpty) {
+      debugPrint('[Reader] No image captured for $pageId');
+      return;
+    }
+
+    // Use site-specific pipeline (webtoon for Korean, user setting for Kindle)
+    final pipeline = _jsBridge.activeStrategy?.defaultPipeline;
+    final srcForLog = (pageInfo['src'] as String?)?.substring(0,
+        ((pageInfo['src'] as String?)?.length ?? 0).clamp(0, 60));
+    debugPrint('[Reader] Submitting $pageId (${imageBytes.length} bytes, '
+        'pipeline=${pipeline ?? 'default'}, src=$srcForLog)');
+    _updateInPageStatus('Submitting $pageId...');
 
     // Extract metadata from URL
     final meta = _jsBridge.parseCurrentUrl(_currentUrl);
 
+    // For webtoon, use the image index as page number (not the URL-derived '0')
+    final pageNumber = pageInfo['index']?.toString() ?? meta?.pageNumber;
     await ref.read(jobsProvider.notifier).submitPage(
           pageId: pageId,
           imageBytes: imageBytes,
+          pipeline: pipeline,
           title: meta?.title,
           chapter: meta?.chapter,
-          pageNumber: meta?.pageNumber ?? pageInfo['index']?.toString(),
+          pageNumber: pageNumber,
           sourceUrl: _currentUrl,
         );
+
+    _updateInPageStatus('Queued $pageId');
 
     // Watch for completion to apply overlay
     _watchForCompletion(pageId);
   }
 
+  /// Submit the next batch of webtoon pages (up to _batchSize).
+  /// Downloads and submits pages in parallel for faster throughput.
+  Future<void> _submitNextBatch() async {
+    if (_batchInProgress) return;
+    _batchInProgress = true;
+
+    try {
+      // Find the next pages to submit (sorted by index)
+      final sortedIndices = _detectedWebtoonPages.keys.toList()..sort();
+      final jobs = ref.read(jobsProvider);
+
+      final toSubmit = <int>[];
+      for (final idx in sortedIndices) {
+        if (idx <= _batchSubmittedUpTo) continue;
+        final pageId = 'wt-$idx';
+        if (jobs.containsKey(pageId)) continue;
+        toSubmit.add(idx);
+        if (toSubmit.length >= _batchSize) break;
+      }
+
+      if (toSubmit.isEmpty) {
+        debugPrint('[Reader] No new pages to batch-submit');
+        return;
+      }
+
+      debugPrint('[Reader] Batch submitting ${toSubmit.length} pages in parallel: $toSubmit');
+      _updateInPageStatus('Batch: submitting ${toSubmit.length} pages...');
+
+      // Submit all pages in parallel for faster throughput
+      await Future.wait(
+        toSubmit.map((idx) async {
+          final pageInfo = _detectedWebtoonPages[idx]!;
+          final pageId = pageInfo['pageId'] as String;
+          try {
+            await _capturePageImage(pageId, pageInfo);
+          } catch (e) {
+            debugPrint('[Reader] Failed to capture $pageId: $e');
+          }
+        }),
+      );
+
+      // Update batch watermark to highest submitted index
+      final maxSubmitted = toSubmit.reduce((a, b) => a > b ? a : b);
+      if (maxSubmitted > _batchSubmittedUpTo) {
+        _batchSubmittedUpTo = maxSubmitted;
+      }
+
+      final total = _detectedWebtoonPages.length;
+      final done = _batchSubmittedUpTo + 1;
+      _updateInPageStatus('Queued $done/$total pages');
+    } finally {
+      _batchInProgress = false;
+      // Check if more pages are waiting — schedule next batch
+      final sortedIndices = _detectedWebtoonPages.keys.toList()..sort();
+      final hasMore = sortedIndices.any((idx) =>
+          idx > _batchSubmittedUpTo &&
+          !ref.read(jobsProvider).containsKey('wt-$idx'));
+      if (hasMore) {
+        debugPrint('[Reader] More pages available, scheduling next batch');
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted) _submitNextBatch();
+        });
+      }
+    }
+  }
+
   void _watchForCompletion(String pageId) {
-    ref.listenManual(jobsProvider, (previous, next) {
+    // Don't add duplicate listeners
+    if (_completionListeners.containsKey(pageId)) return;
+
+    // If already complete (e.g., cache hit inside submitPage), apply immediately
+    final existingJob = ref.read(jobsProvider)[pageId];
+    if (existingJob != null &&
+        existingJob.isComplete &&
+        existingJob.translatedImage != null) {
+      debugPrint('[Reader] Job $pageId already complete, applying overlay immediately');
+      _updateInPageStatus('$pageId done (cached)!');
+      if (_showOverlay) {
+        _applyOverlay(pageId, existingJob.translatedImage!);
+      }
+      return;
+    }
+
+    final sub = ref.listenManual(jobsProvider, (previous, next) {
       final job = next[pageId];
-      if (job != null &&
-          job.isComplete &&
-          job.translatedImage != null &&
-          _showOverlay) {
-        _applyOverlay(pageId, job.translatedImage!);
+      if (job == null) return;
+      final prevJob = previous?[pageId];
+      if (prevJob?.status != job.status) {
+        _updateInPageStatus('$pageId: ${job.status.name}');
+      }
+      if (job.isComplete && job.translatedImage != null) {
+        debugPrint('[Reader] Job $pageId completed, applying overlay');
+        _updateInPageStatus('$pageId done!');
+        // Cancel this listener — job is done
+        _completionListeners[pageId]?.close();
+        _completionListeners.remove(pageId);
+        if (_showOverlay) {
+          _applyOverlay(pageId, job.translatedImage!);
+        }
+      } else if (job.isFailed) {
+        _updateInPageStatus('$pageId failed');
+        _completionListeners[pageId]?.close();
+        _completionListeners.remove(pageId);
       }
     });
+    _completionListeners[pageId] = sub;
   }
 
   /// Watch for both halves of a spread to complete, then apply overlay.
@@ -531,7 +765,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (controller == null) return;
 
     if (_jsBridge.activeStrategy?.siteName == 'webtoon') {
-      await _overlay.replaceImage(controller, pageId, imageBytes);
+      // Look up the original src URL from detected page info
+      final index = int.tryParse(pageId.replaceFirst('wt-', ''));
+      String? originalSrc;
+      if (index != null) {
+        originalSrc = _detectedWebtoonPages[index]?['src'] as String?;
+      }
+      debugPrint('[Reader] Applying overlay for $pageId (index=$index), '
+          'translatedBytes=${imageBytes.length}, '
+          'src=${originalSrc?.substring(0, (originalSrc?.length ?? 0).clamp(0, 80))}');
+      if (originalSrc != null && originalSrc.isNotEmpty) {
+        final ok = await _overlay.replaceImageBySrc(controller, originalSrc, imageBytes);
+        debugPrint('[Reader] replaceImageBySrc for $pageId returned $ok');
+      } else {
+        debugPrint('[Reader] WARNING: No src found for $pageId (index=$index), '
+            'detected pages: ${_detectedWebtoonPages.keys.toList()}');
+      }
     } else if (_jsBridge.activeStrategy?.siteName == 'kindle') {
       // Kindle: Flutter overlay positioned over the reader area
       final rect = _readerRect;
@@ -579,22 +828,31 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final controller = _webController;
     if (controller == null) return;
 
+    _updateInPageStatus('Capturing screenshot...');
+
     // Take a full screenshot for manual translation
     final imageBytes = await _capture.takeScreenshot(controller);
-    if (imageBytes == null) return;
+    if (imageBytes == null) {
+      _updateInPageStatus('Capture failed');
+      return;
+    }
 
     final meta = _jsBridge.parseCurrentUrl(_currentUrl);
     final pageId = 'manual-${DateTime.now().millisecondsSinceEpoch}';
 
+    _updateInPageStatus('Submitting...');
+
     await ref.read(jobsProvider.notifier).submitPage(
           pageId: pageId,
           imageBytes: imageBytes,
+          pipeline: _jsBridge.activeStrategy?.defaultPipeline,
           title: meta?.title,
           chapter: meta?.chapter,
           pageNumber: meta?.pageNumber,
           sourceUrl: _currentUrl,
         );
 
+    _updateInPageStatus('Queued $pageId');
     _watchForCompletion(pageId);
   }
 
@@ -612,10 +870,172 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     }
   }
 
-  void _injectKindleDiagnosticIfNeeded(InAppWebViewController controller) {
+  void _injectKindleDiagnosticIfNeeded(AppWebViewController controller) {
     if (_jsBridge.activeStrategy?.siteName == 'kindle') {
       controller.evaluateJavascript(
           source: KindleStrategy.diagnosticScript);
     }
+  }
+
+  /// Inject CSS that caps image width on wide landscape viewports,
+  /// and an in-page floating toolbar with translate/back/progress controls.
+  void _injectDesktopViewportFit(AppWebViewController controller) {
+    controller.evaluateJavascript(source: '''
+(function() {
+  if (window.__frankViewportFit) return;
+  window.__frankViewportFit = true;
+
+  /* --- Responsive image width --- */
+  var style = document.createElement('style');
+  style.id = '__frankViewportFit';
+  document.head.appendChild(style);
+
+  function updateLayout() {
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    if (vw > vh * 1.2) {
+      var maxW = Math.round(vw / 3);
+      style.textContent =
+        'img.toon_image, #comic_view_area img, .wt_viewer img, #sectionContWide img {' +
+        '  max-width: ' + maxW + 'px !important;' +
+        '  width: auto !important; height: auto !important;' +
+        '  display: block !important;' +
+        '  margin-left: auto !important; margin-right: auto !important;' +
+        '}';
+    } else {
+      style.textContent = '';
+    }
+  }
+  updateLayout();
+  window.addEventListener('resize', updateLayout);
+
+  /* --- Floating toolbar --- */
+  var bar = document.createElement('div');
+  bar.id = '__frankBar';
+  bar.innerHTML =
+    '<button id="__frankBack" title="Back">&#x2190;</button>' +
+    '<button id="__frankAuto" title="Toggle auto-translate">Auto: ON</button>' +
+    '<button id="__frankTranslate" title="Translate visible pages">&#x1F30D; Translate</button>' +
+    '<span id="__frankStatus"></span>';
+  bar.style.cssText =
+    'position:fixed; bottom:12px; right:12px; z-index:999999;' +
+    'display:flex; align-items:center; gap:6px;' +
+    'background:rgba(30,30,30,0.85); color:#fff; padding:6px 10px;' +
+    'border-radius:8px; font:13px/1.3 sans-serif; box-shadow:0 2px 8px rgba(0,0,0,0.4);' +
+    'user-select:none; -webkit-user-select:none;';
+
+  var btnStyle =
+    'background:none; border:1px solid rgba(255,255,255,0.3); color:#fff;' +
+    'border-radius:4px; padding:4px 8px; cursor:pointer; font:inherit;';
+
+  document.body.appendChild(bar);
+
+  var backBtn = document.getElementById('__frankBack');
+  var autoBtn = document.getElementById('__frankAuto');
+  var transBtn = document.getElementById('__frankTranslate');
+  backBtn.style.cssText = btnStyle;
+  autoBtn.style.cssText = btnStyle;
+  transBtn.style.cssText = btnStyle;
+
+  backBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'back');
+  });
+  autoBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_auto');
+  });
+  transBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'translate');
+  });
+
+  /* Global functions Dart can call */
+  window.__frankSetStatus = function(text) {
+    var el = document.getElementById('__frankStatus');
+    if (el) el.textContent = text;
+  };
+  window.__frankSetAutoState = function(on) {
+    var el = document.getElementById('__frankAuto');
+    if (el) {
+      el.textContent = 'Auto: ' + (on ? 'ON' : 'OFF');
+      el.style.borderColor = on ? '#4caf50' : 'rgba(255,255,255,0.3)';
+      el.style.color = on ? '#4caf50' : '#fff';
+    }
+  };
+})();
+''');
+  }
+
+  /// Register the toolbar action handler on the WebView controller.
+  void _registerToolbarHandler(AppWebViewController controller) {
+    controller.addJavaScriptHandler(
+      handlerName: 'onToolbarAction',
+      callback: (args) {
+        final action = args.isNotEmpty ? args[0] as String? : null;
+        debugPrint('[Reader] Toolbar action: $action');
+        switch (action) {
+          case 'back':
+            Navigator.pop(context);
+            break;
+          case 'toggle_auto':
+            _toggleAutoTranslate();
+            break;
+          case 'translate':
+            _translateVisiblePages();
+            break;
+        }
+        return null;
+      },
+    );
+  }
+
+  /// Toggle auto-translate and update the in-page button state.
+  void _toggleAutoTranslate() {
+    final settings = ref.read(settingsProvider);
+    final newValue = !settings.autoTranslate;
+    ref.read(settingsProvider.notifier).update(
+          settings.copyWith(autoTranslate: newValue),
+        );
+    _syncAutoButtonState();
+    debugPrint('[Reader] Auto-translate toggled to $newValue');
+    if (newValue) {
+      _updateInPageStatus('Auto-translate ON');
+      // Immediately start submitting detected pages
+      if (_detectedWebtoonPages.isNotEmpty) {
+        _submitNextBatch();
+      }
+    } else {
+      _updateInPageStatus('Auto-translate OFF');
+    }
+  }
+
+  /// Sync the in-page Auto button appearance with current settings.
+  void _syncAutoButtonState() {
+    final controller = _webController;
+    if (controller == null) return;
+    final on = ref.read(settingsProvider).autoTranslate;
+    controller.evaluateJavascript(
+        source: 'if(window.__frankSetAutoState) window.__frankSetAutoState($on);');
+  }
+
+  /// Manual translate: submit the next batch of detected pages.
+  Future<void> _translateVisiblePages() async {
+    if (_detectedWebtoonPages.isEmpty) {
+      // Non-webtoon: fall back to screenshot capture
+      _captureAndTranslate();
+      return;
+    }
+    // Force-submit the next batch of webtoon pages
+    _submitNextBatch();
+  }
+
+  /// Push a status message into the in-page toolbar.
+  void _updateInPageStatus(String text) {
+    final controller = _webController;
+    if (controller == null) return;
+    final escaped = text.replaceAll("'", "\\'").replaceAll('\n', ' ');
+    controller.evaluateJavascript(
+        source: "if(window.__frankSetStatus) window.__frankSetStatus('$escaped');");
   }
 }

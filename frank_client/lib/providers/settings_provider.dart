@@ -17,9 +17,9 @@ class SettingsNotifier extends StateNotifier<ServerSettings> {
     state = ServerSettings(
       serverUrl: prefs.getString('server_url') ?? 'http://localhost:8080',
       authToken: prefs.getString('auth_token') ?? '',
-      pipeline: prefs.getString('pipeline') ?? 'manga_translate',
+      pipeline: prefs.getString('pipeline') ?? 'manga_furigana',
       prefetchPages: prefs.getInt('prefetch_pages') ?? 2,
-      autoTranslate: prefs.getBool('auto_translate') ?? false,
+      autoTranslate: prefs.getBool('auto_translate') ?? true,
     );
   }
 

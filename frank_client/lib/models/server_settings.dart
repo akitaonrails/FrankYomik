@@ -9,9 +9,9 @@ class ServerSettings {
   const ServerSettings({
     this.serverUrl = 'http://localhost:8080',
     this.authToken = '',
-    this.pipeline = 'manga_translate',
+    this.pipeline = 'manga_furigana',
     this.prefetchPages = 2,
-    this.autoTranslate = false,
+    this.autoTranslate = true,
   });
 
   ServerSettings copyWith({

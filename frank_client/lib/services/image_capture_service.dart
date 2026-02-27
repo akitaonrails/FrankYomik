@@ -1,23 +1,18 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:image/image.dart' as img;
+import '../webview/platform/app_webview_controller.dart';
 
 /// Captures images from the WebView using different strategies.
 class ImageCaptureService {
   /// Take a screenshot of the WebView and return it as PNG bytes.
-  Future<Uint8List?> takeScreenshot(InAppWebViewController controller) async {
-    return controller.takeScreenshot(
-      screenshotConfiguration: ScreenshotConfiguration(
-        compressFormat: CompressFormat.PNG,
-        quality: 100,
-      ),
-    );
+  Future<Uint8List?> takeScreenshot(AppWebViewController controller) async {
+    return controller.takeScreenshot();
   }
 
   /// Extract an image from the page by evaluating JS that fetches it as base64.
   Future<Uint8List?> captureImageElement(
-      InAppWebViewController controller, String selector) async {
+      AppWebViewController controller, String selector) async {
     final result = await controller.evaluateJavascript(source: '''
       (function() {
         const img = document.querySelector('$selector');

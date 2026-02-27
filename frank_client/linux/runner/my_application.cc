@@ -6,6 +6,7 @@
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+#include "webview_bridge.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
@@ -65,7 +66,12 @@ static void my_application_activate(GApplication* application) {
   gdk_rgba_parse(&background_color, "#000000");
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
-  gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
+
+  // Wrap FlView in a GtkOverlay so WebKitWebView can be layered on top.
+  GtkOverlay* overlay = GTK_OVERLAY(gtk_overlay_new());
+  gtk_widget_show(GTK_WIDGET(overlay));
+  gtk_container_add(GTK_CONTAINER(overlay), GTK_WIDGET(view));
+  gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(overlay));
 
   // Show the window when Flutter renders.
   // Requires the view to be realized so we can start rendering.
@@ -74,6 +80,11 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+
+  // Initialize the WebKitGTK bridge with the overlay container.
+  FlEngine* engine = fl_view_get_engine(view);
+  FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
+  webview_bridge_init(messenger, overlay);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }

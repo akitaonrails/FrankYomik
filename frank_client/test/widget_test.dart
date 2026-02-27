@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:frank_client/models/server_settings.dart';
 import 'package:frank_client/models/page_job.dart';
 import 'package:frank_client/models/site_config.dart';
-import 'package:frank_client/webview/strategies/webtoon_strategy.dart';
+import 'package:frank_client/webview/strategies/naver_webtoon_strategy.dart';
 import 'package:frank_client/webview/strategies/kindle_strategy.dart';
 import 'package:frank_client/services/image_capture_service.dart';
 import 'package:frank_client/webview/dom_inspector.dart';
@@ -15,7 +15,8 @@ void main() {
     test('defaults', () {
       const s = ServerSettings();
       expect(s.serverUrl, 'http://localhost:8080');
-      expect(s.pipeline, 'manga_translate');
+      expect(s.pipeline, 'manga_furigana');
+      expect(s.autoTranslate, true);
       expect(s.isConfigured, false);
     });
 
@@ -56,28 +57,50 @@ void main() {
   });
 
   group('SiteConfig', () {
-    test('has kindle and webtoon', () {
+    test('has kindle and naver webtoon', () {
       expect(SiteConfig.sites.length, 2);
       expect(SiteConfig.sites[0].name, 'kindle');
-      expect(SiteConfig.sites[1].name, 'webtoon');
+      expect(SiteConfig.sites[1].name, 'naver_webtoon');
     });
   });
 
-  group('WebtoonStrategy', () {
-    test('matches webtoon URLs', () {
-      final s = WebtoonStrategy();
-      expect(s.matches('https://www.webtoons.com/en/action/tower'), true);
-      expect(s.matches('https://www.webtoon.com/episode'), true);
+  group('NaverWebtoonStrategy', () {
+    test('matches naver webtoon URLs', () {
+      final s = NaverWebtoonStrategy();
+      expect(s.matches('https://m.comic.naver.com/webtoon/detail?titleId=747269&no=297'), true);
+      expect(s.matches('https://comic.naver.com/webtoon/detail?titleId=747269&no=297'), true);
+      expect(s.matches('https://m.comic.naver.com/webtoon'), true);
+      expect(s.matches('https://www.webtoons.com/en/action/tower'), false);
       expect(s.matches('https://example.com'), false);
     });
 
-    test('parseUrl extracts metadata', () {
-      final s = WebtoonStrategy();
+    test('parseUrl extracts titleId and episode number', () {
+      final s = NaverWebtoonStrategy();
       final meta = s.parseUrl(
-          'https://www.webtoons.com/en/action/tower-of-god/season-3-ep-297/viewer?title_no=95');
+          'https://m.comic.naver.com/webtoon/detail?titleId=747269&no=297');
       expect(meta, isNotNull);
-      expect(meta!.title, 'tower-of-god');
-      expect(meta.chapter, '3');
+      expect(meta!.title, '747269');
+      expect(meta.chapter, '297');
+    });
+
+    test('parseUrl handles missing episode number', () {
+      final s = NaverWebtoonStrategy();
+      final meta = s.parseUrl(
+          'https://m.comic.naver.com/webtoon/detail?titleId=747269');
+      expect(meta, isNotNull);
+      expect(meta!.title, '747269');
+      expect(meta.chapter, '0');
+    });
+
+    test('parseUrl returns null without titleId', () {
+      final s = NaverWebtoonStrategy();
+      final meta = s.parseUrl('https://m.comic.naver.com/webtoon');
+      expect(meta, isNull);
+    });
+
+    test('siteName is webtoon', () {
+      final s = NaverWebtoonStrategy();
+      expect(s.siteName, 'webtoon');
     });
   });
 

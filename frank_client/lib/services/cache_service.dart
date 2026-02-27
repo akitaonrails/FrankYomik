@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -10,11 +11,25 @@ class CacheService {
   Database? _db;
   String? _cacheDir;
 
+  /// Max age for cached entries (30 days).
+  static const maxAgeDays = 30;
+
+  /// Max total cache size in bytes (500 MB).
+  static const maxCacheBytes = 500 * 1024 * 1024;
+
   Future<void> init() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
 
-    final appDir = await getApplicationSupportDirectory();
+    // On Linux, getApplicationSupportDirectory() can point to a read-only
+    // path. Use getApplicationDocumentsDirectory() as a reliable fallback.
+    Directory appDir;
+    if (Platform.isLinux) {
+      appDir = await getApplicationDocumentsDirectory();
+      appDir = Directory(p.join(appDir.path, '.frank_client'));
+    } else {
+      appDir = await getApplicationSupportDirectory();
+    }
     _cacheDir = p.join(appDir.path, 'cache');
     await Directory(_cacheDir!).create(recursive: true);
 
@@ -40,6 +55,9 @@ class CacheService {
             'CREATE INDEX idx_pages_meta ON pages(pipeline, title, chapter, page_number)');
       },
     );
+
+    // Run eviction in background on startup
+    evict();
   }
 
   /// Compute SHA256 hash of image bytes.
@@ -108,6 +126,63 @@ class CacheService {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  /// Evict expired entries (older than maxAgeDays) and enforce size limit.
+  Future<void> evict() async {
+    if (_db == null) return;
+
+    // 1. Delete entries older than maxAgeDays
+    final cutoff = DateTime.now()
+        .subtract(const Duration(days: maxAgeDays))
+        .millisecondsSinceEpoch;
+    final expired = await _db!.query(
+      'pages',
+      columns: ['id', 'file_path'],
+      where: 'created_at < ?',
+      whereArgs: [cutoff],
+    );
+    for (final row in expired) {
+      final filePath = row['file_path'] as String;
+      try {
+        await File(filePath).delete();
+      } catch (_) {}
+    }
+    if (expired.isNotEmpty) {
+      await _db!.delete('pages', where: 'created_at < ?', whereArgs: [cutoff]);
+      debugPrint('[Cache] Evicted ${expired.length} expired entries');
+    }
+
+    // 2. Enforce size limit — delete oldest entries until under maxCacheBytes
+    final allRows = await _db!.query(
+      'pages',
+      columns: ['id', 'file_path', 'created_at'],
+      orderBy: 'created_at DESC',
+    );
+    var totalSize = 0;
+    final toDelete = <int>[];
+    final filesToDelete = <String>[];
+    for (final row in allRows) {
+      final filePath = row['file_path'] as String;
+      final file = File(filePath);
+      if (await file.exists()) {
+        totalSize += await file.length();
+      }
+      if (totalSize > maxCacheBytes) {
+        toDelete.add(row['id'] as int);
+        filesToDelete.add(filePath);
+      }
+    }
+    for (final path in filesToDelete) {
+      try {
+        await File(path).delete();
+      } catch (_) {}
+    }
+    if (toDelete.isNotEmpty) {
+      final ids = toDelete.join(',');
+      await _db!.delete('pages', where: 'id IN ($ids)');
+      debugPrint('[Cache] Evicted ${toDelete.length} entries over size limit');
+    }
   }
 
   Future<void> dispose() async {

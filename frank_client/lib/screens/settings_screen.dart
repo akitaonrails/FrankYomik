@@ -98,12 +98,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           DropdownButtonFormField<String>(
             initialValue: _pipeline,
             decoration: const InputDecoration(
-              labelText: 'Pipeline',
+              labelText: 'Kindle Pipeline (Japanese)',
+              helperText: 'Webtoon always uses Korean→English pipeline',
               border: OutlineInputBorder(),
             ),
-            items: ServerSettings.pipelines
-                .map((p) => DropdownMenuItem(value: p, child: Text(p)))
-                .toList(),
+            items: const [
+              DropdownMenuItem(
+                  value: 'manga_furigana',
+                  child: Text('Furigana (add reading aids)')),
+              DropdownMenuItem(
+                  value: 'manga_translate',
+                  child: Text('Translate (Japanese→English)')),
+            ],
             onChanged: (v) => setState(() => _pipeline = v ?? _pipeline),
           ),
           const SizedBox(height: 16),

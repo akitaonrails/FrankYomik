@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/page_job.dart';
 import '../models/server_settings.dart';
@@ -40,6 +41,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   Future<void> submitPage({
     required String pageId,
     required Uint8List imageBytes,
+    String? pipeline,
     String? title,
     String? chapter,
     String? pageNumber,
@@ -47,8 +49,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     String priority = 'high',
   }) async {
     // Check local cache first
+    final effectivePipeline = pipeline ?? _settings.pipeline;
     final hash = _cache.hashImage(imageBytes);
-    final cached = await _cache.lookupByHash(hash, _settings.pipeline);
+    final cached = await _cache.lookupByHash(hash, effectivePipeline);
     if (cached != null) {
       state = {
         ...state,
@@ -68,7 +71,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     // Also check by metadata
     if (title != null && chapter != null && pageNumber != null) {
       final metaCached = await _cache.lookupByMetadata(
-          _settings.pipeline, title, chapter, pageNumber);
+          effectivePipeline, title, chapter, pageNumber);
       if (metaCached != null) {
         state = {
           ...state,
@@ -93,6 +96,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       chapter: chapter,
       pageNumber: pageNumber,
       sourceUrl: sourceUrl,
+      pipeline: effectivePipeline,
       originalImage: imageBytes,
       status: PageJobStatus.queued,
     );
@@ -102,6 +106,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       final response = await _api.submitJob(
         settings: _settings,
         imageBytes: imageBytes,
+        pipeline: effectivePipeline,
         title: title,
         chapter: chapter,
         pageNumber: pageNumber,
@@ -131,7 +136,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           // Save to local cache
           await _cache.store(
             hash: hash,
-            pipeline: _settings.pipeline,
+            pipeline: effectivePipeline,
             imageBytes: img,
             title: title,
             chapter: chapter,
@@ -155,13 +160,18 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   void _handleWsMessage(Map<String, dynamic> msg) {
     final type = msg['type'] as String?;
     final jobId = msg['job_id'] as String?;
+    debugPrint('[Jobs] WS message: type=$type, jobId=$jobId');
     if (type == null || jobId == null) return;
 
     // Find the PageJob with this jobId
     final entry = state.entries.where((e) => e.value.jobId == jobId).firstOrNull;
-    if (entry == null) return;
+    if (entry == null) {
+      debugPrint('[Jobs] WS: No matching job for $jobId');
+      return;
+    }
 
     final job = entry.value;
+    debugPrint('[Jobs] WS: Matched ${entry.key} (jobId=$jobId)');
 
     if (type == 'job_progress') {
       job.status = PageJobStatus.processing;
@@ -171,6 +181,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       state = {...state};
     } else if (type == 'job_complete') {
       final status = msg['status'] as String?;
+      debugPrint('[Jobs] WS: Job ${entry.key} complete, status=$status');
       if (status == 'completed') {
         job.imageUrl = msg['image_url'] as String?;
         job.cached = msg['cached'] == true;
@@ -187,8 +198,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     if (job.imageUrl == null) return;
 
     try {
+      debugPrint('[Jobs] Downloading translated image for ${job.pageId} from ${job.imageUrl}');
       final img =
           await _api.getJobImage(settings: _settings, imageUrl: job.imageUrl!);
+      debugPrint('[Jobs] Downloaded ${img.length} bytes for ${job.pageId}, applying to state');
       job.translatedImage = img;
       job.status = PageJobStatus.completed;
       state = {...state};
@@ -198,7 +211,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         final hash = _cache.hashImage(job.originalImage!);
         await _cache.store(
           hash: hash,
-          pipeline: _settings.pipeline,
+          pipeline: job.pipeline ?? _settings.pipeline,
           imageBytes: img,
           title: job.title,
           chapter: job.chapter,
@@ -214,7 +227,8 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
 
   /// Fallback polling for active jobs when WebSocket is unavailable.
   void _startPollingFallback() {
-    _pollTimer?.cancel();
+    // Don't restart if already polling — restarting resets the 3s countdown
+    if (_pollTimer != null) return;
     _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       final activeJobs =
           state.values.where((j) => j.isActive && j.jobId != null).toList();
@@ -230,15 +244,19 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
               settings: _settings, jobId: job.jobId!);
           final jobStatus = status['status'] as String?;
           if (jobStatus == 'completed') {
+            debugPrint('[Jobs] Poll: ${job.pageId} (${job.jobId}) completed, downloading image');
             job.imageUrl =
                 status['image_url'] as String? ?? '/api/v1/jobs/${job.jobId}/image';
             _downloadTranslatedImage(job);
           } else if (jobStatus == 'failed') {
+            debugPrint('[Jobs] Poll: ${job.pageId} (${job.jobId}) failed');
             job.status = PageJobStatus.failed;
             job.error = status['error'] as String? ?? 'Failed';
             state = {...state};
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[Jobs] Poll error for ${job.pageId}: $e');
+        }
       }
     });
   }
