@@ -90,7 +90,7 @@ def contour_inner_bbox(contour: np.ndarray, margin: int = 8) -> tuple[int, int, 
 
 
 def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
-                       margin: int = 2,
+                       margin: int = 1,
                        fill_color: tuple = (255, 255, 255)) -> None:
     """Clear the area covered by dark text strokes inside a bbox.
 
@@ -109,8 +109,8 @@ def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
     dark_mask = (roi < 160).astype(np.uint8) * 255
 
     # Dilate to connect nearby strokes into solid text clusters
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    connected = cv2.dilate(dark_mask, kernel, iterations=2)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    connected = cv2.dilate(dark_mask, kernel, iterations=1)
 
     coords = cv2.findNonZero(connected)
     if coords is None:
@@ -134,12 +134,39 @@ def clear_text_in_contour(img: Image.Image, contour: np.ndarray,
     """Fill the interior of a contour with a solid color (default white) in-place.
 
     Uses the bubble's actual contour shape instead of a bounding rectangle,
-    preserving artwork outside the bubble boundary.
+    preserving artwork outside the bubble boundary.  After the contour fill,
+    erases any remaining dark text strokes inside the bbox that the contour
+    didn't cover — but preserves the bubble border by only targeting dark
+    pixel islands that don't touch the bbox edge.
     """
     img_array = np.array(img)
     mask = np.zeros(img_array.shape[:2], dtype=np.uint8)
     cv2.drawContours(mask, [contour], -1, 255, -1)
     img_array[mask == 255] = fill_color
+
+    # Second pass: erase leftover text strokes outside the contour.
+    # The contour often doesn't fully cover the bubble interior, leaving
+    # Japanese text visible near the edges.  We find dark pixel clusters
+    # that are inside the bbox but outside the contour, and erase only
+    # the ones that don't touch the bbox edge (those are text, not border).
+    x, y, w, h = cv2.boundingRect(contour)
+    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    roi_gray = gray[y:y + h, x:x + w]
+    roi_cmask = mask[y:y + h, x:x + w]
+    uncovered_dark = ((roi_cmask == 0) & (roi_gray < 150)).astype(np.uint8) * 255
+
+    if np.any(uncovered_dark):
+        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            uncovered_dark, connectivity=8)
+        for i in range(1, n_labels):
+            if stats[i, cv2.CC_STAT_AREA] < 10:
+                continue
+            comp = (labels == i)
+            touches = (np.any(comp[0, :]) or np.any(comp[-1, :]) or
+                       np.any(comp[:, 0]) or np.any(comp[:, -1]))
+            if not touches:
+                img_array[y:y + h, x:x + w][comp] = fill_color
+
     img.paste(Image.fromarray(img_array))
 
 
