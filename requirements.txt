@@ -5,6 +5,7 @@ Pillow
 requests
 deep-translator
 pyyaml
+redis
 nodriver
 easyocr
 simple-lama-inpainting  # install with: pip install --no-deps simple-lama-inpainting

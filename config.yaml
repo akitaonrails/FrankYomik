@@ -97,3 +97,9 @@ webtoon:
     # Diffusion-specific (ignored for LaMa):
     num_inference_steps: 28
     prompt: "clean empty speech bubble interior, flat color"
+
+worker:
+  redis_url: "redis://localhost:6379"
+  consumer_group: "workers"
+  heartbeat_interval: 30
+  job_timeout: 300

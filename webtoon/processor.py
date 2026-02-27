@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from pipeline.image_utils import clear_text_in_region, load_image, load_image_pil
+from pipeline.image_utils import (
+    clear_text_in_region, encode_image_pil, load_image, load_image_pil,
+)
 from .config import FONT_KO, FONT_KO_BOLD
 
 from .bubble_detector import WebtoonBubble, detect_bubbles
@@ -59,6 +61,14 @@ def load_page(path: str) -> WebtoonPageResult:
         name=name,
         img_cv=load_image(path),
         img_pil=load_image_pil(path),
+    )
+
+
+def load_page_from_memory(img_cv: np.ndarray, img_pil: Image.Image,
+                          name: str = "page") -> WebtoonPageResult:
+    """Create WebtoonPageResult from in-memory images (no file I/O)."""
+    return WebtoonPageResult(
+        image_path="", name=name, img_cv=img_cv, img_pil=img_pil,
     )
 
 
@@ -956,3 +966,54 @@ def _draw_webtoon_debug(page: WebtoonPageResult) -> Image.Image:
         draw.rectangle(det.bbox_rect, outline="magenta", width=2)
 
     return debug_img
+
+
+def render_page_to_bytes(page: WebtoonPageResult, debug: bool = False) -> bytes:
+    """Run the full render stage and return PNG bytes instead of saving to disk.
+
+    Delegates to render_page() logic but captures the output image as bytes.
+    Requires that page.regions and page.sfx_detections are already populated.
+    """
+    # We need a temporary render — reuse the existing render_page internals
+    # by inlining the core loop instead of calling render_page (which requires out_dir).
+    if debug:
+        _draw_webtoon_debug(page)
+
+    page.output_img = page.img_pil.copy()
+    img_w, img_h = page.output_img.width, page.output_img.height
+
+    cleared_bubbles: set[int] = set()
+    inpainted_bubbles: set[int] = set()
+
+    for region in page.regions:
+        if not region.english:
+            continue
+
+        bubble = region.bubble
+        bubble_id = id(bubble)
+
+        if bubble_id not in cleared_bubbles:
+            if inpaint_bubble(page.img_pil, bubble, target_img=page.output_img):
+                inpainted_bubbles.add(bubble_id)
+            else:
+                _clear_bubble_text(page.output_img, bubble)
+            cleared_bubbles.add(bubble_id)
+
+        render_dets = region.group_detections or bubble.text_regions
+        text_bbox = _text_region_bbox_from_dets(render_dets, img_w, img_h)
+        text_bbox = _expand_render_bbox(text_bbox, bubble)
+
+        _render_webtoon_english(page.output_img, bubble, region.english,
+                                text_bbox,
+                                skip_bg_rect=(bubble_id in inpainted_bubbles),
+                                color_ref_img=page.img_pil,
+                                detections=render_dets)
+
+    for det in page.sfx_detections:
+        if not _is_hangul_text(det.text):
+            continue
+        sfx_english = translate_sfx(det.text)
+        if sfx_english.strip():
+            _render_sfx(page.output_img, det, sfx_english, page.img_pil)
+
+    return encode_image_pil(page.output_img)

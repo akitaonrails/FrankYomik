@@ -1,6 +1,8 @@
 """Image loading, cropping, and manipulation utilities."""
 
 import base64
+import io
+
 import cv2
 import numpy as np
 from PIL import Image
@@ -201,3 +203,20 @@ def pil_to_cv2(img: Image.Image) -> np.ndarray:
 def cv2_to_pil(img: np.ndarray) -> Image.Image:
     """Convert OpenCV BGR array to Pillow RGB image."""
     return Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+
+
+def decode_image_bytes(data: bytes) -> tuple[np.ndarray, Image.Image]:
+    """Decode image bytes to OpenCV BGR + Pillow RGB."""
+    nparr = np.frombuffer(data, np.uint8)
+    img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img_cv is None:
+        raise ValueError("Could not decode image from bytes")
+    img_pil = Image.open(io.BytesIO(data)).convert("RGB")
+    return img_cv, img_pil
+
+
+def encode_image_pil(img: Image.Image, fmt: str = "PNG") -> bytes:
+    """Encode Pillow image to bytes."""
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return buf.getvalue()

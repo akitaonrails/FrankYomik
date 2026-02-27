@@ -18,6 +18,7 @@ from .image_utils import (
     clear_text_in_contour,
     clear_text_strokes,
     contour_inner_bbox,
+    encode_image_pil,
     load_image,
     load_image_pil,
 )
@@ -69,6 +70,12 @@ def load_page(path: str) -> PageResult:
         img_cv=load_image(path),
         img_pil=load_image_pil(path),
     )
+
+
+def load_page_from_memory(img_cv: np.ndarray, img_pil: Image.Image,
+                          name: str = "page") -> PageResult:
+    """Create PageResult from in-memory images (no file I/O)."""
+    return PageResult(image_path="", name=name, img_cv=img_cv, img_pil=img_pil)
 
 
 def detect_page_bubbles(page: PageResult) -> None:
@@ -238,3 +245,55 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
     output_path = os.path.join(out_dir, f"{page.name}{suffix}")
     page.output_img.save(output_path)
     log.info("Saved: %s", output_path)
+
+
+def render_page_to_bytes(page: PageResult, mode: PipelineMode,
+                         debug: bool = False) -> bytes:
+    """Run render logic and return PNG bytes instead of saving to disk.
+
+    Reuses the same clearing + rendering logic as render_page() but
+    returns the result as encoded PNG bytes for the worker pipeline.
+    """
+    if debug:
+        debug_img = draw_debug_boxes(page.img_pil, page.bubbles_raw)
+        # Debug image is discarded in bytes mode — no filesystem to save to
+        del debug_img
+
+    page.output_img = page.img_pil.copy()
+
+    base_font_size = None
+    if mode == PipelineMode.TRANSLATE:
+        page_height = page.img_pil.height
+        base_font_size = max(EN_BASE_FONT_MIN,
+                             min(EN_BASE_FONT_MAX, page_height // EN_BASE_FONT_DIVISOR))
+
+    for br in page.bubble_results:
+        if br.transformed is None:
+            continue
+
+        if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
+            inpainted = False
+            if MANGA_INPAINT_ENABLED:
+                from .inpainter import inpaint_region
+                page.output_img = inpaint_region(page.output_img, br.bbox)
+                inpainted = True
+            render_english_on_artwork(page.output_img, br.bbox,
+                                      br.transformed,
+                                      base_font_size=base_font_size,
+                                      inpainted=inpainted)
+            continue
+
+        layout_bbox = br.bbox
+        if br.contour is not None:
+            layout_bbox = contour_inner_bbox(br.contour) or br.bbox
+            clear_text_in_contour(page.output_img, br.contour)
+        else:
+            clear_text_strokes(page.output_img, br.bbox)
+
+        if mode == PipelineMode.FURIGANA:
+            render_furigana_vertical(page.output_img, layout_bbox, br.transformed)
+        else:
+            render_english(page.output_img, layout_bbox, br.transformed,
+                           base_font_size=base_font_size)
+
+    return encode_image_pil(page.output_img)
