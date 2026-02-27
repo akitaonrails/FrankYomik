@@ -89,6 +89,46 @@ def contour_inner_bbox(contour: np.ndarray, margin: int = 8) -> tuple[int, int, 
     return (ix1, iy1, ix2, iy2)
 
 
+def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
+                       margin: int = 2,
+                       fill_color: tuple = (255, 255, 255)) -> None:
+    """Clear the area covered by dark text strokes inside a bbox.
+
+    Instead of filling the entire bbox (which overflows curved bubble borders),
+    finds where the dark ink actually is, groups it into a tight cluster, adds
+    a small margin, and clears only that sub-region.
+    """
+    from PIL import ImageDraw
+
+    x1, y1, x2, y2 = bbox
+    roi = np.array(img.crop(bbox).convert("L"))
+    if roi.size == 0:
+        return
+
+    # Find dark text strokes (ink on white background)
+    dark_mask = (roi < 160).astype(np.uint8) * 255
+
+    # Dilate to connect nearby strokes into solid text clusters
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    connected = cv2.dilate(dark_mask, kernel, iterations=2)
+
+    coords = cv2.findNonZero(connected)
+    if coords is None:
+        return
+
+    # Bounding rect of all dark pixels = the text cluster area
+    rx, ry, rw, rh = cv2.boundingRect(coords)
+
+    # Add margin but stay inside the original bbox
+    cx1 = x1 + max(0, rx - margin)
+    cy1 = y1 + max(0, ry - margin)
+    cx2 = x1 + min(roi.shape[1], rx + rw + margin)
+    cy2 = y1 + min(roi.shape[0], ry + rh + margin)
+
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((cx1, cy1, cx2, cy2), fill=fill_color)
+
+
 def clear_text_in_contour(img: Image.Image, contour: np.ndarray,
                           fill_color: tuple = (255, 255, 255)) -> None:
     """Fill the interior of a contour with a solid color (default white) in-place.

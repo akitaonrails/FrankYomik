@@ -16,7 +16,7 @@ from .config import (
 from .furigana import annotate as furigana_annotate
 from .image_utils import (
     clear_text_in_contour,
-    clear_text_in_region,
+    clear_text_strokes,
     contour_inner_bbox,
     load_image,
     load_image_pil,
@@ -215,13 +215,16 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
                                       inpainted=inpainted)
             continue
 
-        # Clear text region using contour shape when available
+        # Clear text region using contour shape when available.
+        # When no contour exists (panel text, small bubbles), clear only
+        # the area where dark text strokes are, not the full bbox — a full
+        # rectangle overflows past curved bubble borders.
         layout_bbox = br.bbox
         if br.contour is not None:
             layout_bbox = contour_inner_bbox(br.contour) or br.bbox
             clear_text_in_contour(page.output_img, br.contour)
         else:
-            clear_text_in_region(page.output_img, br.bbox)
+            clear_text_strokes(page.output_img, br.bbox)
 
         # Render
         if mode == PipelineMode.FURIGANA:
