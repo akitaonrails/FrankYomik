@@ -1217,6 +1217,64 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   var editMode = false;
   var editPayload = null;
+  function isUiTarget(target) {
+    if (!target || !target.closest) return false;
+    return !!target.closest('#__frankBar,#__frankBarToggle,#__frankEditMenu');
+  }
+  function isVisibleImage(img) {
+    if (!img || img.tagName !== 'IMG') return false;
+    var st = window.getComputedStyle(img);
+    if (!st) return false;
+    if (st.display === 'none' || st.visibility === 'hidden') return false;
+    var op = parseFloat(st.opacity || '1');
+    if (!isFinite(op) || op <= 0.05) return false;
+    var r = img.getBoundingClientRect();
+    if (!r || r.width < 40 || r.height < 40) return false;
+    return true;
+  }
+  function findImageAtPoint(x, y) {
+    var top = document.elementFromPoint(x, y);
+    if (top && top.tagName === 'IMG' && isVisibleImage(top)) return top;
+    if (top && top.closest) {
+      var near = top.closest('img');
+      if (near && isVisibleImage(near)) return near;
+    }
+    var imgs = document.querySelectorAll('img');
+    var best = null;
+    var bestScore = -Infinity;
+    for (var i = 0; i < imgs.length; i++) {
+      var img = imgs[i];
+      if (!isVisibleImage(img)) continue;
+      var r = img.getBoundingClientRect();
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+      var area = r.width * r.height;
+      // Prefer translated images when available.
+      var translatedBoost = (img.dataset && img.dataset.frankTranslated === 'true') ? 1e12 : 0;
+      var score = translatedBoost + area;
+      if (score > bestScore) {
+        bestScore = score;
+        best = img;
+      }
+    }
+    return best;
+  }
+  function openEditMenu(clientX, clientY, img) {
+    var r = img.getBoundingClientRect();
+    if (!r || r.width < 10 || r.height < 10) return false;
+    var xNorm = (clientX - r.left) / r.width;
+    var yNorm = (clientY - r.top) / r.height;
+    xNorm = Math.max(0, Math.min(1, xNorm));
+    yNorm = Math.max(0, Math.min(1, yNorm));
+    editPayload = {
+      pageId: img.dataset ? img.dataset.frankPageId : null,
+      xNorm: xNorm,
+      yNorm: yNorm
+    };
+    editMenu.style.left = Math.max(4, Math.min(window.innerWidth - 220, clientX)) + 'px';
+    editMenu.style.top = Math.max(4, Math.min(window.innerHeight - 120, clientY)) + 'px';
+    editMenu.style.display = 'block';
+    return true;
+  }
   function hideEditMenu() {
     editMenu.style.display = 'none';
     editPayload = null;
@@ -1239,26 +1297,24 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   document.addEventListener('contextmenu', function(e) {
     if (!editMode) return;
-    var target = e.target;
-    var img = null;
-    if (target && target.tagName === 'IMG') img = target;
-    if (!img && target && target.closest) img = target.closest('img');
+    if (isUiTarget(e.target)) return;
+    var img = findImageAtPoint(e.clientX, e.clientY);
     if (!img) return;
     e.preventDefault();
-    var r = img.getBoundingClientRect();
-    if (!r || r.width < 10 || r.height < 10) return;
-    var xNorm = (e.clientX - r.left) / r.width;
-    var yNorm = (e.clientY - r.top) / r.height;
-    xNorm = Math.max(0, Math.min(1, xNorm));
-    yNorm = Math.max(0, Math.min(1, yNorm));
-    editPayload = {
-      pageId: img.dataset ? img.dataset.frankPageId : null,
-      xNorm: xNorm,
-      yNorm: yNorm
-    };
-    editMenu.style.left = Math.max(4, Math.min(window.innerWidth - 220, e.clientX)) + 'px';
-    editMenu.style.top = Math.max(4, Math.min(window.innerHeight - 120, e.clientY)) + 'px';
-    editMenu.style.display = 'block';
+    e.stopPropagation();
+    openEditMenu(e.clientX, e.clientY, img);
+  }, true);
+
+  // In feedback mode, left click also opens the feedback menu.
+  document.addEventListener('mousedown', function(e) {
+    if (!editMode) return;
+    if (e.button !== 0) return;
+    if (isUiTarget(e.target)) return;
+    var img = findImageAtPoint(e.clientX, e.clientY);
+    if (!img) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openEditMenu(e.clientX, e.clientY, img);
   }, true);
 
   var backBtn = document.getElementById('__frankBack');
@@ -1271,16 +1327,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   var dbgToggleBtn = document.getElementById('__frankDbgToggle');
   var verboseBtn = document.getElementById('__frankVerbose');
   var copyDbgBtn = document.getElementById('__frankCopyDbg');
-  backBtn.style.cssText = btnStyle;
-  autoBtn.style.cssText = btnStyle;
-  pipeBtn.style.cssText = btnStyle + 'display:none;';
-  transBtn.style.cssText = btnStyle;
-  feedbackBtn.style.cssText = btnStyle;
-  saveEditsBtn.style.cssText = btnStyle + 'display:none;';
-  cancelEditsBtn.style.cssText = btnStyle + 'display:none;';
-  dbgToggleBtn.style.cssText = btnStyle + 'display:none;';
-  verboseBtn.style.cssText = btnStyle + 'display:none;';
-  copyDbgBtn.style.cssText = btnStyle + 'display:none;';
+  if (backBtn) backBtn.style.cssText = btnStyle;
+  if (autoBtn) autoBtn.style.cssText = btnStyle;
+  if (pipeBtn) pipeBtn.style.cssText = btnStyle + 'display:none;';
+  if (transBtn) transBtn.style.cssText = btnStyle;
+  if (feedbackBtn) feedbackBtn.style.cssText = btnStyle;
+  if (saveEditsBtn) saveEditsBtn.style.cssText = btnStyle + 'display:none;';
+  if (cancelEditsBtn) cancelEditsBtn.style.cssText = btnStyle + 'display:none;';
+  if (dbgToggleBtn) dbgToggleBtn.style.cssText = btnStyle + 'display:none;';
+  if (verboseBtn) verboseBtn.style.cssText = btnStyle + 'display:none;';
+  if (copyDbgBtn) copyDbgBtn.style.cssText = btnStyle + 'display:none;';
 
   var collapsed = false;
   function setCollapsed(next) {
@@ -1296,43 +1352,43 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     setCollapsed(!collapsed);
   });
 
-  backBtn.addEventListener('click', function(e) {
+  if (backBtn) backBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'back');
   });
-  autoBtn.addEventListener('click', function(e) {
+  if (autoBtn) autoBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_auto');
   });
-  pipeBtn.addEventListener('click', function(e) {
+  if (pipeBtn) pipeBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_pipeline');
   });
-  transBtn.addEventListener('click', function(e) {
+  if (transBtn) transBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'translate');
   });
-  feedbackBtn.addEventListener('click', function(e) {
+  if (feedbackBtn) feedbackBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_feedback_mode');
   });
-  saveEditsBtn.addEventListener('click', function(e) {
+  if (saveEditsBtn) saveEditsBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'save_feedback_edits');
   });
-  cancelEditsBtn.addEventListener('click', function(e) {
+  if (cancelEditsBtn) cancelEditsBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'cancel_feedback_edits');
   });
-  dbgToggleBtn.addEventListener('click', function(e) {
+  if (dbgToggleBtn) dbgToggleBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_debug_hud');
   });
-  verboseBtn.addEventListener('click', function(e) {
+  if (verboseBtn) verboseBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_verbose');
   });
-  copyDbgBtn.addEventListener('click', function(e) {
+  if (copyDbgBtn) copyDbgBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'copy_debug');
   });
