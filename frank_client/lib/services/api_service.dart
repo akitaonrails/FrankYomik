@@ -8,8 +8,8 @@ class ApiService {
   final http.Client _client = http.Client();
 
   Map<String, String> _headers(ServerSettings settings) => {
-        'Authorization': 'Bearer ${settings.authToken}',
-      };
+    'Authorization': 'Bearer ${settings.authToken}',
+  };
 
   /// Submit an image for translation. Returns job response map.
   Future<Map<String, dynamic>> submitJob({
@@ -27,8 +27,9 @@ class ApiService {
       ..headers.addAll(_headers(settings))
       ..fields['pipeline'] = pipeline ?? settings.pipeline
       ..fields['priority'] = priority
-      ..files.add(http.MultipartFile.fromBytes('image', imageBytes,
-          filename: 'page.png'));
+      ..files.add(
+        http.MultipartFile.fromBytes('image', imageBytes, filename: 'page.png'),
+      );
 
     if (title != null) request.fields['title'] = title;
     if (chapter != null) request.fields['chapter'] = chapter;
@@ -54,6 +55,53 @@ class ApiService {
 
     if (response.statusCode != 200) {
       throw ApiException('Status failed (${response.statusCode})');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Fetch cached metadata payload by source hash.
+  Future<Map<String, dynamic>> getCacheMetadataByHash({
+    required ServerSettings settings,
+    required String pipeline,
+    required String sourceHash,
+  }) async {
+    final uri = Uri.parse(
+      '${settings.serverUrl}/api/v1/cache/by-hash/$pipeline/$sourceHash/meta',
+    );
+    final response = await _client.get(uri, headers: _headers(settings));
+    if (response.statusCode != 200) {
+      throw ApiException('Meta fetch failed (${response.statusCode})');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Update cached metadata and enqueue rerender.
+  Future<Map<String, dynamic>> patchCacheMetadataByHash({
+    required ServerSettings settings,
+    required String pipeline,
+    required String sourceHash,
+    required Map<String, dynamic> metadata,
+    String? baseContentHash,
+    String priority = 'high',
+  }) async {
+    final uri = Uri.parse(
+      '${settings.serverUrl}/api/v1/cache/by-hash/$pipeline/$sourceHash/meta',
+    );
+    final payload = <String, dynamic>{
+      'metadata': metadata,
+      'priority': priority,
+      if (baseContentHash != null && baseContentHash.isNotEmpty)
+        'base_content_hash': baseContentHash,
+    };
+    final response = await _client.patch(
+      uri,
+      headers: {..._headers(settings), 'Content-Type': 'application/json'},
+      body: jsonEncode(payload),
+    );
+    if (response.statusCode != 202) {
+      throw ApiException(
+        'Meta patch failed (${response.statusCode}): ${response.body}',
+      );
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }

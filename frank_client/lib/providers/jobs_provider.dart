@@ -17,8 +17,9 @@ final cacheServiceProvider = Provider<CacheService>((ref) {
   return cache;
 });
 
-final jobsProvider =
-    StateNotifierProvider<JobsNotifier, Map<String, PageJob>>((ref) {
+final jobsProvider = StateNotifierProvider<JobsNotifier, Map<String, PageJob>>((
+  ref,
+) {
   return JobsNotifier(ref);
 });
 
@@ -65,6 +66,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           status: PageJobStatus.completed,
           translatedImage: cached,
           cached: true,
+          sourceHash: hash,
         ),
       };
       return;
@@ -73,7 +75,11 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     // Also check by metadata (title/chapter/page)
     if (title != null && chapter != null && pageNumber != null) {
       final metaCached = await _cache.lookupByMetadata(
-          effectivePipeline, title, chapter, pageNumber);
+        effectivePipeline,
+        title,
+        chapter,
+        pageNumber,
+      );
       if (metaCached != null) {
         debugPrint('[Jobs] LOCAL CACHE HIT (meta) for $pageId');
         state = {
@@ -86,6 +92,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             status: PageJobStatus.completed,
             translatedImage: metaCached,
             cached: true,
+            sourceHash: hash,
           ),
         };
         return;
@@ -104,6 +111,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       pipeline: effectivePipeline,
       originalImage: imageBytes,
       status: PageJobStatus.queued,
+      sourceHash: hash,
     );
     state = {...state, pageId: job};
 
@@ -122,6 +130,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       final jobId = response['job_id'] as String;
       final isCached = response['cached'] == true;
       job.jobId = jobId;
+      job.metaUrl = response['meta_url'] as String?;
+      job.sourceHash = (response['source_hash'] as String?) ?? hash;
+      job.contentHash = response['content_hash'] as String?;
+      job.renderHash = response['render_hash'] as String?;
 
       if (isCached) {
         // Server had it cached — download immediately
@@ -132,10 +144,13 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           state = {...state};
 
           final img = await _api.getJobImage(
-              settings: _settings, imageUrl: imageUrl);
+            settings: _settings,
+            imageUrl: imageUrl,
+          );
           job.translatedImage = img;
           job.status = PageJobStatus.completed;
           job.cached = true;
+          job.imageUrl = imageUrl;
           state = {...state};
 
           // Save to local cache
@@ -168,7 +183,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     if (type == null || jobId == null) return;
 
     // Find the PageJob with this jobId
-    final entry = state.entries.where((e) => e.value.jobId == jobId).firstOrNull;
+    final entry = state.entries
+        .where((e) => e.value.jobId == jobId)
+        .firstOrNull;
     if (entry == null) return;
 
     final job = entry.value;
@@ -183,6 +200,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       final status = msg['status'] as String?;
       if (status == 'completed') {
         job.imageUrl = msg['image_url'] as String?;
+        job.metaUrl = msg['meta_url'] as String?;
+        job.sourceHash = msg['source_hash'] as String? ?? job.sourceHash;
+        job.contentHash = msg['content_hash'] as String?;
+        job.renderHash = msg['render_hash'] as String?;
         job.cached = msg['cached'] == true;
         _downloadTranslatedImage(job);
       } else {
@@ -198,8 +219,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     if (job.imageUrl == null) return;
 
     try {
-      final img =
-          await _api.getJobImage(settings: _settings, imageUrl: job.imageUrl!);
+      final img = await _api.getJobImage(
+        settings: _settings,
+        imageUrl: job.imageUrl!,
+      );
       job.translatedImage = img;
       job.status = PageJobStatus.completed;
       state = {...state};
@@ -228,8 +251,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     // Don't restart if already polling — restarting resets the 3s countdown
     if (_pollTimer != null) return;
     _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      final activeJobs =
-          state.values.where((j) => j.isActive && j.jobId != null).toList();
+      final activeJobs = state.values
+          .where((j) => j.isActive && j.jobId != null)
+          .toList();
       if (activeJobs.isEmpty) {
         _pollTimer?.cancel();
         _pollTimer = null;
@@ -239,11 +263,18 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       for (final job in activeJobs) {
         try {
           final status = await _api.getJobStatus(
-              settings: _settings, jobId: job.jobId!);
+            settings: _settings,
+            jobId: job.jobId!,
+          );
           final jobStatus = status['status'] as String?;
           if (jobStatus == 'completed') {
             job.imageUrl =
-                status['image_url'] as String? ?? '/api/v1/jobs/${job.jobId}/image';
+                status['image_url'] as String? ??
+                '/api/v1/jobs/${job.jobId}/image';
+            job.metaUrl = status['meta_url'] as String?;
+            job.sourceHash = status['source_hash'] as String? ?? job.sourceHash;
+            job.contentHash = status['content_hash'] as String?;
+            job.renderHash = status['render_hash'] as String?;
             _downloadTranslatedImage(job);
           } else if (jobStatus == 'failed') {
             debugPrint('[Jobs] ${job.pageId} failed');

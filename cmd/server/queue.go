@@ -32,10 +32,11 @@ func NewQueue(rdb *redis.Client) *Queue {
 
 // JobMetadata holds optional metadata for a job submission.
 type JobMetadata struct {
-	Title      string
-	Chapter    string
-	PageNumber string
-	SourceURL  string
+	Title                string
+	Chapter              string
+	PageNumber           string
+	SourceURL            string
+	RerenderFromMetadata bool
 }
 
 // SubmitJob stores the image, deduplicates, and enqueues a job.
@@ -43,12 +44,15 @@ type JobMetadata struct {
 func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, priority string, meta *JobMetadata) (string, bool, error) {
 	// Compute SHA256 for dedup
 	hash := fmt.Sprintf("%x", sha256.Sum256(imageBytes))
+	forceNew := meta != nil && meta.RerenderFromMetadata
 
 	// Check dedup (keyed by hash + pipeline to avoid cross-pipeline collisions)
 	dedupField := hash + ":" + pipeline
-	existingJobID, err := q.rdb.HGet(ctx, dedupKey, dedupField).Result()
-	if err == nil && existingJobID != "" {
-		return existingJobID, true, nil
+	if !forceNew {
+		existingJobID, err := q.rdb.HGet(ctx, dedupKey, dedupField).Result()
+		if err == nil && existingJobID != "" {
+			return existingJobID, true, nil
+		}
 	}
 
 	// Generate job ID
@@ -70,9 +74,10 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 
 	// Enqueue
 	values := map[string]interface{}{
-		"job_id":    jobID,
-		"pipeline":  pipeline,
-		"image_key": imageKey,
+		"job_id":      jobID,
+		"pipeline":    pipeline,
+		"image_key":   imageKey,
+		"source_hash": hash,
 	}
 	if meta != nil {
 		if meta.Title != "" {
@@ -87,8 +92,11 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 		if meta.SourceURL != "" {
 			values["source_url"] = meta.SourceURL
 		}
+		if meta.RerenderFromMetadata {
+			values["rerender_from_metadata"] = "1"
+		}
 	}
-	err = q.rdb.XAdd(ctx, &redis.XAddArgs{
+	err := q.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: stream,
 		MaxLen: maxLen,
 		Approx: true,
@@ -99,8 +107,10 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 	}
 
 	// Store dedup mapping (keyed by hash + pipeline)
-	q.rdb.HSet(ctx, dedupKey, dedupField, jobID)
-	q.rdb.Expire(ctx, dedupKey, dedupTTL)
+	if !forceNew {
+		q.rdb.HSet(ctx, dedupKey, dedupField, jobID)
+		q.rdb.Expire(ctx, dedupKey, dedupTTL)
+	}
 
 	return jobID, false, nil
 }

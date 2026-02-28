@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -14,6 +17,14 @@ import (
 )
 
 const maxImageSize = 20 << 20 // 20 MB
+
+var cachedV2JobIDRe = regexp.MustCompile(`^cached-v2-([a-z_]+)-([a-f0-9]{64})$`)
+
+type metadataPatchRequest struct {
+	BaseContentHash string          `json:"base_content_hash"`
+	Metadata        json.RawMessage `json:"metadata"`
+	Priority        string          `json:"priority,omitempty"`
+}
 
 // Server holds the HTTP handlers and dependencies.
 type Server struct {
@@ -29,10 +40,14 @@ type Server struct {
 
 // NewServer creates a new Server instance.
 func NewServer(rdb *redis.Client, cacheDir string) *Server {
+	cache := NewCache(cacheDir)
+	if err := cache.EnsureV2Dirs(); err != nil {
+		log.Printf("WARN: failed to prepare cache v2 directories: %v", err)
+	}
 	return &Server{
 		queue:       NewQueue(rdb),
 		results:     NewResults(rdb),
-		cache:       NewCache(cacheDir),
+		cache:       cache,
 		rdb:         rdb,
 		subscribers: make(map[string]map[chan WSNotification]struct{}),
 	}
@@ -45,6 +60,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/jobs/{id}/image", s.handleGetJobImage)
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", s.handleDeleteJob)
 	mux.HandleFunc("GET /api/v1/cache/{pipeline}/{title}/{chapter}/{page}/image", s.handleCacheImage)
+	mux.HandleFunc("GET /api/v1/cache/{pipeline}/{title}/{chapter}/{page}/meta", s.handleCacheMeta)
+	mux.HandleFunc("GET /api/v1/cache/by-hash/{pipeline}/{source_hash}/image", s.handleCacheImageByHash)
+	mux.HandleFunc("GET /api/v1/cache/by-hash/{pipeline}/{source_hash}/meta", s.handleCacheMetaByHash)
+	mux.HandleFunc("PATCH /api/v1/cache/by-hash/{pipeline}/{source_hash}/meta", s.handlePatchCacheMetaByHash)
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/ws", s.handleWebSocket)
 }
@@ -81,22 +100,6 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		SourceURL:  r.FormValue("source_url"),
 	}
 
-	// Check filesystem cache if metadata is provided
-	if meta.Title != "" && meta.Chapter != "" && meta.PageNumber != "" {
-		if _, ok := s.cache.Lookup(pipeline, meta.Title, meta.Chapter, meta.PageNumber); ok {
-			cacheJobID := fmt.Sprintf("cached-%s-%s-%s-%s", pipeline, slugify(meta.Title), meta.Chapter, meta.PageNumber)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(JobResponse{
-				JobID:    cacheJobID,
-				Status:   "completed",
-				Cached:   true,
-				ImageURL: fmt.Sprintf("/api/v1/cache/%s/%s/%s/%s/image", pipeline, slugify(meta.Title), meta.Chapter, meta.PageNumber),
-			})
-			return
-		}
-	}
-
 	file, _, err := r.FormFile("image")
 	if err != nil {
 		jsonError(w, "missing 'image' field", http.StatusBadRequest)
@@ -111,6 +114,29 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(imageBytes) == 0 {
 		jsonError(w, "empty image", http.StatusBadRequest)
+		return
+	}
+	sourceHash := hashHex(imageBytes)
+
+	// Hash-first filesystem cache check (works for Kindle where page number is unstable).
+	if _, m, ok := s.cache.LookupBySourceHash(pipeline, sourceHash); ok {
+		// Keep by-ref link warm when metadata is provided.
+		if meta.Title != "" && meta.Chapter != "" && meta.PageNumber != "" {
+			_ = s.cache.LinkRef(pipeline, meta.Title, meta.Chapter, meta.PageNumber, sourceHash)
+		}
+		cacheJobID := fmt.Sprintf("cached-v2-%s-%s", pipeline, sourceHash)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(JobResponse{
+			JobID:       cacheJobID,
+			Status:      "completed",
+			Cached:      true,
+			ImageURL:    fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", pipeline, sourceHash),
+			MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, sourceHash),
+			SourceHash:  sourceHash,
+			ContentHash: m.ContentHash,
+			RenderHash:  m.RenderHash,
+		})
 		return
 	}
 
@@ -129,11 +155,15 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(JobResponse{
-				JobID:    jobID,
-				Status:   "completed",
-				Cached:   true,
-				DedupHit: true,
-				ImageURL: status.ImageURL,
+				JobID:       jobID,
+				Status:      "completed",
+				Cached:      true,
+				DedupHit:    true,
+				ImageURL:    status.ImageURL,
+				MetaURL:     status.MetaURL,
+				SourceHash:  status.SourceHash,
+				ContentHash: status.ContentHash,
+				RenderHash:  status.RenderHash,
 			})
 			return
 		}
@@ -142,9 +172,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(JobResponse{
-		JobID:    jobID,
-		Status:   "queued",
-		DedupHit: dedupHit,
+		JobID:      jobID,
+		Status:     "queued",
+		DedupHit:   dedupHit,
+		SourceHash: sourceHash,
 	})
 }
 
@@ -153,6 +184,30 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("id")
 	if jobID == "" {
 		jsonError(w, "missing job id", http.StatusBadRequest)
+		return
+	}
+	if strings.HasPrefix(jobID, "cached-v2-") {
+		pipeline, sourceHash, ok := parseCachedV2JobID(jobID)
+		if !ok {
+			jsonError(w, "invalid cached job id", http.StatusBadRequest)
+			return
+		}
+		_, m, ok := s.cache.LookupBySourceHash(pipeline, sourceHash)
+		if !ok {
+			jsonError(w, "cached image not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(JobStatusResponse{
+			JobID:       jobID,
+			Status:      "completed",
+			Pipeline:    pipeline,
+			ImageURL:    fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", pipeline, sourceHash),
+			MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, sourceHash),
+			SourceHash:  sourceHash,
+			ContentHash: m.ContentHash,
+			RenderHash:  m.RenderHash,
+		})
 		return
 	}
 
@@ -199,6 +254,19 @@ func (s *Server) handleGetJobImage(w http.ResponseWriter, r *http.Request) {
 // serveCachedJobImage serves an image from the filesystem cache for a cached-* job ID.
 // cached-{pipeline}-{title}-{chapter}-{page} format.
 func (s *Server) serveCachedJobImage(w http.ResponseWriter, jobID string) {
+	// New format: cached-v2-{pipeline}-{source_hash}
+	if pipeline, sourceHash, ok := parseCachedV2JobID(jobID); ok {
+		imageBytes, _, ok := s.cache.LookupBySourceHash(pipeline, sourceHash)
+		if !ok {
+			jsonError(w, "cached image not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(imageBytes)))
+		w.Write(imageBytes)
+		return
+	}
+
 	// Parse: cached-{pipeline}-{title}-{chapter}-{page}
 	// Pipeline names contain underscores, not hyphens, so split carefully.
 	// Format: "cached-manga_translate-one-piece-1084-003"
@@ -262,6 +330,155 @@ func (s *Server) handleCacheImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(imageBytes)))
 	w.Write(imageBytes)
+}
+
+// handleCacheMeta handles GET /api/v1/cache/{pipeline}/{title}/{chapter}/{page}/meta
+func (s *Server) handleCacheMeta(w http.ResponseWriter, r *http.Request) {
+	pipeline := r.PathValue("pipeline")
+	title := r.PathValue("title")
+	chapter := r.PathValue("chapter")
+	page := r.PathValue("page")
+	if pipeline == "" || title == "" || chapter == "" || page == "" {
+		jsonError(w, "missing path parameters", http.StatusBadRequest)
+		return
+	}
+	sourceHash, ok := s.cache.ResolveSourceHash(pipeline, title, chapter, page)
+	if !ok {
+		jsonError(w, "cached metadata not found", http.StatusNotFound)
+		return
+	}
+	s.serveMetadataByHash(w, pipeline, sourceHash)
+}
+
+// handleCacheImageByHash handles GET /api/v1/cache/by-hash/{pipeline}/{source_hash}/image
+func (s *Server) handleCacheImageByHash(w http.ResponseWriter, r *http.Request) {
+	pipeline := r.PathValue("pipeline")
+	sourceHash := r.PathValue("source_hash")
+	if pipeline == "" || sourceHash == "" {
+		jsonError(w, "missing path parameters", http.StatusBadRequest)
+		return
+	}
+	imageBytes, _, ok := s.cache.LookupBySourceHash(pipeline, sourceHash)
+	if !ok {
+		jsonError(w, "cached image not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(imageBytes)))
+	w.Write(imageBytes)
+}
+
+// handleCacheMetaByHash handles GET /api/v1/cache/by-hash/{pipeline}/{source_hash}/meta
+func (s *Server) handleCacheMetaByHash(w http.ResponseWriter, r *http.Request) {
+	pipeline := r.PathValue("pipeline")
+	sourceHash := r.PathValue("source_hash")
+	if pipeline == "" || sourceHash == "" {
+		jsonError(w, "missing path parameters", http.StatusBadRequest)
+		return
+	}
+	s.serveMetadataByHash(w, pipeline, sourceHash)
+}
+
+// handlePatchCacheMetaByHash handles PATCH /api/v1/cache/by-hash/{pipeline}/{source_hash}/meta
+// and enqueues a rerender job that reuses metadata.
+func (s *Server) handlePatchCacheMetaByHash(w http.ResponseWriter, r *http.Request) {
+	pipeline := r.PathValue("pipeline")
+	sourceHash := r.PathValue("source_hash")
+	if pipeline == "" || sourceHash == "" {
+		jsonError(w, "missing path parameters", http.StatusBadRequest)
+		return
+	}
+	var req metadataPatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Metadata) == 0 {
+		jsonError(w, "missing metadata", http.StatusBadRequest)
+		return
+	}
+	priority := req.Priority
+	if priority == "" {
+		priority = "high"
+	}
+	if !validPriorities[priority] {
+		jsonError(w, "invalid priority: must be 'high' or 'low'", http.StatusBadRequest)
+		return
+	}
+
+	updatedManifest, err := s.cache.UpdateMetadataBySourceHash(
+		pipeline,
+		sourceHash,
+		req.Metadata,
+		req.BaseContentHash,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "content hash mismatch") {
+			jsonError(w, "content hash mismatch", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			jsonError(w, "cached metadata not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("ERROR updating metadata: %v", err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	sourceImage, m, ok := s.cache.LookupSourceBySourceHash(pipeline, sourceHash)
+	if !ok {
+		jsonError(w, "source image not found", http.StatusNotFound)
+		return
+	}
+	meta := &JobMetadata{
+		Title:                m.TitleSlug,
+		Chapter:              m.Chapter,
+		PageNumber:           m.Page,
+		RerenderFromMetadata: true,
+	}
+	jobID, _, err := s.queue.SubmitJob(r.Context(), sourceImage, pipeline, priority, meta)
+	if err != nil {
+		log.Printf("ERROR submitting rerender job: %v", err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(JobResponse{
+		JobID:       jobID,
+		Status:      "queued",
+		SourceHash:  sourceHash,
+		ContentHash: updatedManifest.ContentHash,
+		RenderHash:  updatedManifest.RenderHash,
+		MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, sourceHash),
+	})
+}
+
+func (s *Server) serveMetadataByHash(w http.ResponseWriter, pipeline, sourceHash string) {
+	metaBytes, m, ok := s.cache.LookupMetadataBySourceHash(pipeline, sourceHash)
+	if !ok {
+		jsonError(w, "cached metadata not found", http.StatusNotFound)
+		return
+	}
+
+	var payload interface{}
+	if err := json.Unmarshal(metaBytes, &payload); err != nil {
+		log.Printf("ERROR parsing cached metadata payload: %v", err)
+		jsonError(w, "cached metadata corrupted", http.StatusInternalServerError)
+		return
+	}
+	resp := map[string]interface{}{
+		"source_hash":  sourceHash,
+		"pipeline":     pipeline,
+		"content_hash": m.ContentHash,
+		"render_hash":  m.RenderHash,
+		"image_stale":  m.ImageStale,
+		"metadata":     payload,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleDeleteJob handles DELETE /api/v1/jobs/{id}
@@ -413,11 +630,32 @@ func (s *Server) StartRedisSubscriber(ctx context.Context) {
 			}
 			if status == "completed" {
 				notif.ImageURL = fmt.Sprintf("/api/v1/jobs/%s/image", jobID)
+				if pipeline, ok := meta["pipeline"].(string); ok {
+					notif.SourceHash, _ = meta["source_hash"].(string)
+					notif.ContentHash, _ = meta["content_hash"].(string)
+					notif.RenderHash, _ = meta["render_hash"].(string)
+					if notif.SourceHash != "" {
+						notif.MetaURL = fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, notif.SourceHash)
+					}
+				}
 			}
 
 			s.notify(jobID, notif)
 		}
 	}
+}
+
+func parseCachedV2JobID(jobID string) (pipeline string, sourceHash string, ok bool) {
+	m := cachedV2JobIDRe.FindStringSubmatch(jobID)
+	if len(m) != 3 {
+		return "", "", false
+	}
+	pipeline = m[1]
+	sourceHash = m[2]
+	if !validPipelines[pipeline] {
+		return "", "", false
+	}
+	return pipeline, sourceHash, true
 }
 
 func jsonError(w http.ResponseWriter, msg string, code int) {

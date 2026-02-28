@@ -6,10 +6,12 @@ import os
 import re
 import signal
 import time
+import hashlib
 
 import redis
 
 from .job import ProcessingJob, ProcessingResult, process_job
+from .page_cache import PageCache
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ class Consumer:
         self.heartbeat_interval = heartbeat_interval
         self.job_timeout = job_timeout
         self.cache_dir = cache_dir
+        self._page_cache = PageCache(cache_dir)
         self._running = False
         self._rdb: redis.Redis | None = None
         self._last_heartbeat = 0.0
@@ -164,10 +167,13 @@ class Consumer:
         job_id = self._decode_field(fields, b"job_id")
         pipeline = self._decode_field(fields, b"pipeline")
         image_key = self._decode_field(fields, b"image_key")
+        source_hash = self._decode_field(fields, b"source_hash")
         title = self._decode_field(fields, b"title")
         chapter = self._decode_field(fields, b"chapter")
         page_number = self._decode_field(fields, b"page_number")
         source_url = self._decode_field(fields, b"source_url")
+        rerender_flag = self._decode_field(fields, b"rerender_from_metadata")
+        rerender_from_metadata = rerender_flag in {"1", "true", "True"}
 
         if not job_id or not pipeline:
             log.warning("Malformed message %s: missing job_id or pipeline", msg_id)
@@ -187,10 +193,21 @@ class Consumer:
             ))
             self._rdb.xack(stream, self.consumer_group, msg_id)
             return
+        if not source_hash:
+            source_hash = hashlib.sha256(image_bytes).hexdigest()
 
         # Progress callback
         def progress_cb(stage: str, detail: str, percent: int):
             self._publish_progress(job_id, stage, detail, percent)
+
+        # Resolve metadata payload for rerender jobs.
+        metadata_payload = None
+        if rerender_from_metadata and source_hash:
+            metadata_payload = self._page_cache.load_metadata_by_hash(
+                pipeline, source_hash)
+            if metadata_payload is None:
+                log.warning("Metadata not found for rerender job %s (%s/%s)",
+                            job_id, pipeline, source_hash)
 
         # Process
         job = ProcessingJob(
@@ -201,13 +218,27 @@ class Consumer:
             chapter=chapter,
             page_number=page_number,
             source_url=source_url,
+            source_hash=source_hash,
+            rerender_from_metadata=rerender_from_metadata,
+            metadata_payload=metadata_payload,
         )
         result = process_job(job, progress_cb=progress_cb)
+        if not result.source_hash and source_hash:
+            result.source_hash = source_hash
 
-        # Save to filesystem cache if metadata is present
-        if result.image_bytes and title and chapter and page_number:
-            self._cache_to_filesystem(pipeline, title, chapter, page_number,
-                                      result.image_bytes)
+        # Save to robust filesystem cache v2 when image + metadata are available.
+        if result.image_bytes and result.metadata_payload:
+            self._cache_to_v2(
+                pipeline=pipeline,
+                source_hash=result.source_hash or source_hash,
+                source_image_bytes=image_bytes,
+                rendered_image_bytes=result.image_bytes,
+                metadata_payload=result.metadata_payload,
+                title=title,
+                chapter=chapter,
+                page_number=page_number,
+                result=result,
+            )
 
         # Store result and notify
         self._store_result(result)
@@ -225,6 +256,10 @@ class Consumer:
             "error": result.error,
             "processing_time_ms": result.processing_time_ms,
             "bubble_count": result.bubble_count,
+            "pipeline": result.pipeline,
+            "source_hash": result.source_hash,
+            "content_hash": result.content_hash,
+            "render_hash": result.render_hash,
         }
         meta_key = f"{RESULT_KEY_PREFIX}{result.job_id}"
         self._rdb.set(meta_key, json.dumps(meta), ex=RESULT_TTL)
@@ -255,9 +290,39 @@ class Consumer:
         notify_channel = f"{NOTIFY_PREFIX}{job_id}"
         self._rdb.publish(notify_channel, progress_json)
 
+    def _cache_to_v2(self, *, pipeline: str, source_hash: str,
+                     source_image_bytes: bytes, rendered_image_bytes: bytes,
+                     metadata_payload: dict, title: str, chapter: str,
+                     page_number: str, result: ProcessingResult) -> None:
+        """Save processed output to robust cache v2 and update hashes."""
+        if not source_hash:
+            source_hash = hashlib.sha256(source_image_bytes).hexdigest()
+        try:
+            manifest = self._page_cache.store_page(
+                pipeline=pipeline,
+                source_hash=source_hash,
+                source_image_bytes=source_image_bytes,
+                rendered_image_bytes=rendered_image_bytes,
+                metadata_payload=metadata_payload,
+                title=title,
+                chapter=chapter,
+                page_number=page_number,
+            )
+            result.source_hash = source_hash
+            result.content_hash = str(manifest.get("content_hash", ""))
+            result.render_hash = str(manifest.get("render_hash", ""))
+            log.info(
+                "Cached v2 result pipeline=%s source=%s content=%s",
+                pipeline,
+                source_hash[:12],
+                result.content_hash[:12] if result.content_hash else "-",
+            )
+        except Exception as e:
+            log.warning("Failed to cache v2 result: %s", e)
+
     def _cache_to_filesystem(self, pipeline: str, title: str, chapter: str,
                              page_number: str, image_bytes: bytes) -> None:
-        """Save processed image to filesystem cache."""
+        """Legacy image-only cache write kept for backward compatibility."""
         slug = _slugify(title)
         cache_path = os.path.join(self.cache_dir, pipeline, slug, chapter,
                                   f"{page_number}.png")
@@ -265,9 +330,9 @@ class Consumer:
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
             with open(cache_path, "wb") as f:
                 f.write(image_bytes)
-            log.info("Cached result to %s", cache_path)
+            log.info("Cached legacy result to %s", cache_path)
         except OSError as e:
-            log.warning("Failed to cache result: %s", e)
+            log.warning("Failed to cache legacy result: %s", e)
 
     def _heartbeat(self) -> None:
         """Update worker heartbeat key in Redis."""

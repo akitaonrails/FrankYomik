@@ -930,6 +930,138 @@ func TestCacheImageEndpoint(t *testing.T) {
 	}
 }
 
+func TestCacheByHashImageAndMetaEndpoints(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	src := makePNGBytes()
+	sourceHash := hashHex(src)
+	meta := []byte(`{"schema_version":1,"regions":[{"id":"r1"}]}`)
+	_, err := srv.cache.StoreBySourceHash(
+		"manga_translate",
+		sourceHash,
+		src,
+		src,
+		meta,
+		"one-piece",
+		"1",
+		"001",
+	)
+	if err != nil {
+		t.Fatalf("store by hash: %v", err)
+	}
+
+	t.Run("image", func(t *testing.T) {
+		req := httptest.NewRequest(
+			"GET",
+			fmt.Sprintf("/api/v1/cache/by-hash/manga_translate/%s/image", sourceHash),
+			nil,
+		)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("got %d, want 200", w.Code)
+		}
+		if !bytes.Equal(w.Body.Bytes(), src) {
+			t.Fatal("image mismatch")
+		}
+	})
+
+	t.Run("meta", func(t *testing.T) {
+		req := httptest.NewRequest(
+			"GET",
+			fmt.Sprintf("/api/v1/cache/by-hash/manga_translate/%s/meta", sourceHash),
+			nil,
+		)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("got %d, want 200 body=%s", w.Code, w.Body.String())
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("json: %v", err)
+		}
+		if resp["source_hash"] != sourceHash {
+			t.Fatalf("source_hash mismatch")
+		}
+		if resp["content_hash"] == "" {
+			t.Fatalf("missing content_hash")
+		}
+	})
+}
+
+func TestPatchCacheMetaByHashQueuesRerender(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	src := makePNGBytes()
+	sourceHash := hashHex(src)
+	initialMeta := []byte(`{"schema_version":1,"regions":[{"id":"r1","user":{"false_positive":false}}]}`)
+	manifest, err := srv.cache.StoreBySourceHash(
+		"manga_translate",
+		sourceHash,
+		src,
+		src,
+		initialMeta,
+		"one-piece",
+		"1",
+		"001",
+	)
+	if err != nil {
+		t.Fatalf("store by hash: %v", err)
+	}
+
+	patchBody := map[string]any{
+		"base_content_hash": manifest.ContentHash,
+		"metadata": map[string]any{
+			"schema_version": 1,
+			"regions": []any{
+				map[string]any{
+					"id":   "r1",
+					"user": map[string]any{"false_positive": true},
+				},
+			},
+		},
+	}
+	raw, _ := json.Marshal(patchBody)
+	req := httptest.NewRequest(
+		"PATCH",
+		fmt.Sprintf("/api/v1/cache/by-hash/manga_translate/%s/meta", sourceHash),
+		bytes.NewReader(raw),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want 202 body=%s", w.Code, w.Body.String())
+	}
+
+	var resp JobResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.JobID == "" || resp.Status != "queued" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+
+	// Confirm rerender flag got enqueued.
+	ctx := context.Background()
+	msgs, err := rdb.XRange(ctx, streamHigh, "-", "+").Result()
+	if err != nil {
+		t.Fatalf("xrange: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatalf("no stream messages")
+	}
+	last := msgs[len(msgs)-1]
+	if last.Values["rerender_from_metadata"] != "1" {
+		t.Fatalf("expected rerender_from_metadata=1, got %v", last.Values["rerender_from_metadata"])
+	}
+}
+
 func TestCacheImageNotFound(t *testing.T) {
 	srv, _ := newTestServer(t)
 	mux := http.NewServeMux()

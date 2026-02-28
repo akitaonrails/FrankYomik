@@ -1,14 +1,19 @@
 """Job processing: dataclasses and pipeline routing."""
 
+from __future__ import annotations
+
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Callable
+from dataclasses import dataclass
+from typing import Any, Callable
 
-import numpy as np
-from PIL import Image
-
-from pipeline.image_utils import decode_image_bytes, encode_image_pil
+from pipeline.furigana import annotate as furigana_annotate
+from pipeline.image_utils import (
+    clear_text_in_region,
+    clear_text_strokes,
+    decode_image_bytes,
+    encode_image_pil,
+)
 from pipeline.processor import (
     PipelineMode,
     detect_page_bubbles,
@@ -19,6 +24,7 @@ from pipeline.processor import (
     transform_furigana,
     transform_translate,
 )
+from pipeline.text_renderer import render_english, render_furigana_vertical
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +44,9 @@ class ProcessingJob:
     chapter: str = ""
     page_number: str = ""
     source_url: str = ""
+    source_hash: str = ""
+    rerender_from_metadata: bool = False
+    metadata_payload: dict[str, Any] | None = None
 
 
 @dataclass
@@ -48,6 +57,11 @@ class ProcessingResult:
     error: str = ""
     processing_time_ms: int = 0
     bubble_count: int = 0
+    pipeline: str = ""
+    source_hash: str = ""
+    content_hash: str = ""
+    render_hash: str = ""
+    metadata_payload: dict[str, Any] | None = None
 
 
 def process_job(job: ProcessingJob,
@@ -61,9 +75,13 @@ def process_job(job: ProcessingJob,
                 job_id=job.job_id,
                 status="failed",
                 error=f"Unknown pipeline: {job.pipeline}",
+                pipeline=job.pipeline,
+                source_hash=job.source_hash,
             )
 
-        if job.pipeline.startswith("manga_"):
+        if job.rerender_from_metadata and job.metadata_payload:
+            result = _rerender_from_metadata(job, progress_cb)
+        elif job.pipeline.startswith("manga_"):
             result = _process_manga(job, progress_cb)
         else:
             result = _process_webtoon(job, progress_cb)
@@ -80,6 +98,8 @@ def process_job(job: ProcessingJob,
             status="failed",
             error=str(e),
             processing_time_ms=elapsed_ms,
+            pipeline=job.pipeline,
+            source_hash=job.source_hash,
         )
 
 
@@ -90,6 +110,151 @@ def _report(cb: ProgressCallback | None, stage: str, detail: str, percent: int):
             cb(stage, detail, percent)
         except Exception:
             pass
+
+
+def _norm_bbox(bbox: tuple[int, int, int, int], width: int,
+               height: int) -> list[float]:
+    x1, y1, x2, y2 = bbox
+    if width <= 0 or height <= 0:
+        return [0.0, 0.0, 0.0, 0.0]
+    return [
+        round(max(0.0, min(1.0, x1 / width)), 6),
+        round(max(0.0, min(1.0, y1 / height)), 6),
+        round(max(0.0, min(1.0, x2 / width)), 6),
+        round(max(0.0, min(1.0, y2 / height)), 6),
+    ]
+
+
+def _bbox_from_region(region: dict[str, Any], img_w: int,
+                      img_h: int) -> tuple[int, int, int, int] | None:
+    bbox = region.get("bbox")
+    if isinstance(bbox, list) and len(bbox) == 4:
+        try:
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            return (
+                max(0, min(img_w, x1)),
+                max(0, min(img_h, y1)),
+                max(0, min(img_w, x2)),
+                max(0, min(img_h, y2)),
+            )
+        except Exception:
+            pass
+
+    norm = region.get("bbox_norm")
+    if isinstance(norm, list) and len(norm) == 4:
+        try:
+            x1 = int(float(norm[0]) * img_w)
+            y1 = int(float(norm[1]) * img_h)
+            x2 = int(float(norm[2]) * img_w)
+            y2 = int(float(norm[3]) * img_h)
+            return (
+                max(0, min(img_w, x1)),
+                max(0, min(img_h, y1)),
+                max(0, min(img_w, x2)),
+                max(0, min(img_h, y2)),
+            )
+        except Exception:
+            pass
+    return None
+
+
+def _region_transformed_value(region: dict[str, Any]) -> Any:
+    transformed = region.get("transformed")
+    if isinstance(transformed, dict):
+        return transformed.get("value")
+    return transformed
+
+
+def _region_manual_text(region: dict[str, Any]) -> str:
+    user = region.get("user")
+    if isinstance(user, dict):
+        value = user.get("manual_translation")
+        if isinstance(value, str):
+            return value.strip()
+    return ""
+
+
+def _region_skipped(region: dict[str, Any]) -> bool:
+    user = region.get("user")
+    if not isinstance(user, dict):
+        return False
+    if user.get("false_positive") is True:
+        return True
+    if user.get("wrong_sfx") is True:
+        return True
+    return False
+
+
+def _rerender_from_metadata(job: ProcessingJob,
+                            progress_cb: ProgressCallback | None = None,
+                            ) -> ProcessingResult:
+    """Re-render using metadata only (skip detection/OCR/translation)."""
+    _report(progress_cb, "rerender", "loading metadata", 15)
+    payload = job.metadata_payload or {}
+    regions = payload.get("regions")
+    if not isinstance(regions, list):
+        regions = []
+
+    _report(progress_cb, "rerender", "drawing edits", 50)
+    _, img_pil = decode_image_bytes(job.image_bytes)
+    img_out = img_pil.copy()
+    img_w, img_h = img_out.width, img_out.height
+
+    applied = 0
+    for region in regions:
+        if not isinstance(region, dict):
+            continue
+        if _region_skipped(region):
+            continue
+        bbox = _bbox_from_region(region, img_w, img_h)
+        if not bbox:
+            continue
+
+        manual = _region_manual_text(region)
+        transformed_val = _region_transformed_value(region)
+        kind = str(region.get("kind") or "bubble")
+
+        if job.pipeline == "manga_furigana":
+            # Keep furigana pages in JP style. Manual text is re-annotated.
+            if manual:
+                transformed_val = furigana_annotate(manual)
+            if not isinstance(transformed_val, list):
+                continue
+            clear_text_strokes(img_out, bbox)
+            render_furigana_vertical(img_out, bbox, transformed_val)
+            applied += 1
+            continue
+
+        # Translate/webtoon path: render plain English text.
+        text = manual
+        if not text:
+            if isinstance(transformed_val, str):
+                text = transformed_val.strip()
+            elif isinstance(transformed_val, list):
+                text = "".join(seg.get("text", "")
+                               for seg in transformed_val
+                               if isinstance(seg, dict)).strip()
+        if not text:
+            continue
+
+        if kind == "artwork_text":
+            clear_text_in_region(img_out, bbox)
+        else:
+            clear_text_strokes(img_out, bbox)
+        render_english(img_out, bbox, text)
+        applied += 1
+
+    _report(progress_cb, "rerender", "encoding", 95)
+    output_bytes = encode_image_pil(img_out)
+    return ProcessingResult(
+        job_id=job.job_id,
+        status="completed",
+        image_bytes=output_bytes,
+        bubble_count=applied,
+        pipeline=job.pipeline,
+        source_hash=job.source_hash,
+        metadata_payload=payload,
+    )
 
 
 def _process_manga(job: ProcessingJob,
@@ -130,11 +295,55 @@ def _process_manga(job: ProcessingJob,
     bubble_count = sum(1 for br in page.bubble_results
                        if br.transformed is not None)
 
+    img_w, img_h = page.img_pil.width, page.img_pil.height
+    regions: list[dict[str, Any]] = []
+    for idx, br in enumerate(page.bubble_results):
+        transformed_obj: dict[str, Any] | None = None
+        if isinstance(br.transformed, list):
+            transformed_obj = {
+                "kind": "furigana_segments",
+                "value": br.transformed,
+            }
+        elif isinstance(br.transformed, str):
+            transformed_obj = {
+                "kind": "text",
+                "value": br.transformed,
+            }
+        regions.append({
+            "id": f"r{idx+1}",
+            "kind": "artwork_text" if br.is_artwork_text else "bubble",
+            "bbox": [int(v) for v in br.bbox],
+            "bbox_norm": _norm_bbox(br.bbox, img_w, img_h),
+            "ocr_text": br.ocr_text,
+            "is_valid": bool(br.is_valid),
+            "transformed": transformed_obj,
+            "user": {
+                "false_positive": False,
+                "wrong_sfx": False,
+                "undetected": False,
+                "manual_translation": "",
+            },
+        })
+
+    metadata_payload = {
+        "schema_version": 1,
+        "pipeline": job.pipeline,
+        "source_hash": job.source_hash,
+        "image": {
+            "width": img_w,
+            "height": img_h,
+        },
+        "regions": regions,
+    }
+
     return ProcessingResult(
         job_id=job.job_id,
         status="completed",
         image_bytes=output_bytes,
         bubble_count=bubble_count,
+        pipeline=job.pipeline,
+        source_hash=job.source_hash,
+        metadata_payload=metadata_payload,
     )
 
 
@@ -165,9 +374,66 @@ def _process_webtoon(job: ProcessingJob,
     output_bytes = wt_render_bytes(page)
     bubble_count = sum(1 for r in page.regions if r.english)
 
+    img_w, img_h = page.img_pil.width, page.img_pil.height
+    regions: list[dict[str, Any]] = []
+
+    for idx, region in enumerate(page.regions):
+        bubble = region.bubble
+        transformed_obj = None
+        if region.english:
+            transformed_obj = {"kind": "text", "value": region.english}
+        regions.append({
+            "id": f"r{idx+1}",
+            "kind": "bubble",
+            "bbox": [int(v) for v in bubble.bbox],
+            "bbox_norm": _norm_bbox(bubble.bbox, img_w, img_h),
+            "ocr_text": bubble.combined_text,
+            "is_valid": bool(region.is_valid),
+            "transformed": transformed_obj,
+            "user": {
+                "false_positive": False,
+                "wrong_sfx": False,
+                "undetected": False,
+                "manual_translation": "",
+            },
+        })
+
+    # Persist SFX as editable regions too.
+    for idx, det in enumerate(page.sfx_detections):
+        bbox = det.bbox_rect
+        regions.append({
+            "id": f"sfx{idx+1}",
+            "kind": "sfx",
+            "bbox": [int(v) for v in bbox],
+            "bbox_norm": _norm_bbox(bbox, img_w, img_h),
+            "ocr_text": det.text,
+            "is_valid": True,
+            "transformed": {"kind": "text", "value": ""},
+            "user": {
+                "false_positive": False,
+                "wrong_sfx": False,
+                "undetected": False,
+                "manual_translation": "",
+            },
+        })
+
+    metadata_payload = {
+        "schema_version": 1,
+        "pipeline": job.pipeline,
+        "source_hash": job.source_hash,
+        "image": {
+            "width": img_w,
+            "height": img_h,
+        },
+        "regions": regions,
+    }
+
     return ProcessingResult(
         job_id=job.job_id,
         status="completed",
         image_bytes=output_bytes,
         bubble_count=bubble_count,
+        pipeline=job.pipeline,
+        source_hash=job.source_hash,
+        metadata_payload=metadata_payload,
     )

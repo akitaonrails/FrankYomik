@@ -10,6 +10,7 @@ class OverlayController {
     AppWebViewController controller,
     String originalSrc,
     Uint8List imageBytes,
+    String? pageId,
   ) async {
     final base64Data = await compute(base64Encode, imageBytes);
     // Escape single quotes in the URL
@@ -61,6 +62,7 @@ class OverlayController {
 
   img.src = blobUrl;
   img.dataset.frankTranslated = 'true';
+  if ('${pageId ?? ''}') img.dataset.frankPageId = '${pageId ?? ''}';
 
   // Add toggle on double-click (once) — single clicks pass through
   // to the site's own navigation (Kindle bars, page turns, etc.)
@@ -89,6 +91,7 @@ class OverlayController {
   Future<bool> replaceVisibleKindlePage(
     AppWebViewController controller,
     Uint8List imageBytes, {
+    String? pageId,
     String? expectedBlobSrc,
     Map<String, num>? expectedRect,
     String? overlayToken,
@@ -252,6 +255,7 @@ class OverlayController {
 
   target.src = blobUrl;
   target.dataset.frankTranslated = 'true';
+  if ('${pageId ?? ''}') target.dataset.frankPageId = '${pageId ?? ''}';
   // Store the translated blob URL so toggle handler can access the latest one.
   target.dataset.frankTranslatedSrc = blobUrl;
   if (overlayToken) target.dataset.frankOverlayToken = overlayToken;
@@ -486,7 +490,7 @@ class OverlayController {
     String pageId,
     Uint8List imageBytes,
   ) async {
-    return replaceImageBySrc(controller, pageId, imageBytes);
+    return replaceImageBySrc(controller, pageId, imageBytes, pageId);
   }
 
   /// Enable tap-to-toggle inspector mode for highlighting elements.

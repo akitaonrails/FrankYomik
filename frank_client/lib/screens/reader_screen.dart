@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import '../providers/jobs_provider.dart';
+import '../providers/connection_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/image_capture_service.dart';
 import '../webview/dom_inspector.dart';
@@ -73,9 +74,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   String _kindleNavIntent = 'forward';
   bool _kindleDebugHudEnabled = true;
   bool _kindleVerboseProbeLogs = false;
+  bool _overlayEditMode = false;
   int _kindleOverlayOk = 0;
   int _kindleOverlayFail = 0;
   int _kindleOverlayFallback = 0;
+  final Map<String, Map<String, dynamic>> _metadataByPageId = {};
+  final Map<String, Map<String, dynamic>> _metadataOriginalByPageId = {};
+  final Set<String> _dirtyMetadataPageIds = <String>{};
 
   /// Selected pipeline for Kindle pages (furigana vs english translation).
   String _kindlePipeline = 'manga_furigana';
@@ -157,6 +162,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 _kindleOverlayOk = 0;
                 _kindleOverlayFail = 0;
                 _kindleOverlayFallback = 0;
+                _metadataByPageId.clear();
+                _metadataOriginalByPageId.clear();
+                _dirtyMetadataPageIds.clear();
                 // Cancel all completion listeners from previous page
                 for (final sub in _completionListeners.values) {
                   sub.close();
@@ -172,6 +180,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 _syncPipelineButtonState();
                 _syncDebugHudButtonState();
                 _syncVerboseProbeButtonState();
+                _syncEditModeButtonState();
+                _syncFeedbackActionButtons();
+                _syncEditModeToPage();
               });
               if (_inspectorMode) {
                 _inspector.inject(controller);
@@ -656,6 +667,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (existingJob != null &&
         existingJob.isComplete &&
         existingJob.translatedImage != null) {
+      _ensureMetadataForPage(pageId);
       _updateInPageStatus('$pageId done (cached)!');
       // For Kindle, only overlay if the user is still viewing this page
       final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
@@ -673,6 +685,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         _updateInPageStatus('$pageId: ${job.status.name}');
       }
       if (job.isComplete && job.translatedImage != null) {
+        _ensureMetadataForPage(pageId);
         _updateInPageStatus('$pageId done!');
         // Cancel this listener — job is done
         _completionListeners[pageId]?.close();
@@ -713,6 +726,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         rightNow != null &&
         rightNow.isComplete &&
         rightNow.translatedImage != null) {
+      _ensureMetadataForPage(leftId);
+      _ensureMetadataForPage(rightId);
       if (_showOverlay && spreadPageId == _currentKindlePageId) {
         _applySpreadOverlay(
           spreadPageId,
@@ -740,6 +755,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           rightJob.isComplete &&
           rightJob.translatedImage != null &&
           _showOverlay) {
+        _ensureMetadataForPage(leftId);
+        _ensureMetadataForPage(rightId);
         _completionListeners[spreadPageId]?.close();
         _completionListeners.remove(spreadPageId);
         _applySpreadOverlay(
@@ -768,6 +785,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           controller,
           originalSrc,
           imageBytes,
+          pageId,
         );
         debugPrint('[Overlay] $pageId replace=${ok ? 'OK' : 'FAIL'}');
       } else {
@@ -811,6 +829,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     var ok = await _overlay.replaceVisibleKindlePage(
       controller,
       imageBytes,
+      pageId: pageId,
       expectedBlobSrc: expectedBlob,
       expectedRect: expectedRect,
       overlayToken: overlayToken,
@@ -821,6 +840,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       ok = await _overlay.replaceVisibleKindlePage(
         controller,
         imageBytes,
+        pageId: pageId,
         expectedRect: expectedRect,
         overlayToken: overlayToken,
       );
@@ -940,6 +960,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         final ok = await _overlay.replaceVisibleKindlePage(
           controller,
           imageBytes,
+          pageId: pageId,
           expectedBlobSrc: expectedBlob,
           expectedRect: expectedRect,
           overlayToken: token,
@@ -990,6 +1011,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         var ok = await _overlay.replaceVisibleKindlePage(
           controller,
           imageBytes,
+          pageId: pageId,
           expectedBlobSrc: expectedBlob,
           expectedRect: expectedRect,
           overlayToken: token,
@@ -998,6 +1020,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ok = await _overlay.replaceVisibleKindlePage(
             controller,
             imageBytes,
+            pageId: pageId,
             expectedRect: expectedRect,
             overlayToken: token,
           );
@@ -1143,6 +1166,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     '<button id="__frankAuto" title="Toggle auto-translate">Auto: ON</button>' +
     '<button id="__frankPipeline" title="Switch pipeline" style="display:none;"></button>' +
     '<button id="__frankTranslate" title="Translate visible pages">&#x1F30D; Translate</button>' +
+    '<button id="__frankFeedback" title="Toggle feedback mode">Feedback: OFF</button>' +
+    '<button id="__frankSaveEdits" title="Save feedback edits" style="display:none;">Save</button>' +
+    '<button id="__frankCancelEdits" title="Cancel feedback edits" style="display:none;">Cancel</button>' +
     '<button id="__frankDbgToggle" title="Toggle debug HUD" style="display:none;">Debug: ON</button>' +
     '<button id="__frankVerbose" title="Toggle verbose probe logs" style="display:none;">Verbose: OFF</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
@@ -1170,10 +1196,78 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     'border-radius:6px; font:11px/1.35 monospace; max-width:48vw;';
   document.body.appendChild(dbg);
 
+  var editMenu = document.createElement('div');
+  editMenu.id = '__frankEditMenu';
+  editMenu.style.cssText =
+    'position:fixed; z-index:1000001; display:none; min-width:210px;' +
+    'background:rgba(20,20,20,0.95); color:#fff; border:1px solid rgba(255,255,255,0.25);' +
+    'border-radius:6px; padding:4px;';
+  editMenu.innerHTML =
+    '<button data-action="false_positive" style="width:100%;text-align:left;">Mark false positive balloon</button>' +
+    '<button data-action="undetected" style="width:100%;text-align:left;">Mark undetected balloon</button>' +
+    '<button data-action="wrong_sfx" style="width:100%;text-align:left;">Mark wrong SFX</button>' +
+    '<button data-action="edit_translation" style="width:100%;text-align:left;">Edit translation</button>';
+  document.body.appendChild(editMenu);
+
+  var editItems = editMenu.querySelectorAll('button[data-action]');
+  for (var ei = 0; ei < editItems.length; ei++) {
+    editItems[ei].style.cssText =
+      'display:block; background:none; border:none; color:#fff; padding:6px 8px; cursor:pointer; font:12px sans-serif;';
+  }
+
+  var editMode = false;
+  var editPayload = null;
+  function hideEditMenu() {
+    editMenu.style.display = 'none';
+    editPayload = null;
+  }
+  document.addEventListener('click', function() { hideEditMenu(); }, true);
+  document.addEventListener('scroll', function() { hideEditMenu(); }, true);
+  editMenu.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+  editMenu.addEventListener('click', function(e) {
+    var t = e.target;
+    if (!t || !t.dataset || !t.dataset.action) return;
+    if (!editPayload) return;
+    window.flutter_inappwebview.callHandler('onOverlayEditAction', {
+      action: t.dataset.action,
+      pageId: editPayload.pageId || null,
+      xNorm: editPayload.xNorm,
+      yNorm: editPayload.yNorm
+    });
+    hideEditMenu();
+  });
+
+  document.addEventListener('contextmenu', function(e) {
+    if (!editMode) return;
+    var target = e.target;
+    var img = null;
+    if (target && target.tagName === 'IMG') img = target;
+    if (!img && target && target.closest) img = target.closest('img');
+    if (!img) return;
+    e.preventDefault();
+    var r = img.getBoundingClientRect();
+    if (!r || r.width < 10 || r.height < 10) return;
+    var xNorm = (e.clientX - r.left) / r.width;
+    var yNorm = (e.clientY - r.top) / r.height;
+    xNorm = Math.max(0, Math.min(1, xNorm));
+    yNorm = Math.max(0, Math.min(1, yNorm));
+    editPayload = {
+      pageId: img.dataset ? img.dataset.frankPageId : null,
+      xNorm: xNorm,
+      yNorm: yNorm
+    };
+    editMenu.style.left = Math.max(4, Math.min(window.innerWidth - 220, e.clientX)) + 'px';
+    editMenu.style.top = Math.max(4, Math.min(window.innerHeight - 120, e.clientY)) + 'px';
+    editMenu.style.display = 'block';
+  }, true);
+
   var backBtn = document.getElementById('__frankBack');
   var autoBtn = document.getElementById('__frankAuto');
   var pipeBtn = document.getElementById('__frankPipeline');
   var transBtn = document.getElementById('__frankTranslate');
+  var feedbackBtn = document.getElementById('__frankFeedback');
+  var saveEditsBtn = document.getElementById('__frankSaveEdits');
+  var cancelEditsBtn = document.getElementById('__frankCancelEdits');
   var dbgToggleBtn = document.getElementById('__frankDbgToggle');
   var verboseBtn = document.getElementById('__frankVerbose');
   var copyDbgBtn = document.getElementById('__frankCopyDbg');
@@ -1181,6 +1275,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   autoBtn.style.cssText = btnStyle;
   pipeBtn.style.cssText = btnStyle + 'display:none;';
   transBtn.style.cssText = btnStyle;
+  feedbackBtn.style.cssText = btnStyle;
+  saveEditsBtn.style.cssText = btnStyle + 'display:none;';
+  cancelEditsBtn.style.cssText = btnStyle + 'display:none;';
   dbgToggleBtn.style.cssText = btnStyle + 'display:none;';
   verboseBtn.style.cssText = btnStyle + 'display:none;';
   copyDbgBtn.style.cssText = btnStyle + 'display:none;';
@@ -1214,6 +1311,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   transBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'translate');
+  });
+  feedbackBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_feedback_mode');
+  });
+  saveEditsBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'save_feedback_edits');
+  });
+  cancelEditsBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'cancel_feedback_edits');
   });
   dbgToggleBtn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -1249,6 +1358,37 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       el.style.borderColor = '#64b5f6';
       el.style.color = '#64b5f6';
     }
+  };
+  window.__frankSetFeedbackState = function(enabled, visibleControl) {
+    var btn = document.getElementById('__frankFeedback');
+    if (!btn) return;
+    btn.style.display = visibleControl ? '' : 'none';
+    btn.textContent = 'Feedback: ' + (enabled ? 'ON' : 'OFF');
+    btn.style.borderColor = enabled ? '#81c784' : 'rgba(255,255,255,0.3)';
+    btn.style.color = enabled ? '#81c784' : '#fff';
+  };
+  window.__frankSetFeedbackActions = function(showActions, dirtyCount) {
+    var saveBtn = document.getElementById('__frankSaveEdits');
+    var cancelBtn = document.getElementById('__frankCancelEdits');
+    if (!saveBtn || !cancelBtn) return;
+    if (!showActions) {
+      saveBtn.style.display = 'none';
+      cancelBtn.style.display = 'none';
+      return;
+    }
+    saveBtn.style.display = '';
+    cancelBtn.style.display = '';
+    var n = Number(dirtyCount || 0);
+    saveBtn.textContent = n > 0 ? ('Save (' + n + ')') : 'Save';
+    saveBtn.style.borderColor = n > 0 ? '#4caf50' : 'rgba(255,255,255,0.3)';
+    saveBtn.style.color = n > 0 ? '#4caf50' : '#fff';
+    cancelBtn.textContent = n > 0 ? ('Cancel (' + n + ')') : 'Cancel';
+    cancelBtn.style.borderColor = n > 0 ? '#ef9a9a' : 'rgba(255,255,255,0.3)';
+    cancelBtn.style.color = n > 0 ? '#ef9a9a' : '#fff';
+  };
+  window.__frankSetEditMode = function(enabled) {
+    editMode = !!enabled;
+    if (!editMode) hideEditMenu();
   };
   window.__frankSetDebugHud = function(text, visible) {
     var el = document.getElementById('__frankDebugHud');
@@ -1298,6 +1438,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           case 'translate':
             _translateVisiblePages();
             break;
+          case 'toggle_feedback_mode':
+            _toggleOverlayEditMode();
+            break;
+          case 'save_feedback_edits':
+            _saveFeedbackEdits();
+            break;
+          case 'cancel_feedback_edits':
+            _cancelFeedbackEdits();
+            break;
           case 'copy_debug':
             _copyKindleDebugHudToClipboard();
             break;
@@ -1321,6 +1470,27 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         final data = args[0] as Map<String, dynamic>?;
         if (data == null) return null;
         _inspector.log(data);
+        return null;
+      },
+    );
+
+    controller.addJavaScriptHandler(
+      handlerName: 'onOverlayEditAction',
+      callback: (args) {
+        if (args.isEmpty) return null;
+        final raw = args[0];
+        if (raw is! Map) return null;
+        final action = raw['action'] as String?;
+        final pageId = raw['pageId'] as String?;
+        final xNorm = (raw['xNorm'] as num?)?.toDouble();
+        final yNorm = (raw['yNorm'] as num?)?.toDouble();
+        if (action == null || xNorm == null || yNorm == null) return null;
+        _handleOverlayEditAction(
+          action: action,
+          pageId: pageId,
+          xNorm: xNorm,
+          yNorm: yNorm,
+        );
         return null;
       },
     );
@@ -1430,6 +1600,56 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
+  void _toggleOverlayEditMode() {
+    if (_overlayEditMode && _dirtyMetadataPageIds.isNotEmpty) {
+      _updateInPageStatus(
+        'Save or Cancel edits before leaving feedback mode',
+        clearAfter: const Duration(seconds: 3),
+      );
+      return;
+    }
+    _overlayEditMode = !_overlayEditMode;
+    _syncEditModeButtonState();
+    _syncFeedbackActionButtons();
+    _syncEditModeToPage();
+    _updateInPageStatus(
+      _overlayEditMode ? 'Feedback mode ON' : 'Feedback mode OFF',
+      clearAfter: const Duration(seconds: 2),
+    );
+  }
+
+  void _syncEditModeButtonState() {
+    final controller = _webController;
+    if (controller == null) return;
+    final isSupported =
+        _jsBridge.activeStrategy?.siteName == 'kindle' ||
+        _jsBridge.activeStrategy?.siteName == 'webtoon';
+    controller.evaluateJavascript(
+      source:
+          'if(window.__frankSetFeedbackState) window.__frankSetFeedbackState(${_overlayEditMode ? 'true' : 'false'}, ${isSupported ? 'true' : 'false'});',
+    );
+  }
+
+  void _syncEditModeToPage() {
+    final controller = _webController;
+    if (controller == null) return;
+    controller.evaluateJavascript(
+      source:
+          'if(window.__frankSetEditMode) window.__frankSetEditMode(${_overlayEditMode ? 'true' : 'false'});',
+    );
+  }
+
+  void _syncFeedbackActionButtons() {
+    final controller = _webController;
+    if (controller == null) return;
+    final showActions = _overlayEditMode;
+    final dirtyCount = _dirtyMetadataPageIds.length;
+    controller.evaluateJavascript(
+      source:
+          'if(window.__frankSetFeedbackActions) window.__frankSetFeedbackActions(${showActions ? 'true' : 'false'}, $dirtyCount);',
+    );
+  }
+
   /// Close completion listeners for Kindle pages the user is no longer viewing.
   void _closeStaleKindleListeners({String? keepPageId}) {
     final stale = _completionListeners.keys
@@ -1507,6 +1727,378 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _kindlePrefetchState = Map<String, Object?>.from(state);
       _pushKindleDebugHudToPage();
     };
+  }
+
+  void _ensureMetadataForPage(String pageId) {
+    if (_metadataByPageId.containsKey(pageId)) return;
+    unawaited(_loadMetadataForPage(pageId));
+  }
+
+  Map<String, dynamic> _deepCopyMap(Map<String, dynamic> value) {
+    return Map<String, dynamic>.from(
+      jsonDecode(jsonEncode(value)) as Map<String, dynamic>,
+    );
+  }
+
+  Future<void> _loadMetadataForPage(String pageId, {bool force = false}) async {
+    if (!force && _metadataByPageId.containsKey(pageId)) return;
+    final job = ref.read(jobsProvider)[pageId];
+    if (job == null) return;
+    final sourceHash = job.sourceHash;
+    final pipeline = job.pipeline;
+    if (sourceHash == null || sourceHash.isEmpty || pipeline == null) return;
+    try {
+      final api = ref.read(apiServiceProvider);
+      final settings = ref.read(settingsProvider);
+      final resp = await api.getCacheMetadataByHash(
+        settings: settings,
+        pipeline: pipeline,
+        sourceHash: sourceHash,
+      );
+      final metadata = resp['metadata'];
+      if (metadata is! Map) return;
+      _metadataByPageId[pageId] = {
+        'pipeline': pipeline,
+        'sourceHash': sourceHash,
+        'contentHash': resp['content_hash'],
+        'renderHash': resp['render_hash'],
+        'metadata': Map<String, dynamic>.from(metadata),
+      };
+      if (force) {
+        _metadataOriginalByPageId.remove(pageId);
+        _dirtyMetadataPageIds.remove(pageId);
+        _syncFeedbackActionButtons();
+      }
+    } catch (_) {
+      // Best-effort metadata hydration.
+    }
+  }
+
+  Future<void> _handleOverlayEditAction({
+    required String action,
+    required String? pageId,
+    required double xNorm,
+    required double yNorm,
+  }) async {
+    if (!_overlayEditMode) return;
+    var targetPageId = pageId;
+    if (targetPageId == null || targetPageId.isEmpty) {
+      targetPageId = _currentKindlePageId;
+    }
+    if (targetPageId == null || targetPageId.isEmpty) return;
+
+    // Kindle spread overlays are stitched from L/R jobs.
+    if (targetPageId.endsWith('-spread')) {
+      final isRightHalf = xNorm >= 0.5;
+      final halfPageId = '$targetPageId-${isRightHalf ? 'R' : 'L'}';
+      final localX = isRightHalf ? ((xNorm - 0.5) * 2.0) : (xNorm * 2.0);
+      await _applyMetadataActionToPage(
+        pageId: halfPageId,
+        action: action,
+        xNorm: localX.clamp(0.0, 1.0),
+        yNorm: yNorm.clamp(0.0, 1.0),
+      );
+      return;
+    }
+
+    await _applyMetadataActionToPage(
+      pageId: targetPageId,
+      action: action,
+      xNorm: xNorm.clamp(0.0, 1.0),
+      yNorm: yNorm.clamp(0.0, 1.0),
+    );
+  }
+
+  int _findRegionAt(List<dynamic> regions, double xNorm, double yNorm) {
+    for (var i = 0; i < regions.length; i++) {
+      final r = regions[i];
+      if (r is! Map) continue;
+      final norm = r['bbox_norm'];
+      if (norm is! List || norm.length != 4) continue;
+      final x1 = (norm[0] as num?)?.toDouble() ?? -1;
+      final y1 = (norm[1] as num?)?.toDouble() ?? -1;
+      final x2 = (norm[2] as num?)?.toDouble() ?? -1;
+      final y2 = (norm[3] as num?)?.toDouble() ?? -1;
+      if (xNorm >= x1 && xNorm <= x2 && yNorm >= y1 && yNorm <= y2) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  Future<void> _applyMetadataActionToPage({
+    required String pageId,
+    required String action,
+    required double xNorm,
+    required double yNorm,
+  }) async {
+    await _loadMetadataForPage(pageId);
+    final entry = _metadataByPageId[pageId];
+    if (entry == null) {
+      _updateInPageStatus(
+        'No metadata for $pageId',
+        clearAfter: const Duration(seconds: 2),
+      );
+      return;
+    }
+    final metadata = entry['metadata'];
+    if (metadata is! Map<String, dynamic>) return;
+    _metadataOriginalByPageId.putIfAbsent(pageId, () => _deepCopyMap(metadata));
+    final regionsRaw = metadata['regions'];
+    final regions = (regionsRaw is List) ? regionsRaw : <dynamic>[];
+    if (metadata['regions'] is! List) {
+      metadata['regions'] = regions;
+    }
+
+    final idx = _findRegionAt(regions, xNorm, yNorm);
+    Map<String, dynamic>? region =
+        (idx >= 0 && regions[idx] is Map<String, dynamic>)
+        ? Map<String, dynamic>.from(regions[idx] as Map<String, dynamic>)
+        : null;
+
+    if (action == 'undetected') {
+      final img = metadata['image'];
+      final imgW =
+          (img is Map ? (img['width'] as num?)?.toInt() : null) ?? 1000;
+      final imgH =
+          (img is Map ? (img['height'] as num?)?.toInt() : null) ?? 1000;
+      const halfW = 0.05;
+      const halfH = 0.05;
+      final x1 = (xNorm - halfW).clamp(0.0, 1.0);
+      final y1 = (yNorm - halfH).clamp(0.0, 1.0);
+      final x2 = (xNorm + halfW).clamp(0.0, 1.0);
+      final y2 = (yNorm + halfH).clamp(0.0, 1.0);
+      final r = <String, dynamic>{
+        'id': 'u-${DateTime.now().millisecondsSinceEpoch}',
+        'kind': 'bubble',
+        'bbox_norm': [x1, y1, x2, y2],
+        'bbox': [
+          (x1 * imgW).round(),
+          (y1 * imgH).round(),
+          (x2 * imgW).round(),
+          (y2 * imgH).round(),
+        ],
+        'ocr_text': '',
+        'is_valid': false,
+        'transformed': {'kind': 'text', 'value': ''},
+        'user': {
+          'false_positive': false,
+          'wrong_sfx': false,
+          'undetected': true,
+          'manual_translation': '',
+        },
+      };
+      regions.add(r);
+    } else {
+      if (region == null) {
+        _updateInPageStatus(
+          'No text region at click',
+          clearAfter: const Duration(seconds: 2),
+        );
+        return;
+      }
+      final user = Map<String, dynamic>.from(
+        (region['user'] as Map?)?.cast<String, dynamic>() ??
+            <String, dynamic>{
+              'false_positive': false,
+              'wrong_sfx': false,
+              'undetected': false,
+              'manual_translation': '',
+            },
+      );
+
+      if (action == 'false_positive') {
+        user['false_positive'] = true;
+      } else if (action == 'wrong_sfx') {
+        user['wrong_sfx'] = true;
+      } else if (action == 'edit_translation') {
+        var initial = (user['manual_translation'] as String?) ?? '';
+        if (initial.isEmpty) {
+          final transformed = region['transformed'];
+          if (transformed is Map) {
+            initial = (transformed['value'] as String?) ?? '';
+          }
+        }
+        final edited = await _showTranslationEditDialog(initial);
+        if (edited == null) return;
+        user['manual_translation'] = edited.trim();
+      }
+
+      region['user'] = user;
+      if (idx >= 0) {
+        regions[idx] = region;
+      }
+    }
+
+    // Stage edit locally until user explicitly saves.
+    _metadataByPageId[pageId] = entry;
+    _metadataByPageId[pageId]!['metadata'] = metadata;
+    _dirtyMetadataPageIds.add(pageId);
+    _syncFeedbackActionButtons();
+    _updateInPageStatus(
+      'Edit staged. Use Save or Cancel.',
+      clearAfter: const Duration(seconds: 2),
+    );
+  }
+
+  Future<String?> _showTranslationEditDialog(String initial) async {
+    final controller = TextEditingController(text: initial);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Edit Translation'),
+          content: TextField(
+            controller: controller,
+            maxLines: 5,
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    return value;
+  }
+
+  Future<void> _saveFeedbackEdits() async {
+    if (_dirtyMetadataPageIds.isEmpty) {
+      _updateInPageStatus(
+        'No pending edits',
+        clearAfter: const Duration(seconds: 2),
+      );
+      return;
+    }
+    final api = ref.read(apiServiceProvider);
+    final settings = ref.read(settingsProvider);
+    final dirtyPages = _dirtyMetadataPageIds.toList();
+    var failed = 0;
+
+    _updateInPageStatus('Saving ${dirtyPages.length} page(s)...');
+
+    for (final pageId in dirtyPages) {
+      final entry = _metadataByPageId[pageId];
+      if (entry == null) {
+        failed++;
+        continue;
+      }
+      final pipeline = entry['pipeline'] as String?;
+      final sourceHash = entry['sourceHash'] as String?;
+      final contentHash = entry['contentHash'] as String?;
+      final metadata = entry['metadata'] as Map<String, dynamic>?;
+      if (pipeline == null ||
+          sourceHash == null ||
+          sourceHash.isEmpty ||
+          metadata == null) {
+        failed++;
+        continue;
+      }
+      try {
+        final patchResp = await api.patchCacheMetadataByHash(
+          settings: settings,
+          pipeline: pipeline,
+          sourceHash: sourceHash,
+          metadata: metadata,
+          baseContentHash: contentHash,
+        );
+        final rerenderJobId = patchResp['job_id'] as String?;
+        if (rerenderJobId == null || rerenderJobId.isEmpty) {
+          failed++;
+          continue;
+        }
+        await _waitForJobCompletion(rerenderJobId);
+        await _loadMetadataForPage(pageId, force: true);
+        _dirtyMetadataPageIds.remove(pageId);
+        _metadataOriginalByPageId.remove(pageId);
+      } catch (e) {
+        failed++;
+        debugPrint('[Feedback] Save failed for $pageId: $e');
+      }
+    }
+
+    _syncFeedbackActionButtons();
+    if (failed == 0) {
+      _updateInPageStatus(
+        'Feedback saved',
+        clearAfter: const Duration(seconds: 2),
+      );
+      _refreshCurrentPageFromCache();
+    } else {
+      _updateInPageStatus(
+        'Saved with $failed failure(s)',
+        clearAfter: const Duration(seconds: 3),
+      );
+    }
+  }
+
+  void _cancelFeedbackEdits() {
+    if (_dirtyMetadataPageIds.isEmpty) {
+      _updateInPageStatus(
+        'No pending edits',
+        clearAfter: const Duration(seconds: 2),
+      );
+      return;
+    }
+    for (final pageId in _dirtyMetadataPageIds.toList()) {
+      final original = _metadataOriginalByPageId[pageId];
+      final current = _metadataByPageId[pageId];
+      if (original != null && current != null) {
+        current['metadata'] = _deepCopyMap(original);
+      } else {
+        _metadataByPageId.remove(pageId);
+      }
+      _metadataOriginalByPageId.remove(pageId);
+    }
+    _dirtyMetadataPageIds.clear();
+    _syncFeedbackActionButtons();
+    _updateInPageStatus(
+      'Feedback edits canceled',
+      clearAfter: const Duration(seconds: 2),
+    );
+  }
+
+  Future<void> _waitForJobCompletion(String jobId) async {
+    final api = ref.read(apiServiceProvider);
+    final settings = ref.read(settingsProvider);
+    for (var i = 0; i < 60; i++) {
+      final status = await api.getJobStatus(settings: settings, jobId: jobId);
+      final s = status['status'] as String? ?? '';
+      if (s == 'completed') return;
+      if (s == 'failed') {
+        throw Exception(status['error'] ?? 'rerender failed');
+      }
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+    throw Exception('rerender timeout');
+  }
+
+  void _refreshCurrentPageFromCache() {
+    if (!mounted) return;
+    if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
+      _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
+      return;
+    }
+    if (_jsBridge.activeStrategy?.siteName == 'webtoon') {
+      final visible = _detectedWebtoonPages.entries
+          .where((e) => e.value['pageId'] is String)
+          .toList();
+      if (visible.isNotEmpty) {
+        final last = visible.last.value;
+        final pageId = last['pageId'] as String?;
+        if (pageId != null) {
+          _capturePageImage(pageId, last);
+        }
+      }
+    }
   }
 
   /// Handle a page captured by the background webview prefetch manager.
