@@ -96,8 +96,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// All detected webtoon page infos, keyed by index.
   final Map<int, Map<String, dynamic>> _detectedWebtoonPages = {};
 
-  /// Highest webtoon page index that has been submitted (inclusive).
-  int _batchSubmittedUpTo = -1;
+  /// Webtoon page indices that were successfully captured and submitted.
+  final Set<int> _submittedWebtoonIndices = {};
 
   /// Whether a batch submission is currently in progress.
   bool _batchInProgress = false;
@@ -152,8 +152,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               // same-URL load stops while paging; avoid wiping runtime state.
               if (!preserveKindleSessionState) {
                 _detectedWebtoonPages.clear();
-                _batchSubmittedUpTo = -1;
+                _submittedWebtoonIndices.clear();
                 _batchInProgress = false;
+                // Reset JS detection state so re-injection can re-detect pages
+                controller.evaluateJavascript(
+                  source: 'window.__frankDetectorActive = false; '
+                      'if(window.__frankDetectedPages) window.__frankDetectedPages.clear();',
+                );
                 _currentKindlePageId = null;
                 _kindleBlobByPageId.clear();
                 _kindleRectByPageId.clear();
@@ -380,7 +385,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (index != null && pageId.startsWith('wt-')) {
       _detectedWebtoonPages[index] = pageInfo;
       final detected = _detectedWebtoonPages.length;
-      final submitted = _batchSubmittedUpTo + 1;
+      final submitted = _submittedWebtoonIndices.length;
       _updateInPageStatus('Page $pageId ($submitted/$detected queued)');
 
       if (!settings.autoTranslate) {
@@ -389,9 +394,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       }
 
       // First detection → submit initial batch
-      // Or user scrolled close to batch boundary → submit next batch
-      if (_batchSubmittedUpTo < 0 ||
-          index >= _batchSubmittedUpTo - _prefetchThreshold) {
+      // Or page not yet submitted and close to frontier → submit next batch
+      if (_submittedWebtoonIndices.isEmpty ||
+          (!_submittedWebtoonIndices.contains(index) &&
+              index >= (_submittedWebtoonIndices.isEmpty
+                  ? 0
+                  : _submittedWebtoonIndices.reduce((a, b) => a > b ? a : b)) -
+                  _prefetchThreshold)) {
         _submitNextBatch();
       }
       return;
@@ -537,23 +546,37 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       // Legacy screenshot fallback
       imageBytes = await _capture.takeScreenshot(controller);
     } else {
-      // Webtoon: download image directly from src URL
-      final src = pageInfo['src'] as String?;
-      if (src != null && src.isNotEmpty) {
+      // Webtoon: use JS fetch in the WebView context (has cookies + correct referer)
+      final script = _jsBridge.getCaptureScript(pageId);
+      if (script != null) {
         try {
-          final response = await http.get(
-            Uri.parse(src),
-            headers: {'Referer': _currentUrl},
-          );
-          if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-            imageBytes = response.bodyBytes;
-          } else {
-            debugPrint(
-              '[Reader] Download failed $pageId: HTTP ${response.statusCode}',
-            );
+          final b64 = await controller.evaluateJavascript(source: script);
+          if (b64 is String && b64.isNotEmpty && b64 != 'null') {
+            imageBytes = await compute(base64Decode, b64);
           }
         } catch (e) {
-          debugPrint('[Reader] Download error $pageId: $e');
+          debugPrint('[Reader] JS capture error $pageId: $e');
+        }
+      }
+      // Fallback: direct HTTP download if JS capture failed
+      if (imageBytes == null) {
+        final src = pageInfo['src'] as String?;
+        if (src != null && src.isNotEmpty) {
+          try {
+            final response = await http.get(
+              Uri.parse(src),
+              headers: {'Referer': _currentUrl},
+            );
+            if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+              imageBytes = response.bodyBytes;
+            } else {
+              debugPrint(
+                '[Reader] Download failed $pageId: HTTP ${response.statusCode}',
+              );
+            }
+          } catch (e) {
+            debugPrint('[Reader] Download error $pageId: $e');
+          }
         }
       }
     }
@@ -610,7 +633,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
       final toSubmit = <int>[];
       for (final idx in sortedIndices) {
-        if (idx <= _batchSubmittedUpTo) continue;
+        if (_submittedWebtoonIndices.contains(idx)) continue;
         final pageId = 'wt-$idx';
         if (jobs.containsKey(pageId)) continue;
         toSubmit.add(idx);
@@ -621,7 +644,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
       debugPrint(
         '[Batch] Submitting ${toSubmit.length} pages: $toSubmit '
-        '(detected=${_detectedWebtoonPages.length}, submitted=${_batchSubmittedUpTo + 1})',
+        '(detected=${_detectedWebtoonPages.length}, submitted=${_submittedWebtoonIndices.length})',
       );
       _updateInPageStatus('Batch: submitting ${toSubmit.length} pages...');
 
@@ -632,20 +655,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           final pageId = pageInfo['pageId'] as String;
           try {
             await _capturePageImage(pageId, pageInfo);
+            // Only mark as submitted if capture+submit succeeded
+            _submittedWebtoonIndices.add(idx);
           } catch (e) {
             debugPrint('[Reader] Failed to capture $pageId: $e');
           }
         }),
       );
 
-      // Update batch watermark to highest submitted index
-      final maxSubmitted = toSubmit.reduce((a, b) => a > b ? a : b);
-      if (maxSubmitted > _batchSubmittedUpTo) {
-        _batchSubmittedUpTo = maxSubmitted;
-      }
-
       final total = _detectedWebtoonPages.length;
-      final done = _batchSubmittedUpTo + 1;
+      final done = _submittedWebtoonIndices.length;
       _updateInPageStatus('Queued $done/$total pages');
     } finally {
       _batchInProgress = false;
@@ -653,7 +672,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final sortedIndices = _detectedWebtoonPages.keys.toList()..sort();
       final hasMore = sortedIndices.any(
         (idx) =>
-            idx > _batchSubmittedUpTo &&
+            !_submittedWebtoonIndices.contains(idx) &&
             !ref.read(jobsProvider).containsKey('wt-$idx'),
       );
       if (hasMore) {
@@ -1307,6 +1326,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     return { border: 'rgba(156,39,176,0.98)', fill: 'rgba(156,39,176,0.14)', dash: false, label: 'TXT' };
   }
+  function detectionStyle(regionKind) {
+    if (regionKind === 'artwork_text') {
+      return { border: 'rgba(255,235,59,0.55)', fill: 'rgba(255,235,59,0.05)', label: 'AT' };
+    }
+    if (regionKind === 'sfx') {
+      return { border: 'rgba(76,175,80,0.55)', fill: 'rgba(76,175,80,0.05)', label: 'SFX' };
+    }
+    return { border: 'rgba(0,188,212,0.55)', fill: 'rgba(0,188,212,0.05)', label: 'B' };
+  }
   function clearFeedbackMarks() {
     marksLayer.innerHTML = '';
     renderedFeedbackMarks = [];
@@ -1341,28 +1369,45 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       var py = r.top + (y * r.height);
       var pw = Math.max(10, w * r.width);
       var ph = Math.max(10, h * r.height);
-      var style = markStyle(mark.type);
-
+      var isMarked = !!mark.marked;
       var box = document.createElement('div');
-      box.style.cssText =
-        'position:fixed; pointer-events:none; box-sizing:border-box;' +
-        'left:' + px + 'px; top:' + py + 'px; width:' + pw + 'px; height:' + ph + 'px;' +
-        'border:2px ' + (style.dash ? 'dashed' : 'solid') + ' ' + style.border + ';' +
-        'background:' + style.fill + '; border-radius:4px;';
 
-      var badge = document.createElement('div');
-      badge.textContent = style.label;
-      badge.style.cssText =
-        'position:absolute; left:-1px; top:-18px; pointer-events:none;' +
-        'background:' + style.border + '; color:#fff; border-radius:3px;' +
-        'font:700 10px/1 sans-serif; padding:2px 4px;';
-      box.appendChild(badge);
+      if (isMarked) {
+        var style = markStyle(mark.type);
+        box.style.cssText =
+          'position:fixed; pointer-events:none; box-sizing:border-box;' +
+          'left:' + px + 'px; top:' + py + 'px; width:' + pw + 'px; height:' + ph + 'px;' +
+          'border:2px ' + (style.dash ? 'dashed' : 'solid') + ' ' + style.border + ';' +
+          'background:' + style.fill + '; border-radius:4px;';
+        var badge = document.createElement('div');
+        badge.textContent = style.label;
+        badge.style.cssText =
+          'position:absolute; left:-1px; top:-18px; pointer-events:none;' +
+          'background:' + style.border + '; color:#fff; border-radius:3px;' +
+          'font:700 10px/1 sans-serif; padding:2px 4px;';
+        box.appendChild(badge);
+      } else {
+        var ds = detectionStyle(mark.regionKind || 'bubble');
+        box.style.cssText =
+          'position:fixed; pointer-events:none; box-sizing:border-box;' +
+          'left:' + px + 'px; top:' + py + 'px; width:' + pw + 'px; height:' + ph + 'px;' +
+          'border:1px dashed ' + ds.border + ';' +
+          'background:' + ds.fill + '; border-radius:4px;';
+        if (mark.ocrText) box.title = mark.ocrText;
+        var dlabel = document.createElement('div');
+        dlabel.textContent = ds.label;
+        dlabel.style.cssText =
+          'position:absolute; left:2px; top:2px; pointer-events:none;' +
+          'color:' + ds.border + '; font:700 8px/1 sans-serif; opacity:0.8;';
+        box.appendChild(dlabel);
+      }
       marksLayer.appendChild(box);
 
       renderedFeedbackMarks.push({
         anchorPageId: String(anchorPageId || ''),
         pageId: String(mark.pageId || ''),
         regionId: String(mark.regionId || ''),
+        marked: isMarked,
         left: px,
         top: py,
         right: px + pw,
@@ -1415,7 +1460,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       yNorm: yNorm
     };
     var undoBtn = editMenu.querySelector('button[data-action="undo_mark"]');
-    if (undoBtn) undoBtn.style.display = markHit ? 'block' : 'none';
+    if (undoBtn) undoBtn.style.display = (markHit && markHit.marked) ? 'block' : 'none';
     editMenu.style.left = Math.max(4, Math.min(window.innerWidth - 220, clientX)) + 'px';
     editMenu.style.top = Math.max(4, Math.min(window.innerHeight - 120, clientY)) + 'px';
     editMenu.style.display = 'block';
@@ -1919,7 +1964,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       } else if (manual.isNotEmpty) {
         type = 'manual_translation';
       }
-      if (type == null) continue;
+      final bool marked = type != null;
 
       final norm = region['bbox_norm'];
       if (norm is! List || norm.length != 4) continue;
@@ -1944,11 +1989,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       if (globalX2 <= globalX1) continue;
 
       final regionId = (region['id'] as String?) ?? 'idx-$i';
+      final regionKind = (region['kind'] as String?) ?? 'bubble';
+      final ocrText = (region['ocr_text'] as String?) ?? '';
       marks.add({
         'anchorPageId': anchorPageId,
         'pageId': metadataPageId,
         'regionId': regionId,
         'type': type,
+        'marked': marked,
+        'regionKind': regionKind,
+        'ocrText': ocrText,
         'x': globalX1,
         'y': localY1,
         'w': globalX2 - globalX1,
@@ -2019,11 +2069,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _syncFeedbackMarksOverlay() {
     final controller = _webController;
     if (controller == null) return;
+    final rawMarks = _overlayEditMode
+        ? _collectFeedbackMarksForCurrentView()
+        : const <Map<String, Object?>>[];
+    // Sort: unmarked detections first (underneath), marked regions last (on top)
+    if (rawMarks.isNotEmpty) {
+      rawMarks.sort((a, b) {
+        final aMarked = a['marked'] == true ? 1 : 0;
+        final bMarked = b['marked'] == true ? 1 : 0;
+        return aMarked.compareTo(bMarked);
+      });
+    }
     final payload = <String, Object?>{
       'enabled': _overlayEditMode,
-      'marks': _overlayEditMode
-          ? _collectFeedbackMarksForCurrentView()
-          : const <Map<String, Object?>>[],
+      'marks': rawMarks,
     };
     controller.evaluateJavascript(
       source:

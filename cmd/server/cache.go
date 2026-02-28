@@ -163,7 +163,9 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
-func (c *Cache) storeObject(data []byte) (sha string, size int, err error) {
+// StoreObject writes data to the content-addressed object store.
+// It is idempotent: if the object already exists and is valid, it returns immediately.
+func (c *Cache) StoreObject(data []byte) (sha string, size int, err error) {
 	sha = hashHex(data)
 	size = len(data)
 	if !isValidSHA256Hex(sha) {
@@ -306,15 +308,15 @@ func (c *Cache) StoreBySourceHash(pipeline, sourceHash string, sourceImageBytes,
 	if err != nil {
 		return nil, fmt.Errorf("canonical metadata: %w", err)
 	}
-	srcObj, srcSize, err := c.storeObject(sourceImageBytes)
+	srcObj, srcSize, err := c.StoreObject(sourceImageBytes)
 	if err != nil {
 		return nil, err
 	}
-	imgObj, imgSize, err := c.storeObject(imageBytes)
+	imgObj, imgSize, err := c.StoreObject(imageBytes)
 	if err != nil {
 		return nil, err
 	}
-	metaObj, metaSize, err := c.storeObject(canonMeta)
+	metaObj, metaSize, err := c.StoreObject(canonMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -403,7 +405,7 @@ func (c *Cache) UpdateMetadataBySourceHash(pipeline, sourceHash string, metadata
 	if err != nil {
 		return nil, err
 	}
-	metaObj, metaSize, err := c.storeObject(canonMeta)
+	metaObj, metaSize, err := c.StoreObject(canonMeta)
 	if err != nil {
 		return nil, err
 	}

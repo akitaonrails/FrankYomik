@@ -118,6 +118,12 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	sourceHash := hashHex(imageBytes)
 
+	// Persist source image to v2 content-addressed store immediately so
+	// originals survive even if the worker crashes or Redis keys expire.
+	if _, _, err := s.cache.StoreObject(imageBytes); err != nil {
+		log.Printf("WARN: failed to persist source image: %v", err)
+	}
+
 	// Hash-first filesystem cache check (works for Kindle where page number is unstable).
 	if _, m, ok := s.cache.LookupBySourceHash(pipeline, sourceHash); ok {
 		// Keep by-ref link warm when metadata is provided.

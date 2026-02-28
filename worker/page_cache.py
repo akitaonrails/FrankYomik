@@ -139,6 +139,13 @@ class PageCache:
         except (FileNotFoundError, ValueError):
             return None
 
+    def load_object(self, sha256_hex: str) -> bytes | None:
+        """Load a raw object by its SHA256 hex hash, without needing a manifest."""
+        try:
+            return self._read_object_verified(sha256_hex)
+        except (FileNotFoundError, ValueError):
+            return None
+
     def load_source_image_by_hash(self, pipeline: str,
                                   source_hash: str) -> bytes | None:
         manifest = self.load_manifest_by_hash(pipeline, source_hash)

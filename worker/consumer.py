@@ -185,6 +185,11 @@ class Consumer:
 
         # Fetch image bytes from Redis
         image_bytes = self._rdb.get(image_key) if image_key else None
+        if not image_bytes and source_hash:
+            # Redis key expired or missing — try v2 content-addressed cache.
+            image_bytes = self._page_cache.load_object(source_hash)
+            if image_bytes:
+                log.info("Loaded source from v2 cache for job %s", job_id)
         if not image_bytes:
             log.error("Image not found for job %s (key=%s)", job_id, image_key)
             self._store_result(ProcessingResult(
@@ -318,7 +323,8 @@ class Consumer:
                 result.content_hash[:12] if result.content_hash else "-",
             )
         except Exception as e:
-            log.warning("Failed to cache v2 result: %s", e)
+            log.error("Failed to cache v2 result for %s/%s: %s",
+                      pipeline, source_hash[:12], e)
 
     def _cache_to_filesystem(self, pipeline: str, title: str, chapter: str,
                              page_number: str, image_bytes: bytes) -> None:

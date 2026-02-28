@@ -14,7 +14,7 @@ const (
 	streamLow      = "frank:jobs:low"
 	imageKeyPrefix = "frank:images:"
 	dedupKey       = "frank:dedup"
-	imageTTL       = 1 * time.Hour
+	imageTTL       = 0 // no expiry — v2 cache is authoritative, Redis is fallback
 	dedupTTL       = 1 * time.Hour
 	maxLenHigh     = 500
 	maxLenLow      = 1000
