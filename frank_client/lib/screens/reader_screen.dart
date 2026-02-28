@@ -1201,9 +1201,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     '<button id="__frankAuto" title="Toggle auto-translate">Auto: ON</button>' +
     '<button id="__frankPipeline" title="Switch pipeline" style="display:none;"></button>' +
     '<button id="__frankTranslate" title="Translate visible pages">&#x1F30D; Translate</button>' +
+    '<button id="__frankToggleOrig" title="Toggle original/translated">Original</button>' +
     '<button id="__frankFeedback" title="Toggle feedback mode">Feedback: OFF</button>' +
     '<button id="__frankSaveEdits" title="Save feedback edits" style="display:none;">Save</button>' +
     '<button id="__frankCancelEdits" title="Cancel feedback edits" style="display:none;">Cancel</button>' +
+    '<button id="__frankReload" title="Reload page">&#x21BB; Reload</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
     '<span id="__frankStatus"></span>';
   bar.style.cssText =
@@ -1229,25 +1231,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     'border-radius:6px; font:11px/1.35 monospace; max-width:48vw;';
   document.body.appendChild(dbg);
 
-  var editMenu = document.createElement('div');
-  editMenu.id = '__frankEditMenu';
-  editMenu.style.cssText =
-    'position:fixed; z-index:1000001; display:none; min-width:210px;' +
-    'background:rgba(20,20,20,0.95); color:#fff; border:1px solid rgba(255,255,255,0.25);' +
-    'border-radius:6px; padding:4px;';
-  editMenu.innerHTML =
-    '<button data-action="undo_mark" style="width:100%;text-align:left;display:none;">Undo mark</button>' +
-    '<button data-action="false_positive" style="width:100%;text-align:left;">Mark false positive balloon</button>' +
-    '<button data-action="undetected" style="width:100%;text-align:left;">Mark undetected balloon</button>' +
-    '<button data-action="wrong_sfx" style="width:100%;text-align:left;">Mark wrong SFX</button>' +
-    '<button data-action="edit_translation" style="width:100%;text-align:left;">Edit translation</button>';
-  document.body.appendChild(editMenu);
-
-  var editItems = editMenu.querySelectorAll('button[data-action]');
-  for (var ei = 0; ei < editItems.length; ei++) {
-    editItems[ei].style.cssText =
-      'display:block; background:none; border:none; color:#fff; padding:6px 8px; cursor:pointer; font:12px sans-serif;';
-  }
 
   var marksLayer = document.createElement('div');
   marksLayer.id = '__frankFeedbackMarks';
@@ -1260,14 +1243,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   document.body.appendChild(marksLayer);
 
   var editMode = false;
-  var editPayload = null;
   var feedbackMarksEnabled = false;
   var feedbackMarks = [];
   var renderedFeedbackMarks = [];
   var marksRaf = null;
   function isUiTarget(target) {
     if (!target || !target.closest) return false;
-    return !!target.closest('#__frankBar,#__frankBarToggle,#__frankEditMenu');
+    return !!target.closest('#__frankBar,#__frankBarToggle');
   }
   function isVisibleImage(img) {
     if (!img || img.tagName !== 'IMG') return false;
@@ -1378,12 +1360,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
   function detectionStyle(regionKind) {
     if (regionKind === 'artwork_text') {
-      return { border: 'rgba(255,235,59,0.55)', fill: 'rgba(255,235,59,0.05)', label: 'AT' };
+      return { border: 'rgba(255,235,59,0.7)', fill: 'rgba(255,235,59,0.15)', label: 'AT' };
     }
     if (regionKind === 'sfx') {
-      return { border: 'rgba(76,175,80,0.55)', fill: 'rgba(76,175,80,0.05)', label: 'SFX' };
+      return { border: 'rgba(76,175,80,0.7)', fill: 'rgba(76,175,80,0.15)', label: 'SFX' };
     }
-    return { border: 'rgba(0,188,212,0.55)', fill: 'rgba(0,188,212,0.05)', label: 'B' };
+    return { border: 'rgba(0,188,212,0.7)', fill: 'rgba(0,188,212,0.15)', label: 'B' };
   }
   function clearFeedbackMarks() {
     marksLayer.innerHTML = '';
@@ -1431,7 +1413,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       if (isMarked) {
         var style = markStyle(mark.type);
         box.style.cssText =
-          'position:fixed; pointer-events:none; box-sizing:border-box;' +
+          'position:fixed; pointer-events:auto; box-sizing:border-box; cursor:pointer;' +
           'left:' + px + 'px; top:' + py + 'px; width:' + pw + 'px; height:' + ph + 'px;' +
           'border:2px ' + (style.dash ? 'dashed' : 'solid') + ' ' + style.border + ';' +
           'background:' + style.fill + '; border-radius:4px;';
@@ -1445,7 +1427,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       } else {
         var ds = detectionStyle(mark.regionKind || 'bubble');
         box.style.cssText =
-          'position:fixed; pointer-events:none; box-sizing:border-box;' +
+          'position:fixed; pointer-events:auto; box-sizing:border-box; cursor:pointer;' +
           'left:' + px + 'px; top:' + py + 'px; width:' + pw + 'px; height:' + ph + 'px;' +
           'border:1px dashed ' + ds.border + ';' +
           'background:' + ds.fill + '; border-radius:4px;';
@@ -1457,6 +1439,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           'color:' + ds.border + '; font:700 8px/1 sans-serif; opacity:0.8;';
         box.appendChild(dlabel);
       }
+      // Store mark data on the DOM element for click handlers
+      box.dataset.frankMarkPageId = mark.pageId || '';
+      box.dataset.frankMarkRegionId = mark.regionId || '';
+      box.dataset.frankMarkAnchorPageId = anchorPageId || '';
+      box.dataset.frankMarkMarked = isMarked ? 'true' : 'false';
       marksLayer.appendChild(box);
       marksRendered++;
 
@@ -1501,79 +1488,59 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     return best;
   }
-  function openEditMenu(clientX, clientY, img) {
+  // Single tap/click on a mark box: toggle false_positive (or undo if already marked)
+  marksLayer.addEventListener('click', function(e) {
+    if (!editMode) return;
+    var box = e.target.closest('[data-frank-mark-region-id]');
+    if (!box) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var pageId = box.dataset.frankMarkPageId || null;
+    var regionId = box.dataset.frankMarkRegionId || null;
+    var isMarked = box.dataset.frankMarkMarked === 'true';
+    var img = findImageByPageId(box.dataset.frankMarkAnchorPageId);
+    if (!img) return;
     var r = img.getBoundingClientRect();
-    if (!r || r.width < 10 || r.height < 10) return false;
-    var xNorm = (clientX - r.left) / r.width;
-    var yNorm = (clientY - r.top) / r.height;
-    xNorm = Math.max(0, Math.min(1, xNorm));
-    yNorm = Math.max(0, Math.min(1, yNorm));
-    var anchorPageId = img.dataset ? img.dataset.frankPageId : null;
-    var markHit = findFeedbackMarkAt(clientX, clientY, anchorPageId);
-    editPayload = {
-      pageId: markHit ? (markHit.pageId || anchorPageId || null) : (anchorPageId || null),
-      regionId: markHit ? (markHit.regionId || null) : null,
-      anchorPageId: anchorPageId || null,
-      xNorm: xNorm,
-      yNorm: yNorm
-    };
-    var undoBtn = editMenu.querySelector('button[data-action="undo_mark"]');
-    if (undoBtn) undoBtn.style.display = (markHit && markHit.marked) ? 'block' : 'none';
-    editMenu.style.left = Math.max(4, Math.min(window.innerWidth - 220, clientX)) + 'px';
-    editMenu.style.top = Math.max(4, Math.min(window.innerHeight - 120, clientY)) + 'px';
-    editMenu.style.display = 'block';
-    return true;
-  }
-  function hideEditMenu() {
-    editMenu.style.display = 'none';
-    editPayload = null;
-  }
-  document.addEventListener('click', function(e) {
-    if (!editMenu || editMenu.style.display === 'none') return;
-    var t = e && e.target;
-    if (t && t.closest && t.closest('#__frankEditMenu')) return;
-    hideEditMenu();
-  }, true);
-  document.addEventListener('scroll', function() { hideEditMenu(); }, true);
-  editMenu.addEventListener('contextmenu', function(e) { e.preventDefault(); });
-  editMenu.addEventListener('click', function(e) {
-    var t = e.target;
-    if (!t || !t.dataset || !t.dataset.action) return;
-    if (!editPayload) return;
-    if (t.dataset.action === 'undo_mark' && !editPayload.regionId) {
-      hideEditMenu();
-      return;
-    }
+    var br = box.getBoundingClientRect();
+    var xNorm = ((br.left + br.width / 2) - r.left) / r.width;
+    var yNorm = ((br.top + br.height / 2) - r.top) / r.height;
     window.flutter_inappwebview.callHandler('onOverlayEditAction', {
-      action: t.dataset.action,
-      pageId: editPayload.pageId || null,
-      regionId: editPayload.regionId || null,
-      xNorm: editPayload.xNorm,
-      yNorm: editPayload.yNorm
+      action: isMarked ? 'undo_mark' : 'false_positive',
+      pageId: pageId,
+      regionId: regionId,
+      xNorm: Math.max(0, Math.min(1, xNorm)),
+      yNorm: Math.max(0, Math.min(1, yNorm))
     });
-    hideEditMenu();
-  });
+  }, true);
 
+  // Double tap/click on a mark box: edit translation
+  marksLayer.addEventListener('dblclick', function(e) {
+    if (!editMode) return;
+    var box = e.target.closest('[data-frank-mark-region-id]');
+    if (!box) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var pageId = box.dataset.frankMarkPageId || null;
+    var regionId = box.dataset.frankMarkRegionId || null;
+    var img = findImageByPageId(box.dataset.frankMarkAnchorPageId);
+    if (!img) return;
+    var r = img.getBoundingClientRect();
+    var br = box.getBoundingClientRect();
+    var xNorm = ((br.left + br.width / 2) - r.left) / r.width;
+    var yNorm = ((br.top + br.height / 2) - r.top) / r.height;
+    window.flutter_inappwebview.callHandler('onOverlayEditAction', {
+      action: 'edit_translation',
+      pageId: pageId,
+      regionId: regionId,
+      xNorm: Math.max(0, Math.min(1, xNorm)),
+      yNorm: Math.max(0, Math.min(1, yNorm))
+    });
+  }, true);
+
+  // Suppress context menu in edit mode
   document.addEventListener('contextmenu', function(e) {
     if (!editMode) return;
-    if (isUiTarget(e.target)) return;
-    var img = findImageAtPoint(e.clientX, e.clientY);
-    if (!img) return;
     e.preventDefault();
-    e.stopPropagation();
-    openEditMenu(e.clientX, e.clientY, img);
-  }, true);
-
-  // In feedback mode, left click also opens the feedback menu.
-  document.addEventListener('mousedown', function(e) {
-    if (!editMode) return;
-    if (e.button !== 0) return;
-    if (isUiTarget(e.target)) return;
-    var img = findImageAtPoint(e.clientX, e.clientY);
-    if (!img) return;
-    e.preventDefault();
-    e.stopPropagation();
-    openEditMenu(e.clientX, e.clientY, img);
   }, true);
   window.addEventListener('resize', scheduleFeedbackMarksRender);
   document.addEventListener('scroll', scheduleFeedbackMarksRender, true);
@@ -1590,18 +1557,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   var feedbackBtn = document.getElementById('__frankFeedback');
   var saveEditsBtn = document.getElementById('__frankSaveEdits');
   var cancelEditsBtn = document.getElementById('__frankCancelEdits');
-  var dbgToggleBtn = document.getElementById('__frankDbgToggle');
-  var verboseBtn = document.getElementById('__frankVerbose');
+  var toggleOrigBtn = document.getElementById('__frankToggleOrig');
+  var reloadBtn = document.getElementById('__frankReload');
   var copyDbgBtn = document.getElementById('__frankCopyDbg');
   if (backBtn) backBtn.style.cssText = btnStyle;
   if (autoBtn) autoBtn.style.cssText = btnStyle;
   if (pipeBtn) pipeBtn.style.cssText = btnStyle + 'display:none;';
   if (transBtn) transBtn.style.cssText = btnStyle;
+  if (toggleOrigBtn) toggleOrigBtn.style.cssText = btnStyle;
   if (feedbackBtn) feedbackBtn.style.cssText = btnStyle;
   if (saveEditsBtn) saveEditsBtn.style.cssText = btnStyle + 'display:none;';
   if (cancelEditsBtn) cancelEditsBtn.style.cssText = btnStyle + 'display:none;';
-  if (dbgToggleBtn) dbgToggleBtn.style.cssText = btnStyle + 'display:none;';
-  if (verboseBtn) verboseBtn.style.cssText = btnStyle + 'display:none;';
+  if (reloadBtn) reloadBtn.style.cssText = btnStyle;
   if (copyDbgBtn) copyDbgBtn.style.cssText = btnStyle + 'display:none;';
 
   var collapsed = false;
@@ -1646,6 +1613,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'cancel_feedback_edits');
   });
+  if (toggleOrigBtn) toggleOrigBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_original');
+  });
+  if (reloadBtn) reloadBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'reload');
+  });
   if (copyDbgBtn) copyDbgBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'copy_debug');
@@ -1672,6 +1647,36 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       el.style.borderColor = '#64b5f6';
       el.style.color = '#64b5f6';
     }
+  };
+  // Toggle original/translated for visible images.
+  // mode: 'kindle' toggles all translated imgs, 'webtoon' toggles only viewport-visible ones.
+  window.__frankToggleOriginal = function(mode) {
+    var imgs = document.querySelectorAll('img[data-frank-translated]');
+    var toggled = 0;
+    for (var i = 0; i < imgs.length; i++) {
+      var img = imgs[i];
+      if (!img.dataset.frankOriginalSrc) continue;
+      if (mode === 'webtoon') {
+        var r = img.getBoundingClientRect();
+        var inView = r.bottom > 0 && r.top < window.innerHeight &&
+                     r.right > 0 && r.left < window.innerWidth &&
+                     r.width > 40 && r.height > 40;
+        if (!inView) continue;
+      }
+      if (img.dataset.frankTranslated === 'true') {
+        img.dataset.frankTranslatedSrc = img.dataset.frankTranslatedSrc || img.src;
+        img.src = img.dataset.frankOriginalSrc;
+        img.dataset.frankTranslated = 'false';
+      } else {
+        var ts = img.dataset.frankTranslatedSrc;
+        if (ts) {
+          img.src = ts;
+          img.dataset.frankTranslated = 'true';
+        }
+      }
+      toggled++;
+    }
+    return toggled;
   };
   window.__frankSetFeedbackState = function(enabled, visibleControl) {
     var btn = document.getElementById('__frankFeedback');
@@ -1702,7 +1707,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   };
   window.__frankSetEditMode = function(enabled) {
     editMode = !!enabled;
-    if (!editMode) hideEditMenu();
     scheduleFeedbackMarksRender();
   };
   window.__frankSetFeedbackMarks = function(payload) {
@@ -1756,6 +1760,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             break;
           case 'cancel_feedback_edits':
             _cancelFeedbackEdits();
+            break;
+          case 'toggle_original':
+            _toggleOriginalTranslated();
+            break;
+          case 'reload':
+            _reloadPage();
             break;
           case 'copy_debug':
             _copyKindleDebugHudToClipboard();
@@ -1868,6 +1878,27 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
+  /// Toggle between original and translated images in the WebView.
+  void _toggleOriginalTranslated() {
+    final controller = _webController;
+    if (controller == null) return;
+    final mode = _jsBridge.activeStrategy?.siteName == 'kindle'
+        ? 'kindle'
+        : 'webtoon';
+    controller.evaluateJavascript(
+      source:
+          "if(window.__frankToggleOriginal) window.__frankToggleOriginal('$mode');",
+    );
+    _updateInPageStatus(
+      'Toggled original/translated',
+      clearAfter: const Duration(seconds: 1),
+    );
+  }
+
+  /// Full reload of the WebView page.
+  void _reloadPage() {
+    _webController?.evaluateJavascript(source: 'location.reload();');
+  }
 
   void _toggleOverlayEditMode() {
     if (_overlayEditMode && _dirtyMetadataPageIds.isNotEmpty) {

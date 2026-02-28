@@ -566,12 +566,10 @@ void main() {
       expect(readerSource.contains('cancel_feedback_edits'), true);
     });
 
-    test('feedback edit menu has all action buttons', () {
-      expect(readerSource.contains('data-action="false_positive"'), true);
-      expect(readerSource.contains('data-action="undetected"'), true);
-      expect(readerSource.contains('data-action="wrong_sfx"'), true);
-      expect(readerSource.contains('data-action="edit_translation"'), true);
-      expect(readerSource.contains('data-action="undo_mark"'), true);
+    test('feedback actions dispatch via mark click/dblclick', () {
+      // Single click toggles FP / undo, double-click opens translation edit
+      expect(readerSource.contains("action: isMarked ? 'undo_mark' : 'false_positive'"), true);
+      expect(readerSource.contains("action: 'edit_translation'"), true);
     });
 
     test('feedback marks rendering styles exist for all mark types', () {
