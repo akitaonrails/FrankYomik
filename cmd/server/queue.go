@@ -44,8 +44,9 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 	// Compute SHA256 for dedup
 	hash := fmt.Sprintf("%x", sha256.Sum256(imageBytes))
 
-	// Check dedup
-	existingJobID, err := q.rdb.HGet(ctx, dedupKey, hash).Result()
+	// Check dedup (keyed by hash + pipeline to avoid cross-pipeline collisions)
+	dedupField := hash + ":" + pipeline
+	existingJobID, err := q.rdb.HGet(ctx, dedupKey, dedupField).Result()
 	if err == nil && existingJobID != "" {
 		return existingJobID, true, nil
 	}
@@ -97,8 +98,8 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 		return "", false, fmt.Errorf("enqueuing job: %w", err)
 	}
 
-	// Store dedup mapping
-	q.rdb.HSet(ctx, dedupKey, hash, jobID)
+	// Store dedup mapping (keyed by hash + pipeline)
+	q.rdb.HSet(ctx, dedupKey, dedupField, jobID)
 	q.rdb.Expire(ctx, dedupKey, dedupTTL)
 
 	return jobID, false, nil

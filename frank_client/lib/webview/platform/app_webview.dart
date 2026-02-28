@@ -1,6 +1,8 @@
+import 'dart:collection';
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import '../../screens/reader_screen.dart' show antiBotScript;
 import 'app_webview_controller.dart';
 import 'inappwebview_controller.dart';
 import 'linux_webview_widget.dart';
@@ -46,10 +48,21 @@ class AppWebView extends StatelessWidget {
       initialSettings: InAppWebViewSettings(
         javaScriptEnabled: true,
         domStorageEnabled: true,
+        databaseEnabled: true,
+        cacheEnabled: true,
+        thirdPartyCookiesEnabled: true,
         userAgent: userAgent ??
-            'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+        javaScriptCanOpenWindowsAutomatically: true,
+        supportMultipleWindows: false,
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
       ),
+      initialUserScripts: UnmodifiableListView([
+        UserScript(
+          source: antiBotScript,
+          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+        ),
+      ]),
       onWebViewCreated: (controller) {
         wrapper = InAppWebViewControllerWrapper(controller);
         onWebViewCreated?.call(wrapper!);

@@ -1,5 +1,7 @@
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import '../webview/platform/app_webview_controller.dart';
 
@@ -87,5 +89,61 @@ class ImageCaptureService {
       Uint8List.fromList(img.encodePng(left)),
       Uint8List.fromList(img.encodePng(right)),
     );
+  }
+
+  /// Stitch left and right spread halves into a single full-spread image.
+  ///
+  /// Returns a PNG-encoded image combining both halves side by side.
+  /// Returns null if either image can't be decoded.
+  static Uint8List? stitchSpread(Uint8List left, Uint8List right) {
+    final leftImg = img.decodePng(left);
+    final rightImg = img.decodePng(right);
+    if (leftImg == null || rightImg == null) return null;
+
+    final height = max(leftImg.height, rightImg.height);
+    final stitched = img.Image(
+      width: leftImg.width + rightImg.width,
+      height: height,
+    );
+    img.compositeImage(stitched, leftImg, dstX: 0, dstY: 0);
+    img.compositeImage(stitched, rightImg, dstX: leftImg.width, dstY: 0);
+    return Uint8List.fromList(img.encodePng(stitched));
+  }
+
+  // --- Async versions that run on a background isolate ---
+
+  /// [splitSpread] on a background isolate.
+  static Future<(Uint8List, Uint8List)?> splitSpreadAsync(
+      Uint8List imageBytes) {
+    return compute(splitSpread, imageBytes);
+  }
+
+  /// [stitchSpread] on a background isolate.
+  static Future<Uint8List?> stitchSpreadAsync(
+      Uint8List left, Uint8List right) {
+    return compute(_stitchSpreadWorker, (left, right));
+  }
+
+  static Uint8List? _stitchSpreadWorker((Uint8List, Uint8List) args) {
+    return stitchSpread(args.$1, args.$2);
+  }
+
+  /// [cropToRect] on a background isolate.
+  static Future<Uint8List?> cropToRectAsync(
+    Uint8List screenshot,
+    ui.Rect contentRect,
+    double devicePixelRatio,
+  ) {
+    return compute(
+      _cropToRectWorker,
+      (screenshot, contentRect.left, contentRect.top, contentRect.width,
+          contentRect.height, devicePixelRatio),
+    );
+  }
+
+  static Uint8List? _cropToRectWorker(
+      (Uint8List, double, double, double, double, double) args) {
+    final (bytes, left, top, width, height, dpr) = args;
+    return cropToRect(bytes, ui.Rect.fromLTWH(left, top, width, height), dpr);
   }
 }

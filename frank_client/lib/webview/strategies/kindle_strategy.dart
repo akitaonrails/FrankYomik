@@ -1,6 +1,6 @@
 import 'base_strategy.dart';
 
-/// Strategy for read.amazon.co.jp — screenshot-based capture (bypasses DRM).
+/// Strategy for read.amazon.co.jp — DOM-based capture via blob img extraction.
 class KindleStrategy extends SiteStrategy {
   @override
   String get siteName => 'kindle';
@@ -11,62 +11,95 @@ class KindleStrategy extends SiteStrategy {
   /// Aspect ratio threshold: width > height * this = 2-page spread.
   static const double spreadThreshold = 1.3;
 
+  /// Shared JS helper: find the largest visible blob img in the viewport.
+  /// Kindle centers pages on wide/maximized windows, so we can't assume x ≈ 0.
+  /// Instead, pick the largest blob img whose bounding rect overlaps the viewport.
+  static const String _findVisibleBlobFn = '''
+  function __frankFindVisibleBlob() {
+    var imgs = document.querySelectorAll('img');
+    var best = null;
+    var bestArea = 0;
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    for (var i = 0; i < imgs.length; i++) {
+      if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
+      var r = imgs[i].getBoundingClientRect();
+      if (r.width < 100 || r.height < 100) continue;
+      // Check that the image overlaps the viewport
+      if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
+      var area = r.width * r.height;
+      if (area > bestArea) {
+        bestArea = area;
+        best = imgs[i];
+      }
+    }
+    return best;
+  }
+''';
+
   @override
   String get detectionScript => '''
 (function() {
   if (window.__frankDetectorActive) return;
   window.__frankDetectorActive = true;
-  window.__frankCurrentPage = null;
+  window.__frankPageCounter = window.__frankPageCounter || 0;
+  window.__frankLastBlob = null;
+
+$_findVisibleBlobFn
 
   function detectPageChange() {
-    const pageIndicator = document.querySelector(
-      '#kr-page-indicator, .page-number, [class*="pageNum"], [class*="page-count"]'
-    );
-    const readerContent = document.querySelector(
-      '#kr-renderer, #kindle-reader-content, .reader-content, canvas'
-    );
+    var target = __frankFindVisibleBlob();
+    if (!target) return; // Canvas still rendering, not ready yet
 
-    if (!readerContent) return;
+    var blobSrc = target.src;
+    if (blobSrc === window.__frankLastBlob) return; // Same page
+    window.__frankLastBlob = blobSrc;
+    window.__frankPageCounter++;
 
-    let pageNum = '0';
-    if (pageIndicator) {
-      const match = pageIndicator.textContent.match(/(\\d+)/);
-      if (match) pageNum = match[1];
-    } else if (location.hash) {
-      const hashMatch = location.hash.match(/page=(\\d+)/);
-      if (hashMatch) pageNum = hashMatch[1];
+    var rect = target.getBoundingClientRect();
+    var w = rect.width;
+    var h = rect.height;
+    var isSpread = w > h * $spreadThreshold;
+    var pageMode = isSpread ? 'spread' : 'single';
+    var pageId = 'kindle-' + window.__frankPageCounter + (isSpread ? '-spread' : '');
+
+    // Try to extract stable page number from the DOM
+    var kindlePage = '';
+    var pi = document.querySelector(
+      '#kr-page-indicator, .page-number, [class*="pageNum"], [class*="page-count"], ' +
+      '[class*="location"], [data-cfi], .cfi-marker'
+    );
+    if (pi) kindlePage = pi.textContent.trim().substring(0, 30);
+    // Also try the progress bar / slider
+    if (!kindlePage) {
+      var slider = document.querySelector('input[type="range"], [role="slider"]');
+      if (slider) kindlePage = 'pos:' + (slider.value || slider.getAttribute('aria-valuenow') || '');
     }
 
-    const rect = readerContent.getBoundingClientRect();
-    const w = rect.width || window.innerWidth;
-    const h = rect.height || window.innerHeight;
-    const isSpread = w > h * $spreadThreshold;
-    const pageMode = isSpread ? 'spread' : 'single';
-    const pageId = isSpread ? ('kindle-' + pageNum + '-spread') : ('kindle-' + pageNum);
-
-    if (pageId !== window.__frankCurrentPage) {
-      window.__frankCurrentPage = pageId;
-      window.flutter_inappwebview.callHandler('onPageDetected', {
-        pageId: pageId,
-        index: parseInt(pageNum),
-        type: 'screenshot',
-        pageMode: pageMode,
-        readerRect: {
-          x: rect.left,
-          y: rect.top,
-          width: w,
-          height: h,
-        },
-        devicePixelRatio: window.devicePixelRatio || 1,
-      });
-    }
+    window.flutter_inappwebview.callHandler('onPageDetected', {
+      pageId: pageId,
+      index: window.__frankPageCounter,
+      type: 'dom',
+      pageMode: pageMode,
+      imgSrc: blobSrc,
+      naturalWidth: target.naturalWidth,
+      naturalHeight: target.naturalHeight,
+      readerRect: { x: rect.x, y: rect.y, width: w, height: h },
+      devicePixelRatio: window.devicePixelRatio || 1,
+      kindlePage: kindlePage,
+    });
   }
 
   setInterval(detectPageChange, 1000);
-  document.addEventListener('click', () => setTimeout(detectPageChange, 500));
-  document.addEventListener('keyup', () => setTimeout(detectPageChange, 500));
+  document.addEventListener('click', function() { setTimeout(detectPageChange, 500); });
+  document.addEventListener('keyup', function() { setTimeout(detectPageChange, 500); });
+  window.addEventListener('resize', function() {
+    // Kindle re-renders on resize — force re-detection after it settles
+    window.__frankLastBlob = null;
+    setTimeout(detectPageChange, 1000);
+  });
 
-  console.log('[Frank] Kindle detection script injected');
+  console.log('[Frank] Kindle detection script injected (DOM blob tracking)');
 })();
 ''';
 
@@ -74,25 +107,41 @@ class KindleStrategy extends SiteStrategy {
   String captureScript(String pageId) {
     return '''
 (function() {
-  const reader = document.querySelector(
-    '#kr-renderer, #kindle-reader-content, .reader-content, canvas'
-  );
-  if (!reader) return null;
-
-  const rect = reader.getBoundingClientRect();
-  const w = rect.width || window.innerWidth;
-  const h = rect.height || window.innerHeight;
+$_findVisibleBlobFn
+  var target = __frankFindVisibleBlob();
+  if (!target) return null;
+  var r = target.getBoundingClientRect();
   return JSON.stringify({
-    x: rect.left,
-    y: rect.top,
-    width: w,
-    height: h,
+    x: r.left,
+    y: r.top,
+    width: r.width,
+    height: r.height,
     devicePixelRatio: window.devicePixelRatio || 1,
-    pageMode: (w > h * $spreadThreshold) ? 'spread' : 'single',
+    pageMode: (r.width > r.height * $spreadThreshold) ? 'spread' : 'single',
   });
 })();
 ''';
   }
+
+  /// JS that extracts the visible blob img as a base64 PNG data URL.
+  /// Synchronous — draws the img onto a canvas and calls toDataURL().
+  static String get captureCurrentPageScript => '''
+(function() {
+$_findVisibleBlobFn
+  var target = __frankFindVisibleBlob();
+  if (!target) return null;
+
+  var c = document.createElement('canvas');
+  c.width = target.naturalWidth;
+  c.height = target.naturalHeight;
+  c.getContext('2d').drawImage(target, 0, 0);
+  try {
+    return c.toDataURL('image/png');
+  } catch(e) {
+    return null;
+  }
+})();
+''';
 
   @override
   PageMetadata? parseUrl(String url) {
@@ -114,6 +163,127 @@ class KindleStrategy extends SiteStrategy {
   static String pageModeFromSize(double width, double height) {
     return width > height * spreadThreshold ? 'spread' : 'single';
   }
+
+  /// JS that scans the Kindle reader DOM for visual elements (canvas, img, iframe)
+  /// on each page change. Reports extractability, sizes, and structure via
+  /// onKindleDomExplore handler. Re-scans on MutationObserver + 1s interval.
+  static String get domExplorerScript => '''
+(function() {
+  if (window.__frankDomExplorer) return;
+  window.__frankDomExplorer = true;
+  var lastSummary = '';
+
+  function scanDom() {
+    var elements = [];
+    var iframes = [];
+
+    // Scan all canvas elements
+    document.querySelectorAll('canvas').forEach(function(c) {
+      var r = c.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) return;
+      var info = {
+        tag: 'CANVAS',
+        id: c.id || '',
+        classes: c.className || '',
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+        pixelSize: c.width + 'x' + c.height,
+        extractable: false,
+        dataUrlSize: 0,
+        error: null
+      };
+      try {
+        var data = c.toDataURL('image/png');
+        info.extractable = true;
+        info.dataUrlSize = data.length;
+      } catch(e) {
+        info.error = e.name + ': ' + e.message;
+      }
+      elements.push(info);
+    });
+
+    // Scan all img elements in the reader area
+    var readerArea = document.querySelector(
+      '#kr-renderer, #kindle-reader-content, .reader-content'
+    ) || document.body;
+    readerArea.querySelectorAll('img').forEach(function(img) {
+      var r = img.getBoundingClientRect();
+      if (r.width < 10 || r.height < 10) return;
+      var info = {
+        tag: 'IMG',
+        id: img.id || '',
+        src: img.src ? img.src.substring(0, 200) : '',
+        srcType: 'unknown',
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+        naturalSize: img.naturalWidth + 'x' + img.naturalHeight,
+        fetchable: null
+      };
+      if (img.src) {
+        if (img.src.startsWith('data:')) info.srcType = 'data-uri';
+        else if (img.src.startsWith('blob:')) info.srcType = 'blob';
+        else if (img.src.startsWith('http')) info.srcType = 'http';
+      }
+      elements.push(info);
+    });
+
+    // Scan iframes
+    document.querySelectorAll('iframe').forEach(function(f) {
+      var r = f.getBoundingClientRect();
+      if (r.width < 10 || r.height < 10) return;
+      var sameOrigin = false;
+      try { var _ = f.contentDocument; sameOrigin = true; } catch(e) {}
+      iframes.push({
+        src: f.src ? f.src.substring(0, 200) : '',
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+        sameOrigin: sameOrigin
+      });
+    });
+
+    // Page indicator
+    var pageText = '';
+    var pi = document.querySelector(
+      '#kr-page-indicator, .page-number, [class*="pageNum"], [class*="page-count"]'
+    );
+    if (pi) pageText = pi.textContent.trim().substring(0, 30);
+
+    var canvasCount = elements.filter(function(e) { return e.tag === 'CANVAS'; }).length;
+    var extractable = elements.filter(function(e) { return e.tag === 'CANVAS' && e.extractable; }).length;
+    var imgCount = elements.filter(function(e) { return e.tag === 'IMG'; }).length;
+    var summary = canvasCount + ' canvas (' + extractable + ' extractable), ' + imgCount + ' images, ' + iframes.length + ' iframes';
+
+    // Only report if something changed
+    if (summary === lastSummary) return;
+    lastSummary = summary;
+
+    var report = {
+      type: 'kindle_dom_explore',
+      url: location.href,
+      pageIndicator: pageText,
+      elements: elements,
+      iframes: iframes,
+      summary: summary
+    };
+
+    window.flutter_inappwebview.callHandler('onKindleDomExplore', report);
+    console.log('[Frank] DOM explore: ' + summary);
+  }
+
+  // Scan periodically
+  setInterval(scanDom, 1000);
+
+  // Scan on mutations in the reader area
+  var target = document.querySelector(
+    '#kr-renderer, #kindle-reader-content, .reader-content'
+  ) || document.body;
+  var observer = new MutationObserver(function() {
+    setTimeout(scanDom, 200);
+  });
+  observer.observe(target, { childList: true, subtree: true });
+
+  // Initial scan
+  setTimeout(scanDom, 500);
+  console.log('[Frank] Kindle DOM explorer injected');
+})();
+''';
 
   /// JS that performs a deep DOM scan of the Kindle reader area.
   /// Results are sent via onInspectorLog with type 'kindle_dom'.

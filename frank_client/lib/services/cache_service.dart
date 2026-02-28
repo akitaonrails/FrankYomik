@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
@@ -10,12 +11,20 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 class CacheService {
   Database? _db;
   String? _cacheDir;
+  final Completer<void> _initCompleter = Completer<void>();
 
   /// Max age for cached entries (30 days).
   static const maxAgeDays = 30;
 
   /// Max total cache size in bytes (500 MB).
   static const maxCacheBytes = 500 * 1024 * 1024;
+
+  /// In-memory hash → translated image cache for instant re-visit lookups.
+  /// Avoids re-reading from SQLite + disk for pages seen this session.
+  final Map<String, Uint8List> _memoryCache = {};
+
+  /// Wait for init() to complete before accessing the database.
+  Future<void> get ready => _initCompleter.future;
 
   Future<void> init() async {
     sqfliteFfiInit();
@@ -56,15 +65,33 @@ class CacheService {
       },
     );
 
+    _initCompleter.complete();
+
     // Run eviction in background on startup
     evict();
   }
 
-  /// Compute SHA256 hash of image bytes.
-  String hashImage(Uint8List bytes) => sha256.convert(bytes).toString();
+  /// Compute SHA256 hash of image bytes on a background isolate.
+  Future<String> hashImage(Uint8List bytes) {
+    return compute(_sha256Worker, bytes);
+  }
+
+  static String _sha256Worker(Uint8List bytes) {
+    return sha256.convert(bytes).toString();
+  }
 
   /// Look up a cached translation by image hash.
+  /// Checks in-memory cache first, then SQLite + disk.
   Future<Uint8List?> lookupByHash(String hash, String pipeline) async {
+    // Fast path: in-memory cache (no I/O)
+    final memKey = '$hash:$pipeline';
+    final memHit = _memoryCache[memKey];
+    if (memHit != null) {
+      debugPrint('[Cache] Memory hit for hash=${hash.substring(0, 12)}');
+      return memHit;
+    }
+
+    await ready;
     final rows = await _db?.query(
       'pages',
       columns: ['file_path'],
@@ -72,17 +99,30 @@ class CacheService {
       whereArgs: [hash, pipeline],
       limit: 1,
     );
-    if (rows == null || rows.isEmpty) return null;
+    if (rows == null || rows.isEmpty) {
+      debugPrint('[Cache] Miss for hash=${hash.substring(0, 12)} pipeline=$pipeline');
+      return null;
+    }
 
     final filePath = rows.first['file_path'] as String;
     final file = File(filePath);
-    if (!await file.exists()) return null;
-    return file.readAsBytes();
+    if (!await file.exists()) {
+      debugPrint('[Cache] DB hit but file missing: $filePath');
+      return null;
+    }
+    final bytes = await file.readAsBytes();
+    debugPrint('[Cache] Disk hit for hash=${hash.substring(0, 12)} (${bytes.length} bytes)');
+
+    // Populate memory cache for future lookups
+    _memoryCache[memKey] = bytes;
+
+    return bytes;
   }
 
   /// Look up by metadata (title/chapter/page).
   Future<Uint8List?> lookupByMetadata(
       String pipeline, String title, String chapter, String pageNumber) async {
+    await ready;
     final rows = await _db?.query(
       'pages',
       columns: ['file_path'],
@@ -108,6 +148,10 @@ class CacheService {
     String? chapter,
     String? pageNumber,
   }) async {
+    // Always populate memory cache immediately
+    _memoryCache['$hash:$pipeline'] = imageBytes;
+
+    await ready;
     final fileName = '$hash.png';
     final filePath = p.join(_cacheDir!, pipeline, fileName);
     await Directory(p.dirname(filePath)).create(recursive: true);
@@ -126,6 +170,7 @@ class CacheService {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    debugPrint('[Cache] Stored ${hash.substring(0, 12)}');
   }
 
   /// Evict expired entries (older than maxAgeDays) and enforce size limit.

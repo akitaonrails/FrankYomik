@@ -14,7 +14,6 @@ services:
 
   ollama:
     image: ollama/ollama
-    profiles: ["ollama"]
     ports:
       - "11434:11434"
     volumes:
@@ -27,12 +26,22 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
-      interval: 10s
+      test: ["CMD", "ollama", "list"]
+      interval: 60s
       timeout: 5s
       retries: 10
       start_period: 30s
     restart: unless-stopped
+
+  ollama-pull:
+    image: ollama/ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "qwen3:14b"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
 
   api:
     build:
@@ -56,9 +65,7 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      OLLAMA_BASE_URL: http://ollama:11434
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
     volumes:
       - shared-cache:/app/cache
@@ -75,6 +82,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:

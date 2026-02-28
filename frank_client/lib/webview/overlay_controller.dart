@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'platform/app_webview_controller.dart';
 
 /// Manages translated page overlay on the WebView.
@@ -11,7 +12,7 @@ class OverlayController {
     String originalSrc,
     Uint8List imageBytes,
   ) async {
-    final base64Data = base64Encode(imageBytes);
+    final base64Data = await compute(base64Encode, imageBytes);
     // Escape single quotes in the URL
     final escapedSrc = originalSrc.replaceAll("'", "\\'");
     final result = await controller.evaluateJavascript(source: '''
@@ -60,18 +61,97 @@ class OverlayController {
   img.src = blobUrl;
   img.dataset.frankTranslated = 'true';
 
-  // Add toggle on click (once)
+  // Add toggle on double-click (once) — single clicks pass through
+  // to the site's own navigation (Kindle bars, page turns, etc.)
   if (!img.dataset.frankToggle) {
     img.dataset.frankToggle = 'true';
-    img.addEventListener('click', function(e) {
-      e.preventDefault();
-      e.stopPropagation();
+    img.addEventListener('dblclick', function(e) {
       if (img.dataset.frankTranslated === 'true') {
         img.src = img.dataset.frankOriginalSrc;
         img.dataset.frankTranslated = 'false';
       } else {
         img.src = blobUrl;
         img.dataset.frankTranslated = 'true';
+      }
+    });
+  }
+
+  return true;
+})();
+''');
+    return result == true;
+  }
+
+  /// Replace the visible Kindle blob <img> with translated image bytes.
+  /// Finds the largest visible blob img since Kindle centers pages on wide screens.
+  Future<bool> replaceVisibleKindlePage(
+    AppWebViewController controller,
+    Uint8List imageBytes,
+  ) async {
+    final base64Data = await compute(base64Encode, imageBytes);
+    final result = await controller.evaluateJavascript(source: '''
+(function() {
+  // Find the largest visible blob img in the viewport
+  var imgs = document.querySelectorAll('img');
+  var target = null;
+  var bestArea = 0;
+  var vw = window.innerWidth;
+  var vh = window.innerHeight;
+  for (var i = 0; i < imgs.length; i++) {
+    if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
+    var r = imgs[i].getBoundingClientRect();
+    if (r.width < 100 || r.height < 100) continue;
+    if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
+    var area = r.width * r.height;
+    if (area > bestArea) {
+      bestArea = area;
+      target = imgs[i];
+    }
+  }
+  if (!target) {
+    console.log('[Frank] No visible Kindle blob img found for overlay');
+    return false;
+  }
+  console.log('[Frank] Replacing Kindle blob img at x=' + target.getBoundingClientRect().x.toFixed(0));
+
+  // Always update the original src to the CURRENT blob (Kindle regenerates
+  // blob URLs on each page visit, so the old originalSrc would be stale).
+  target.dataset.frankOriginalSrc = target.src;
+
+  // Convert base64 to blob URL
+  var binary = atob('$base64Data');
+  var bytes = new Uint8Array(binary.length);
+  for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  var blob = new Blob([bytes], { type: 'image/png' });
+  var blobUrl = URL.createObjectURL(blob);
+
+  target.src = blobUrl;
+  target.dataset.frankTranslated = 'true';
+  // Store the translated blob URL so toggle handler can access the latest one.
+  target.dataset.frankTranslatedSrc = blobUrl;
+
+  // Sync detection tracker so page-turn detector doesn't re-fire
+  if (typeof window.__frankLastBlob !== 'undefined') {
+    window.__frankLastBlob = blobUrl;
+  }
+
+  // Add toggle on double-click (once) — single clicks pass through
+  // to Kindle's own navigation (show/hide bars, page turns, etc.).
+  // Uses dataset attributes so the handler always uses the latest URLs
+  // even when the overlay is re-applied for a different page.
+  if (!target.dataset.frankToggle) {
+    target.dataset.frankToggle = 'true';
+    target.addEventListener('dblclick', function(e) {
+      if (target.dataset.frankTranslated === 'true') {
+        target.src = target.dataset.frankOriginalSrc;
+        target.dataset.frankTranslated = 'false';
+      } else {
+        target.src = target.dataset.frankTranslatedSrc;
+        target.dataset.frankTranslated = 'true';
+      }
+      // Keep detection tracker in sync after toggle
+      if (typeof window.__frankLastBlob !== 'undefined') {
+        window.__frankLastBlob = target.src;
       }
     });
   }

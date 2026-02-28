@@ -18,11 +18,9 @@ class JsBridge {
 
   /// Register JS handlers on the WebView controller.
   void attach(AppWebViewController controller) {
-    debugPrint('[JsBridge] attach — registering onPageDetected handler');
     controller.addJavaScriptHandler(
       handlerName: 'onPageDetected',
       callback: (args) {
-        debugPrint('[JsBridge] onPageDetected callback: $args');
         if (args.isNotEmpty && args[0] is Map) {
           final info = Map<String, dynamic>.from(args[0] as Map);
           onPageDetected?.call(info);
@@ -35,7 +33,6 @@ class JsBridge {
   /// Detect which strategy matches the URL and inject its detection script.
   Future<void> onUrlChanged(
       AppWebViewController controller, String url) async {
-    debugPrint('[JsBridge] onUrlChanged: $url');
     SiteStrategy? matched;
     for (final s in _strategies) {
       if (s.matches(url)) {
@@ -44,16 +41,12 @@ class JsBridge {
       }
     }
 
-    if (matched == null) {
-      debugPrint('[JsBridge] No strategy matched');
-      return;
-    }
+    if (matched == null) return;
 
     activeStrategy = matched;
-    debugPrint('[JsBridge] Matched strategy: ${matched.siteName}, injecting detection script...');
     await Future.delayed(const Duration(seconds: 2));
     await controller.evaluateJavascript(source: matched.detectionScript);
-    debugPrint('[JsBridge] Detection script injected');
+    debugPrint('[JsBridge] Strategy: ${matched.siteName}');
   }
 
   /// Get metadata for the current URL.

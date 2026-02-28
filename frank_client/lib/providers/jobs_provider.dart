@@ -48,11 +48,13 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     String? sourceUrl,
     String priority = 'high',
   }) async {
-    // Check local cache first
+    // Check local cache first (hash-based — works for re-visits)
     final effectivePipeline = pipeline ?? _settings.pipeline;
-    final hash = _cache.hashImage(imageBytes);
+    final hash = await _cache.hashImage(imageBytes);
+    debugPrint('[Jobs] $pageId hash=${hash.substring(0, 12)}');
     final cached = await _cache.lookupByHash(hash, effectivePipeline);
     if (cached != null) {
+      debugPrint('[Jobs] LOCAL CACHE HIT (hash) for $pageId');
       state = {
         ...state,
         pageId: PageJob(
@@ -68,11 +70,12 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       return;
     }
 
-    // Also check by metadata
+    // Also check by metadata (title/chapter/page)
     if (title != null && chapter != null && pageNumber != null) {
       final metaCached = await _cache.lookupByMetadata(
           effectivePipeline, title, chapter, pageNumber);
       if (metaCached != null) {
+        debugPrint('[Jobs] LOCAL CACHE HIT (meta) for $pageId');
         state = {
           ...state,
           pageId: PageJob(
@@ -88,6 +91,8 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         return;
       }
     }
+
+    debugPrint('[Jobs] Cache miss for $pageId, submitting to server');
 
     // Create pending job
     final job = PageJob(
@@ -160,18 +165,13 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   void _handleWsMessage(Map<String, dynamic> msg) {
     final type = msg['type'] as String?;
     final jobId = msg['job_id'] as String?;
-    debugPrint('[Jobs] WS message: type=$type, jobId=$jobId');
     if (type == null || jobId == null) return;
 
     // Find the PageJob with this jobId
     final entry = state.entries.where((e) => e.value.jobId == jobId).firstOrNull;
-    if (entry == null) {
-      debugPrint('[Jobs] WS: No matching job for $jobId');
-      return;
-    }
+    if (entry == null) return;
 
     final job = entry.value;
-    debugPrint('[Jobs] WS: Matched ${entry.key} (jobId=$jobId)');
 
     if (type == 'job_progress') {
       job.status = PageJobStatus.processing;
@@ -181,12 +181,12 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       state = {...state};
     } else if (type == 'job_complete') {
       final status = msg['status'] as String?;
-      debugPrint('[Jobs] WS: Job ${entry.key} complete, status=$status');
       if (status == 'completed') {
         job.imageUrl = msg['image_url'] as String?;
         job.cached = msg['cached'] == true;
         _downloadTranslatedImage(job);
       } else {
+        debugPrint('[Jobs] ${entry.key} failed: ${msg['error']}');
         job.status = PageJobStatus.failed;
         job.error = msg['error'] as String? ?? 'Unknown error';
         state = {...state};
@@ -198,17 +198,15 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     if (job.imageUrl == null) return;
 
     try {
-      debugPrint('[Jobs] Downloading translated image for ${job.pageId} from ${job.imageUrl}');
       final img =
           await _api.getJobImage(settings: _settings, imageUrl: job.imageUrl!);
-      debugPrint('[Jobs] Downloaded ${img.length} bytes for ${job.pageId}, applying to state');
       job.translatedImage = img;
       job.status = PageJobStatus.completed;
       state = {...state};
 
       // Save to local cache
       if (job.originalImage != null) {
-        final hash = _cache.hashImage(job.originalImage!);
+        final hash = await _cache.hashImage(job.originalImage!);
         await _cache.store(
           hash: hash,
           pipeline: job.pipeline ?? _settings.pipeline,
@@ -244,19 +242,16 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
               settings: _settings, jobId: job.jobId!);
           final jobStatus = status['status'] as String?;
           if (jobStatus == 'completed') {
-            debugPrint('[Jobs] Poll: ${job.pageId} (${job.jobId}) completed, downloading image');
             job.imageUrl =
                 status['image_url'] as String? ?? '/api/v1/jobs/${job.jobId}/image';
             _downloadTranslatedImage(job);
           } else if (jobStatus == 'failed') {
-            debugPrint('[Jobs] Poll: ${job.pageId} (${job.jobId}) failed');
+            debugPrint('[Jobs] ${job.pageId} failed');
             job.status = PageJobStatus.failed;
             job.error = status['error'] as String? ?? 'Failed';
             state = {...state};
           }
-        } catch (e) {
-          debugPrint('[Jobs] Poll error for ${job.pageId}: $e');
-        }
+        } catch (_) {}
       }
     });
   }

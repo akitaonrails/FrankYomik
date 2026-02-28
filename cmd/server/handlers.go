@@ -121,6 +121,24 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If dedup hit, check if the job already completed so the client
+	// gets the result immediately instead of waiting for a poll cycle.
+	if dedupHit {
+		status, err := s.results.GetJobStatus(r.Context(), jobID)
+		if err == nil && status.Status == "completed" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(JobResponse{
+				JobID:    jobID,
+				Status:   "completed",
+				Cached:   true,
+				DedupHit: true,
+				ImageURL: status.ImageURL,
+			})
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(JobResponse{
