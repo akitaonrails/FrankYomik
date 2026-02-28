@@ -311,17 +311,26 @@ class KindlePrefetchManager {
   var bestArea = 0;
   var vw = window.innerWidth;
   var vh = window.innerHeight;
+  function overlapAreaInViewport(r) {
+    var ox = Math.min(r.right, vw) - Math.max(r.left, 0);
+    var oy = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+    if (ox <= 0 || oy <= 0) return 0;
+    return ox * oy;
+  }
   for (var i = 0; i < imgs.length; i++) {
     if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
     var r = imgs[i].getBoundingClientRect();
     if (r.width < 100 || r.height < 100) continue;
-    if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
-    var area = r.width * r.height;
+    var area = overlapAreaInViewport(r);
+    if (area < 2000) continue;
     if (area > bestArea) { bestArea = area; best = imgs[i]; }
   }
   return best ? best.src : null;
 })();
 ''';
+
+  @visibleForTesting
+  static String get debugGetBlobUrlScript => _getBlobUrlScript;
 
   /// JS to check if the current visible page is a spread or single.
   static const _pageModeScript =
@@ -332,12 +341,18 @@ class KindlePrefetchManager {
   var bestArea = 0;
   var vw = window.innerWidth;
   var vh = window.innerHeight;
+  function overlapAreaInViewport(r) {
+    var ox = Math.min(r.right, vw) - Math.max(r.left, 0);
+    var oy = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+    if (ox <= 0 || oy <= 0) return 0;
+    return ox * oy;
+  }
   for (var i = 0; i < imgs.length; i++) {
     if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
     var r = imgs[i].getBoundingClientRect();
     if (r.width < 100 || r.height < 100) continue;
-    if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
-    var area = r.width * r.height;
+    var area = overlapAreaInViewport(r);
+    if (area < 2000) continue;
     if (area > bestArea) { bestArea = area; best = imgs[i]; }
   }
   if (!best) return 'single';
@@ -345,6 +360,9 @@ class KindlePrefetchManager {
   return (r.width > r.height * ${KindleStrategy.spreadThreshold}) ? 'spread' : 'single';
 })();
 ''';
+
+  @visibleForTesting
+  static String get debugPageModeScript => _pageModeScript;
 
   /// Destroy the bg webview and clean up.
   Future<void> dispose() async {

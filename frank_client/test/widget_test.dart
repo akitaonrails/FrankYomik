@@ -6,6 +6,7 @@ import 'package:frank_client/models/page_job.dart';
 import 'package:frank_client/models/site_config.dart';
 import 'package:frank_client/webview/strategies/naver_webtoon_strategy.dart';
 import 'package:frank_client/webview/strategies/kindle_strategy.dart';
+import 'package:frank_client/webview/kindle_prefetch_manager.dart';
 import 'package:frank_client/services/image_capture_service.dart';
 import 'package:frank_client/webview/dom_inspector.dart';
 import 'package:image/image.dart' as img;
@@ -67,8 +68,18 @@ void main() {
   group('NaverWebtoonStrategy', () {
     test('matches naver webtoon URLs', () {
       final s = NaverWebtoonStrategy();
-      expect(s.matches('https://m.comic.naver.com/webtoon/detail?titleId=747269&no=297'), true);
-      expect(s.matches('https://comic.naver.com/webtoon/detail?titleId=747269&no=297'), true);
+      expect(
+        s.matches(
+          'https://m.comic.naver.com/webtoon/detail?titleId=747269&no=297',
+        ),
+        true,
+      );
+      expect(
+        s.matches(
+          'https://comic.naver.com/webtoon/detail?titleId=747269&no=297',
+        ),
+        true,
+      );
       expect(s.matches('https://m.comic.naver.com/webtoon'), true);
       expect(s.matches('https://www.webtoons.com/en/action/tower'), false);
       expect(s.matches('https://example.com'), false);
@@ -77,7 +88,8 @@ void main() {
     test('parseUrl extracts titleId and episode number', () {
       final s = NaverWebtoonStrategy();
       final meta = s.parseUrl(
-          'https://m.comic.naver.com/webtoon/detail?titleId=747269&no=297');
+        'https://m.comic.naver.com/webtoon/detail?titleId=747269&no=297',
+      );
       expect(meta, isNotNull);
       expect(meta!.title, '747269');
       expect(meta.chapter, '297');
@@ -86,7 +98,8 @@ void main() {
     test('parseUrl handles missing episode number', () {
       final s = NaverWebtoonStrategy();
       final meta = s.parseUrl(
-          'https://m.comic.naver.com/webtoon/detail?titleId=747269');
+        'https://m.comic.naver.com/webtoon/detail?titleId=747269',
+      );
       expect(meta, isNotNull);
       expect(meta!.title, '747269');
       expect(meta.chapter, '0');
@@ -113,8 +126,9 @@ void main() {
 
     test('parseUrl extracts ASIN', () {
       final s = KindleStrategy();
-      final meta =
-          s.parseUrl('https://read.amazon.co.jp/manga/B0ABC12345?ref=foo');
+      final meta = s.parseUrl(
+        'https://read.amazon.co.jp/manga/B0ABC12345?ref=foo',
+      );
       expect(meta, isNotNull);
       expect(meta!.title, 'B0ABC12345');
     });
@@ -193,8 +207,9 @@ void main() {
     });
 
     test('returns null for invalid PNG', () {
-      final result =
-          ImageCaptureService.splitSpread(Uint8List.fromList([1, 2, 3]));
+      final result = ImageCaptureService.splitSpread(
+        Uint8List.fromList([1, 2, 3]),
+      );
       expect(result, isNull);
     });
   });
@@ -250,6 +265,36 @@ void main() {
       final script = KindleStrategy.diagnosticScript;
       expect(script.contains('spreadDetected'), true);
       expect(script.contains('devicePixelRatio'), true);
+    });
+  });
+
+  group('KindleStrategy.detectionScript guards', () {
+    test('contains loader visibility guard to avoid false detections', () {
+      final script = KindleStrategy().detectionScript;
+      expect(script.contains('__frankLoaderVisible'), true);
+      expect(script.contains('if (__frankLoaderVisible()) return;'), true);
+      expect(script.contains('kg-loader-wrapper'), true);
+    });
+
+    test('contains viewport overlap scoring for blob selection', () {
+      final script = KindleStrategy().detectionScript;
+      expect(script.contains('overlapAreaInViewport'), true);
+      expect(script.contains('overlap < 2000'), true);
+    });
+  });
+
+  group('KindlePrefetchManager JS selectors', () {
+    test('blob URL script uses viewport-overlap area threshold', () {
+      final script = KindlePrefetchManager.debugGetBlobUrlScript;
+      expect(script.contains('overlapAreaInViewport'), true);
+      expect(script.contains('area < 2000'), true);
+    });
+
+    test('page mode script uses viewport-overlap area threshold', () {
+      final script = KindlePrefetchManager.debugPageModeScript;
+      expect(script.contains('overlapAreaInViewport'), true);
+      expect(script.contains('area < 2000'), true);
+      expect(script.contains('1.3'), true);
     });
   });
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
@@ -54,6 +55,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final _capture = ImageCaptureService();
 
   String _currentUrl = '';
+  String _lastLoadStopUrl = '';
   final bool _inspectorMode = false;
   final bool _showOverlay = true;
 
@@ -65,8 +67,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// Kindle pageId -> blob src seen at detection time.
   final Map<String, String> _kindleBlobByPageId = {};
+  final Map<String, Map<String, num>> _kindleRectByPageId = {};
+  final Map<String, List<Timer>> _kindleOverlayTimers = {};
   Map<String, Object?> _kindlePrefetchState = const {};
   String _kindleNavIntent = 'forward';
+  bool _kindleDebugHudEnabled = true;
+  bool _kindleVerboseProbeLogs = false;
   int _kindleOverlayOk = 0;
   int _kindleOverlayFail = 0;
   int _kindleOverlayFallback = 0;
@@ -92,9 +98,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// Track active listenManual subscriptions so we can cancel them.
   final Map<String, ProviderSubscription> _completionListeners = {};
+  Timer? _statusClearTimer;
+  int _statusMessageVersion = 0;
 
   @override
   void dispose() {
+    _statusClearTimer?.cancel();
+    _cancelKindleReapplies();
     _kindlePrefetch.dispose();
     for (final sub in _completionListeners.values) {
       sub.close();
@@ -122,11 +132,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             },
             onLoadStop: (controller, url) {
               final urlStr = url ?? '';
-              final prevUrl = _currentUrl;
               setState(() => _currentUrl = urlStr);
               final isKindleNow = urlStr.contains('read.amazon.co.jp');
               final preserveKindleSessionState =
-                  isKindleNow && prevUrl == urlStr;
+                  isKindleNow && _lastLoadStopUrl == urlStr;
 
               debugPrint(
                 '[Reader] onLoadStop url=$urlStr '
@@ -141,6 +150,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 _batchInProgress = false;
                 _currentKindlePageId = null;
                 _kindleBlobByPageId.clear();
+                _kindleRectByPageId.clear();
+                _cancelKindleReapplies();
                 _kindlePrefetchState = const {};
                 _kindleNavIntent = 'forward';
                 _kindleOverlayOk = 0;
@@ -152,12 +163,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 }
                 _completionListeners.clear();
               }
+              _lastLoadStopUrl = urlStr;
               _jsBridge.onUrlChanged(controller, urlStr);
               _injectDesktopViewportFit(controller);
               // Sync toolbar button states after injection
               Future.delayed(const Duration(milliseconds: 500), () {
                 _syncAutoButtonState();
                 _syncPipelineButtonState();
+                _syncDebugHudButtonState();
+                _syncVerboseProbeButtonState();
               });
               if (_inspectorMode) {
                 _inspector.inject(controller);
@@ -195,12 +209,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _pushKindleDebugHudToPage() {
     if (!kDebugMode) return;
+    final controller = _webController;
+    if (controller == null) return;
     final isKindle =
         _jsBridge.activeStrategy?.siteName == 'kindle' ||
         _currentUrl.contains('read.amazon.co.jp');
-    if (!isKindle) return;
-    final controller = _webController;
-    if (controller == null) return;
+    _syncDebugHudButtonState();
+    _syncVerboseProbeButtonState();
+    if (!isKindle || !_kindleDebugHudEnabled) {
+      controller.evaluateJavascript(
+        source:
+            "if(window.__frankSetDebugHud) window.__frankSetDebugHud('', false);",
+      );
+      return;
+    }
     final text = _kindleDebugHudText()
         .replaceAll('\\', '\\\\')
         .replaceAll("'", "\\'")
@@ -214,7 +236,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   Future<void> _copyKindleDebugHudToClipboard() async {
     final text = _kindleDebugHudText();
     await Clipboard.setData(ClipboardData(text: text));
-    _updateInPageStatus('Debug copied');
+    _updateInPageStatus('Debug copied', clearAfter: const Duration(seconds: 2));
     debugPrint('[Reader] Kindle debug copied');
   }
 
@@ -228,6 +250,53 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     });
   }
 
+  void _probeKindleOverlay({
+    required String stage,
+    required String pageId,
+    String? expectedBlob,
+    Map<String, num>? expectedRect,
+    String? overlayToken,
+  }) {
+    if (!kDebugMode || !_kindleVerboseProbeLogs) return;
+    final controller = _webController;
+    if (controller == null) return;
+    unawaited(
+      _overlay
+          .probeKindleOverlay(
+            controller,
+            expectedBlobSrc: expectedBlob,
+            expectedRect: expectedRect,
+            overlayToken: overlayToken,
+          )
+          .then((probe) {
+            if (probe == null) return;
+            final top = (probe['topAtCenter'] is Map)
+                ? Map<String, dynamic>.from(probe['topAtCenter'] as Map)
+                : const <String, dynamic>{};
+            final candidates = (probe['candidates'] is List)
+                ? List<dynamic>.from(probe['candidates'] as List)
+                : const <dynamic>[];
+            final sample = <String>[];
+            for (var i = 0; i < candidates.length && i < 3; i++) {
+              final c = candidates[i];
+              if (c is! Map) continue;
+              final m = Map<String, dynamic>.from(c);
+              sample.add(
+                'h=${m['topHits']} vis=${m['visible']} '
+                'exp=${m['expectedMatch']} tok=${m['hasToken']} '
+                'tr=${m['translated']} rect=${m['rect']}',
+              );
+            }
+            debugPrint(
+              '[OverlayProbe] $stage page=$pageId token=$overlayToken '
+              'top=${top['tag'] ?? '-'}#${top['id'] ?? ''} '
+              'cls=${top['cls'] ?? ''} cand=${candidates.length} '
+              '${sample.join(' | ')}',
+            );
+          }),
+    );
+  }
+
   void _onPageDetected(Map<String, dynamic> pageInfo) {
     final pageId = pageInfo['pageId'] as String?;
     if (pageId == null) return;
@@ -238,11 +307,27 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       if (_currentKindlePageId != null && _currentKindlePageId != pageId) {
         _closeStaleKindleListeners(keepPageId: pageId);
       }
+      _cancelKindleReapplies(keepPageId: pageId);
       _currentKindlePageId = pageId;
       _lastKindlePageInfo = pageInfo;
       final blobSrc = pageInfo['imgSrc'] as String?;
       if (blobSrc != null && blobSrc.startsWith('blob:')) {
         _kindleBlobByPageId[pageId] = blobSrc;
+      }
+      final rect = pageInfo['readerRect'];
+      if (rect is Map) {
+        final x = (rect['x'] as num?)?.toDouble();
+        final y = (rect['y'] as num?)?.toDouble();
+        final width = (rect['width'] as num?)?.toDouble();
+        final height = (rect['height'] as num?)?.toDouble();
+        if (x != null && y != null && width != null && height != null) {
+          _kindleRectByPageId[pageId] = {
+            'x': x,
+            'y': y,
+            'width': width,
+            'height': height,
+          };
+        }
       }
       // Trigger bg webview prefetch on Kindle page change
       final kindleIndex = (pageInfo['index'] as num?)?.toInt() ?? 0;
@@ -691,32 +776,119 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         );
       }
     } else if (_jsBridge.activeStrategy?.siteName == 'kindle') {
-      final expectedBlob = _kindleBlobByPageId[pageId];
-      var ok = await _overlay.replaceVisibleKindlePage(
+      await _applyKindleOverlayBytes(
+        pageId: pageId,
+        imageBytes: imageBytes,
+        isSpread: false,
+      );
+    }
+  }
+
+  Future<void> _applyKindleOverlayBytes({
+    required String pageId,
+    required Uint8List imageBytes,
+    required bool isSpread,
+  }) async {
+    final controller = _webController;
+    if (controller == null) return;
+    if (_jsBridge.activeStrategy?.siteName != 'kindle') return;
+    final expectedBlob = _kindleBlobByPageId[pageId];
+    final expectedRect = _kindleRectByPageId[pageId];
+    final overlayToken = 'ov-$pageId-${DateTime.now().millisecondsSinceEpoch}';
+    final postStageOk = isSpread ? 'post_spread_ok' : 'post_ok';
+    final postStageFail = isSpread ? 'post_spread_fail' : 'post_fail';
+    final postStage180 = isSpread ? 'post_spread_180ms' : 'post_180ms';
+    final postStage900 = isSpread ? 'post_spread_900ms' : 'post_900ms';
+
+    _probeKindleOverlay(
+      stage: isSpread ? 'pre_spread' : 'pre',
+      pageId: pageId,
+      expectedBlob: expectedBlob,
+      expectedRect: expectedRect,
+      overlayToken: overlayToken,
+    );
+
+    var ok = await _overlay.replaceVisibleKindlePage(
+      controller,
+      imageBytes,
+      expectedBlobSrc: expectedBlob,
+      expectedRect: expectedRect,
+      overlayToken: overlayToken,
+    );
+    var usedFallback = false;
+    if (!ok && pageId == _currentKindlePageId) {
+      usedFallback = true;
+      ok = await _overlay.replaceVisibleKindlePage(
         controller,
         imageBytes,
-        expectedBlobSrc: expectedBlob,
+        expectedRect: expectedRect,
+        overlayToken: overlayToken,
       );
-      var usedFallback = false;
-      if (!ok && pageId == _currentKindlePageId) {
-        // Kindle may re-generate blob URLs before replacement; fallback only
-        // for the still-visible page to avoid cross-page overlays.
-        usedFallback = true;
-        ok = await _overlay.replaceVisibleKindlePage(controller, imageBytes);
-      }
-      if (ok) {
-        _kindleOverlayOk++;
-      } else {
-        _kindleOverlayFail++;
-      }
-      if (usedFallback) _kindleOverlayFallback++;
-      _pushKindleDebugHudToPage();
-      debugPrint('[Overlay] $pageId replace=${ok ? 'OK' : 'FAIL'}');
-      _logKindle('kindle_overlay', {
-        'pageId': pageId,
-        'expectedBlob': expectedBlob,
-        'success': ok,
+    }
+    if (ok) {
+      _kindleOverlayOk++;
+    } else {
+      _kindleOverlayFail++;
+    }
+    if (usedFallback) _kindleOverlayFallback++;
+    _pushKindleDebugHudToPage();
+    debugPrint(
+      '[Overlay] ${isSpread ? 'spread ' : ''}$pageId replace=${ok ? 'OK' : 'FAIL'}',
+    );
+    final logData = <String, dynamic>{
+      if (isSpread) 'spreadPageId': pageId,
+      if (!isSpread) 'pageId': pageId,
+      if (isSpread) 'stitchedSize': '${imageBytes.length} bytes',
+      'expectedBlob': expectedBlob,
+      'success': ok,
+    };
+    _logKindle(isSpread ? 'kindle_spread_overlay' : 'kindle_overlay', logData);
+
+    _probeKindleOverlay(
+      stage: ok ? postStageOk : postStageFail,
+      pageId: pageId,
+      expectedBlob: expectedBlob,
+      expectedRect: expectedRect,
+      overlayToken: overlayToken,
+    );
+    if (_kindleVerboseProbeLogs) {
+      Future.delayed(const Duration(milliseconds: 180), () {
+        if (!mounted || _currentKindlePageId != pageId) return;
+        _probeKindleOverlay(
+          stage: postStage180,
+          pageId: pageId,
+          expectedBlob: expectedBlob,
+          expectedRect: expectedRect,
+          overlayToken: overlayToken,
+        );
       });
+      Future.delayed(const Duration(milliseconds: 900), () {
+        if (!mounted || _currentKindlePageId != pageId) return;
+        _probeKindleOverlay(
+          stage: postStage900,
+          pageId: pageId,
+          expectedBlob: expectedBlob,
+          expectedRect: expectedRect,
+          overlayToken: overlayToken,
+        );
+      });
+    }
+    if (ok && pageId == _currentKindlePageId) {
+      _scheduleKindleOverlayReapply(
+        pageId: pageId,
+        imageBytes: imageBytes,
+        expectedBlob: expectedBlob,
+        expectedRect: expectedRect,
+        baseToken: overlayToken,
+      );
+    } else if (!ok && pageId == _currentKindlePageId) {
+      _scheduleKindleOverlayRecovery(
+        pageId: pageId,
+        imageBytes: imageBytes,
+        expectedBlob: expectedBlob,
+        expectedRect: expectedRect,
+        baseToken: overlayToken,
+      );
     }
   }
 
@@ -726,40 +898,144 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     Uint8List leftImage,
     Uint8List rightImage,
   ) async {
-    final controller = _webController;
-    if (controller == null) return;
-
     final stitched = await ImageCaptureService.stitchSpreadAsync(
       leftImage,
       rightImage,
     );
     if (stitched == null) return;
-
-    final expectedBlob = _kindleBlobByPageId[spreadPageId];
-    var ok = await _overlay.replaceVisibleKindlePage(
-      controller,
-      stitched,
-      expectedBlobSrc: expectedBlob,
+    await _applyKindleOverlayBytes(
+      pageId: spreadPageId,
+      imageBytes: stitched,
+      isSpread: true,
     );
-    var usedFallback = false;
-    if (!ok && spreadPageId == _currentKindlePageId) {
-      usedFallback = true;
-      ok = await _overlay.replaceVisibleKindlePage(controller, stitched);
+  }
+
+  /// Kindle can repaint the visible page shortly after we replace the img src.
+  /// Re-apply once or twice for the still-visible page to make replacement stick.
+  void _scheduleKindleOverlayReapply({
+    required String pageId,
+    required Uint8List imageBytes,
+    String? expectedBlob,
+    Map<String, num>? expectedRect,
+    String? baseToken,
+  }) {
+    // Require blob anchor for delayed re-apply to prevent stale-page paints.
+    if (expectedBlob == null || expectedBlob.isEmpty) return;
+    _cancelKindleReappliesFor(pageId);
+
+    // One short post-apply pass handles most Kindle repaint churn.
+    final delays = <int>[260];
+    final timers = <Timer>[];
+    _kindleOverlayTimers[pageId] = timers;
+    for (final ms in delays) {
+      final token =
+          '${baseToken ?? 'ov-$pageId'}-reapply-$ms-${DateTime.now().millisecondsSinceEpoch}';
+      final timer = Timer(Duration(milliseconds: ms), () async {
+        if (!mounted) return;
+        if (_currentKindlePageId != pageId) return;
+        if (_jsBridge.activeStrategy?.siteName != 'kindle') return;
+        if (!_showOverlay) return;
+        final controller = _webController;
+        if (controller == null) return;
+        final ok = await _overlay.replaceVisibleKindlePage(
+          controller,
+          imageBytes,
+          expectedBlobSrc: expectedBlob,
+          expectedRect: expectedRect,
+          overlayToken: token,
+        );
+        debugPrint(
+          '[Overlay] reapply page=$pageId delay=${ms}ms '
+          'result=${ok ? 'OK' : 'FAIL'}',
+        );
+        _probeKindleOverlay(
+          stage: 'reapply_${ms}ms',
+          pageId: pageId,
+          expectedBlob: expectedBlob,
+          expectedRect: expectedRect,
+          overlayToken: token,
+        );
+      });
+      timers.add(timer);
     }
-    if (ok) {
-      _kindleOverlayOk++;
-    } else {
-      _kindleOverlayFail++;
+  }
+
+  /// If first overlay attempt happens during Kindle loader/repaint, retry
+  /// a few times while user stays on the same page.
+  void _scheduleKindleOverlayRecovery({
+    required String pageId,
+    required Uint8List imageBytes,
+    String? expectedBlob,
+    Map<String, num>? expectedRect,
+    String? baseToken,
+  }) {
+    _cancelKindleReappliesFor(pageId);
+    final delays = <int>[180, 420, 820, 1400];
+    final timers = <Timer>[];
+    _kindleOverlayTimers[pageId] = timers;
+    for (var idx = 0; idx < delays.length; idx++) {
+      final ms = delays[idx];
+      final token =
+          '${baseToken ?? 'ov-$pageId'}-recovery-$ms-${DateTime.now().millisecondsSinceEpoch}';
+      final timer = Timer(Duration(milliseconds: ms), () async {
+        if (!mounted) return;
+        if (_currentKindlePageId != pageId) return;
+        if (_jsBridge.activeStrategy?.siteName != 'kindle') return;
+        if (!_showOverlay) return;
+        final controller = _webController;
+        if (controller == null) return;
+
+        // Try anchored replacement first; on later attempts allow fallback to
+        // current visible blob (blob URLs can churn during Kindle load).
+        var ok = await _overlay.replaceVisibleKindlePage(
+          controller,
+          imageBytes,
+          expectedBlobSrc: expectedBlob,
+          expectedRect: expectedRect,
+          overlayToken: token,
+        );
+        if (!ok && idx >= 1) {
+          ok = await _overlay.replaceVisibleKindlePage(
+            controller,
+            imageBytes,
+            expectedRect: expectedRect,
+            overlayToken: token,
+          );
+        }
+        debugPrint(
+          '[Overlay] recovery page=$pageId delay=${ms}ms '
+          'result=${ok ? 'OK' : 'FAIL'}',
+        );
+        _probeKindleOverlay(
+          stage: 'recovery_${ms}ms',
+          pageId: pageId,
+          expectedBlob: expectedBlob,
+          expectedRect: expectedRect,
+          overlayToken: token,
+        );
+      });
+      timers.add(timer);
     }
-    if (usedFallback) _kindleOverlayFallback++;
-    _pushKindleDebugHudToPage();
-    debugPrint('[Overlay] spread $spreadPageId replace=${ok ? 'OK' : 'FAIL'}');
-    _logKindle('kindle_spread_overlay', {
-      'spreadPageId': spreadPageId,
-      'stitchedSize': '${stitched.length} bytes',
-      'expectedBlob': expectedBlob,
-      'success': ok,
-    });
+  }
+
+  void _cancelKindleReapplies({String? keepPageId}) {
+    final keys = _kindleOverlayTimers.keys.toList();
+    for (final pageId in keys) {
+      if (keepPageId != null && pageId == keepPageId) continue;
+      final timers = _kindleOverlayTimers.remove(pageId);
+      if (timers == null) continue;
+      for (final t in timers) {
+        t.cancel();
+      }
+    }
+  }
+
+  void _cancelKindleReappliesFor(String pageId) {
+    final timers = _kindleOverlayTimers.remove(pageId);
+    if (timers == null) return;
+    for (final t in timers) {
+      t.cancel();
+    }
   }
 
   Future<void> _captureAndTranslate() async {
@@ -867,6 +1143,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     '<button id="__frankAuto" title="Toggle auto-translate">Auto: ON</button>' +
     '<button id="__frankPipeline" title="Switch pipeline" style="display:none;"></button>' +
     '<button id="__frankTranslate" title="Translate visible pages">&#x1F30D; Translate</button>' +
+    '<button id="__frankDbgToggle" title="Toggle debug HUD" style="display:none;">Debug: ON</button>' +
+    '<button id="__frankVerbose" title="Toggle verbose probe logs" style="display:none;">Verbose: OFF</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
     '<span id="__frankStatus"></span>';
   bar.style.cssText =
@@ -896,11 +1174,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   var autoBtn = document.getElementById('__frankAuto');
   var pipeBtn = document.getElementById('__frankPipeline');
   var transBtn = document.getElementById('__frankTranslate');
+  var dbgToggleBtn = document.getElementById('__frankDbgToggle');
+  var verboseBtn = document.getElementById('__frankVerbose');
   var copyDbgBtn = document.getElementById('__frankCopyDbg');
   backBtn.style.cssText = btnStyle;
   autoBtn.style.cssText = btnStyle;
   pipeBtn.style.cssText = btnStyle + 'display:none;';
   transBtn.style.cssText = btnStyle;
+  dbgToggleBtn.style.cssText = btnStyle + 'display:none;';
+  verboseBtn.style.cssText = btnStyle + 'display:none;';
   copyDbgBtn.style.cssText = btnStyle + 'display:none;';
 
   var collapsed = false;
@@ -932,6 +1214,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   transBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'translate');
+  });
+  dbgToggleBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_debug_hud');
+  });
+  verboseBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_verbose');
   });
   copyDbgBtn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -968,6 +1258,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     var btn = document.getElementById('__frankCopyDbg');
     if (btn) btn.style.display = visible ? '' : 'none';
   };
+  window.__frankSetDebugHudState = function(enabled, visibleControl) {
+    var btn = document.getElementById('__frankDbgToggle');
+    if (!btn) return;
+    btn.style.display = visibleControl ? '' : 'none';
+    btn.textContent = 'Debug: ' + (enabled ? 'ON' : 'OFF');
+    btn.style.borderColor = enabled ? '#ffb74d' : 'rgba(255,255,255,0.3)';
+    btn.style.color = enabled ? '#ffb74d' : '#fff';
+  };
+  window.__frankSetVerboseState = function(enabled, visibleControl) {
+    var btn = document.getElementById('__frankVerbose');
+    if (!btn) return;
+    btn.style.display = visibleControl ? '' : 'none';
+    btn.textContent = 'Verbose: ' + (enabled ? 'ON' : 'OFF');
+    btn.style.borderColor = enabled ? '#ffd54f' : 'rgba(255,255,255,0.3)';
+    btn.style.color = enabled ? '#ffd54f' : '#fff';
+  };
 })();
 ''',
     );
@@ -994,6 +1300,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             break;
           case 'copy_debug':
             _copyKindleDebugHudToClipboard();
+            break;
+          case 'toggle_debug_hud':
+            _toggleKindleDebugHud();
+            break;
+          case 'toggle_verbose':
+            _toggleKindleVerboseProbes();
             break;
         }
         return null;
@@ -1074,6 +1386,50 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
+  void _toggleKindleDebugHud() {
+    _kindleDebugHudEnabled = !_kindleDebugHudEnabled;
+    _pushKindleDebugHudToPage();
+    _updateInPageStatus(
+      _kindleDebugHudEnabled ? 'Debug HUD ON' : 'Debug HUD OFF',
+      clearAfter: const Duration(seconds: 2),
+    );
+  }
+
+  void _toggleKindleVerboseProbes() {
+    _kindleVerboseProbeLogs = !_kindleVerboseProbeLogs;
+    _syncVerboseProbeButtonState();
+    _updateInPageStatus(
+      _kindleVerboseProbeLogs ? 'Verbose logs ON' : 'Verbose logs OFF',
+      clearAfter: const Duration(seconds: 2),
+    );
+  }
+
+  void _syncDebugHudButtonState() {
+    final controller = _webController;
+    if (controller == null) return;
+    final showControl =
+        kDebugMode &&
+        (_jsBridge.activeStrategy?.siteName == 'kindle' ||
+            _currentUrl.contains('read.amazon.co.jp'));
+    controller.evaluateJavascript(
+      source:
+          'if(window.__frankSetDebugHudState) window.__frankSetDebugHudState(${_kindleDebugHudEnabled ? 'true' : 'false'}, ${showControl ? 'true' : 'false'});',
+    );
+  }
+
+  void _syncVerboseProbeButtonState() {
+    final controller = _webController;
+    if (controller == null) return;
+    final showControl =
+        kDebugMode &&
+        (_jsBridge.activeStrategy?.siteName == 'kindle' ||
+            _currentUrl.contains('read.amazon.co.jp'));
+    controller.evaluateJavascript(
+      source:
+          'if(window.__frankSetVerboseState) window.__frankSetVerboseState(${_kindleVerboseProbeLogs ? 'true' : 'false'}, ${showControl ? 'true' : 'false'});',
+    );
+  }
+
   /// Close completion listeners for Kindle pages the user is no longer viewing.
   void _closeStaleKindleListeners({String? keepPageId}) {
     final stale = _completionListeners.keys
@@ -1083,6 +1439,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _completionListeners[id]?.close();
       _completionListeners.remove(id);
       _kindleBlobByPageId.remove(id);
+      _kindleRectByPageId.remove(id);
+      final timers = _kindleOverlayTimers.remove(id);
+      if (timers != null) {
+        for (final t in timers) {
+          t.cancel();
+        }
+      }
     }
   }
 
@@ -1091,6 +1454,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _kindlePrefetch.dispose();
     _kindlePrefetch = KindlePrefetchManager();
     _kindleBlobByPageId.clear();
+    _kindleRectByPageId.clear();
+    _cancelKindleReapplies();
     final jobs = ref.read(jobsProvider);
     final notifier = ref.read(jobsProvider.notifier);
     final kindlePageIds = jobs.keys
@@ -1219,13 +1584,26 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   /// Push a status message into the in-page toolbar.
-  void _updateInPageStatus(String text) {
+  void _updateInPageStatus(String text, {Duration? clearAfter}) {
     final controller = _webController;
     if (controller == null) return;
+    _statusClearTimer?.cancel();
+    final messageVersion = ++_statusMessageVersion;
     final escaped = text.replaceAll("'", "\\'").replaceAll('\n', ' ');
     controller.evaluateJavascript(
       source:
           "if(window.__frankSetStatus) window.__frankSetStatus('$escaped');",
     );
+    if (clearAfter != null && text.isNotEmpty) {
+      _statusClearTimer = Timer(clearAfter, () {
+        if (!mounted) return;
+        if (_statusMessageVersion != messageVersion) return;
+        final c = _webController;
+        if (c == null) return;
+        c.evaluateJavascript(
+          source: "if(window.__frankSetStatus) window.__frankSetStatus('');",
+        );
+      });
+    }
   }
 }

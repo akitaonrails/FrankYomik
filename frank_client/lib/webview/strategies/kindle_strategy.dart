@@ -15,25 +15,72 @@ class KindleStrategy extends SiteStrategy {
   /// Kindle centers pages on wide/maximized windows, so we can't assume x ≈ 0.
   /// Instead, pick the largest blob img whose bounding rect overlaps the viewport.
   static const String _findVisibleBlobFn = '''
+  function __frankFindReaderRoot() {
+    return document.querySelector(
+      '#kr-renderer, #kindle-reader-content, .reader-content, ' +
+      '[id*="kindle-reader"], [id*="kr-renderer"], [class*="reader-content"]'
+    ) || document.body;
+  }
   function __frankFindVisibleBlob() {
-    var imgs = document.querySelectorAll('img');
+    var root = __frankFindReaderRoot();
+    var imgs = root.querySelectorAll('img');
+    if (!imgs || imgs.length === 0) imgs = document.querySelectorAll('img');
     var best = null;
     var bestArea = 0;
     var vw = window.innerWidth;
     var vh = window.innerHeight;
+    var rootRect = root.getBoundingClientRect ? root.getBoundingClientRect() : null;
+    function overlapAreaInViewport(r) {
+      var ox = Math.min(r.right, vw) - Math.max(r.left, 0);
+      var oy = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+      if (ox <= 0 || oy <= 0) return 0;
+      return ox * oy;
+    }
+    function overlapAreaWithRect(r, rr) {
+      var ox = Math.min(r.right, rr.right) - Math.max(r.left, rr.left);
+      var oy = Math.min(r.bottom, rr.bottom) - Math.max(r.top, rr.top);
+      if (ox <= 0 || oy <= 0) return 0;
+      return ox * oy;
+    }
     for (var i = 0; i < imgs.length; i++) {
       if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
       var r = imgs[i].getBoundingClientRect();
       if (r.width < 100 || r.height < 100) continue;
-      // Check that the image overlaps the viewport
-      if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
-      var area = r.width * r.height;
-      if (area > bestArea) {
-        bestArea = area;
+      var overlap = overlapAreaInViewport(r);
+      // Reject edge/adjacent pages with near-zero visible overlap.
+      if (overlap < 2000) continue;
+      // Also require overlap with Kindle reader container when available.
+      if (rootRect && root !== document.body) {
+        var rootOverlap = overlapAreaWithRect(r, rootRect);
+        if (rootOverlap < 2000) continue;
+        overlap = Math.min(overlap, rootOverlap);
+      }
+      if (overlap > bestArea) {
+        bestArea = overlap;
         best = imgs[i];
       }
     }
     return best;
+  }
+  function __frankLoaderVisible() {
+    var nodes = document.querySelectorAll(
+      '.kg-loader-wrapper, .kg-loader-container, [class*="loader"]'
+    );
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var st = window.getComputedStyle(el);
+      if (!st) continue;
+      if (st.display === 'none' || st.visibility === 'hidden') continue;
+      var op = parseFloat(st.opacity || '1');
+      if (!isFinite(op) || op <= 0.05) continue;
+      var r = el.getBoundingClientRect();
+      var ox = Math.min(r.right, vw) - Math.max(r.left, 0);
+      var oy = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+      if (ox > 40 && oy > 40) return true;
+    }
+    return false;
   }
 ''';
 
@@ -56,6 +103,7 @@ class KindleStrategy extends SiteStrategy {
 $_findVisibleBlobFn
 
   function detectPageChange() {
+    if (__frankLoaderVisible()) return;
     var target = __frankFindVisibleBlob();
     if (!target) return; // Canvas still rendering, not ready yet
 
@@ -122,7 +170,7 @@ $_findVisibleBlobFn
     });
   }
 
-  setInterval(detectPageChange, 1000);
+  setInterval(detectPageChange, 450);
   document.addEventListener('click', function(e) {
     // Kindle manga is RTL: clicks on left half usually mean "next page".
     if (e && typeof e.clientX === 'number') {
@@ -134,12 +182,15 @@ $_findVisibleBlobFn
   });
   document.addEventListener('pointerdown', function() {
     window.__frankUserNavAt = Date.now();
+    setTimeout(detectPageChange, 420);
   }, true);
   document.addEventListener('mousedown', function() {
     window.__frankUserNavAt = Date.now();
+    setTimeout(detectPageChange, 420);
   }, true);
   document.addEventListener('touchstart', function() {
     window.__frankUserNavAt = Date.now();
+    setTimeout(detectPageChange, 420);
   }, true);
   document.addEventListener('wheel', function() {
     window.__frankUserNavAt = Date.now();
