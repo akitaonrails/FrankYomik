@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'platform/app_webview_controller.dart';
 import 'strategies/base_strategy.dart';
 import 'strategies/kindle_strategy.dart';
@@ -45,7 +44,6 @@ class JsBridge {
     activeStrategy = matched;
     await Future.delayed(const Duration(seconds: 2));
     await controller.evaluateJavascript(source: matched.detectionScript);
-    debugPrint('[JsBridge] Strategy: ${matched.siteName}');
   }
 
   /// Get metadata for the current URL.

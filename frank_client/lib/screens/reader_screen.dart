@@ -73,8 +73,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final Map<String, List<Timer>> _kindleOverlayTimers = {};
   Map<String, Object?> _kindlePrefetchState = const {};
   String _kindleNavIntent = 'forward';
-  bool _kindleDebugHudEnabled = true;
-  bool _kindleVerboseProbeLogs = false;
+  final bool _kindleDebugHudEnabled = false;
+  final bool _kindleVerboseProbeLogs = false;
   bool _overlayEditMode = false;
   int _kindleOverlayOk = 0;
   int _kindleOverlayFail = 0;
@@ -85,7 +85,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final Set<String> _dirtyMetadataPageIds = <String>{};
 
   /// Selected pipeline for Kindle pages (furigana vs english translation).
-  String _kindlePipeline = 'manga_furigana';
+  String _kindlePipeline = 'manga_translate';
 
   /// Current Kindle ASIN for per-title pipeline persistence.
   String? _currentAsin;
@@ -147,11 +147,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               final preserveKindleSessionState =
                   isKindleNow && _lastLoadStopUrl == urlStr;
 
-              debugPrint(
-                '[Reader] onLoadStop url=$urlStr '
-                '(preserveKindleSessionState=$preserveKindleSessionState)',
-              );
-
               // Reset state on true page load/navigation. Kindle often emits
               // same-URL load stops while paging; avoid wiping runtime state.
               if (!preserveKindleSessionState) {
@@ -190,8 +185,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               Future.delayed(const Duration(milliseconds: 500), () {
                 _syncAutoButtonState();
                 _syncPipelineButtonState();
-                _syncDebugHudButtonState();
-                _syncVerboseProbeButtonState();
                 _syncEditModeButtonState();
                 _syncFeedbackActionButtons();
                 _syncEditModeToPage();
@@ -238,8 +231,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final isKindle =
         _jsBridge.activeStrategy?.siteName == 'kindle' ||
         _currentUrl.contains('read.amazon.co.jp');
-    _syncDebugHudButtonState();
-    _syncVerboseProbeButtonState();
     if (!isKindle || !_kindleDebugHudEnabled) {
       controller.evaluateJavascript(
         source:
@@ -261,7 +252,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final text = _kindleDebugHudText();
     await Clipboard.setData(ClipboardData(text: text));
     _updateInPageStatus('Debug copied', clearAfter: const Duration(seconds: 2));
-    debugPrint('[Reader] Kindle debug copied');
   }
 
   /// Log a Kindle lifecycle event (only when inspector mode is active).
@@ -358,9 +348,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final navIntent = pageInfo['navIntent'] as String?;
       final newIntent = navIntent == 'backward' ? 'backward' : 'forward';
       _kindleNavIntent = newIntent;
-      debugPrint(
-        '[Reader] kindle detect pageId=$pageId index=$kindleIndex nav=$newIntent',
-      );
       // Load per-title pipeline preference from ASIN
       final meta = _jsBridge.parseCurrentUrl(_currentUrl);
       final asin = meta?.title;
@@ -371,7 +358,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           if (saved != null && saved.isNotEmpty && saved != _kindlePipeline) {
             setState(() { _kindlePipeline = saved; });
             _syncPipelineButtonState();
-            debugPrint('[Reader] Loaded pipeline preference for $asin: $saved');
           }
         });
       }
@@ -695,7 +681,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             !ref.read(jobsProvider).containsKey('wt-$idx'),
       );
       if (hasMore) {
-        debugPrint('[Batch] More pages pending, scheduling next batch');
         Future.delayed(const Duration(milliseconds: 100), () {
           if (mounted) _submitNextBatch();
         });
@@ -826,9 +811,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         originalSrc = _detectedWebtoonPages[index]?['src'] as String?;
       }
       if (originalSrc != null && originalSrc.isNotEmpty) {
-        var ok = false;
         try {
-          ok = await _overlay.replaceImageBySrc(
+          await _overlay.replaceImageBySrc(
             controller,
             originalSrc,
             imageBytes,
@@ -837,11 +821,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         } catch (e) {
           debugPrint('[Overlay] replaceImageBySrc threw: $e');
         }
-        debugPrint('[Overlay] $pageId replace=${ok ? 'OK' : 'FAIL'}');
-      } else {
-        debugPrint(
-          '[Overlay] $pageId no src found (detected: ${_detectedWebtoonPages.keys.toList()})',
-        );
       }
     } else if (_jsBridge.activeStrategy?.siteName == 'kindle') {
       await _applyKindleOverlayBytes(
@@ -1225,8 +1204,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     '<button id="__frankFeedback" title="Toggle feedback mode">Feedback: OFF</button>' +
     '<button id="__frankSaveEdits" title="Save feedback edits" style="display:none;">Save</button>' +
     '<button id="__frankCancelEdits" title="Cancel feedback edits" style="display:none;">Cancel</button>' +
-    '<button id="__frankDbgToggle" title="Toggle debug HUD" style="display:none;">Debug: ON</button>' +
-    '<button id="__frankVerbose" title="Toggle verbose probe logs" style="display:none;">Verbose: OFF</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
     '<span id="__frankStatus"></span>';
   bar.style.cssText =
@@ -1669,14 +1646,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'cancel_feedback_edits');
   });
-  if (dbgToggleBtn) dbgToggleBtn.addEventListener('click', function(e) {
-    e.stopPropagation();
-    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_debug_hud');
-  });
-  if (verboseBtn) verboseBtn.addEventListener('click', function(e) {
-    e.stopPropagation();
-    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_verbose');
-  });
   if (copyDbgBtn) copyDbgBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'copy_debug');
@@ -1755,22 +1724,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     var btn = document.getElementById('__frankCopyDbg');
     if (btn) btn.style.display = visible ? '' : 'none';
   };
-  window.__frankSetDebugHudState = function(enabled, visibleControl) {
-    var btn = document.getElementById('__frankDbgToggle');
-    if (!btn) return;
-    btn.style.display = visibleControl ? '' : 'none';
-    btn.textContent = 'Debug: ' + (enabled ? 'ON' : 'OFF');
-    btn.style.borderColor = enabled ? '#ffb74d' : 'rgba(255,255,255,0.3)';
-    btn.style.color = enabled ? '#ffb74d' : '#fff';
-  };
-  window.__frankSetVerboseState = function(enabled, visibleControl) {
-    var btn = document.getElementById('__frankVerbose');
-    if (!btn) return;
-    btn.style.display = visibleControl ? '' : 'none';
-    btn.textContent = 'Verbose: ' + (enabled ? 'ON' : 'OFF');
-    btn.style.borderColor = enabled ? '#ffd54f' : 'rgba(255,255,255,0.3)';
-    btn.style.color = enabled ? '#ffd54f' : '#fff';
-  };
 })();
 ''',
     );
@@ -1806,12 +1759,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             break;
           case 'copy_debug':
             _copyKindleDebugHudToClipboard();
-            break;
-          case 'toggle_debug_hud':
-            _toggleKindleDebugHud();
-            break;
-          case 'toggle_verbose':
-            _toggleKindleVerboseProbes();
             break;
         }
         return null;
@@ -1863,7 +1810,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         .read(settingsProvider.notifier)
         .update(settings.copyWith(autoTranslate: newValue));
     _syncAutoButtonState();
-    debugPrint('[Reader] Auto-translate toggled to $newValue');
     if (newValue) {
       _updateInPageStatus('Auto-translate ON');
       // Immediately start submitting detected pages
@@ -1892,7 +1838,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         ? 'manga_translate'
         : 'manga_furigana';
     _syncPipelineButtonState();
-    debugPrint('[Reader] Pipeline switched to $_kindlePipeline');
 
     // Persist per-title pipeline preference
     final asin = _currentAsin;
@@ -1923,49 +1868,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
-  void _toggleKindleDebugHud() {
-    _kindleDebugHudEnabled = !_kindleDebugHudEnabled;
-    _pushKindleDebugHudToPage();
-    _updateInPageStatus(
-      _kindleDebugHudEnabled ? 'Debug HUD ON' : 'Debug HUD OFF',
-      clearAfter: const Duration(seconds: 2),
-    );
-  }
-
-  void _toggleKindleVerboseProbes() {
-    _kindleVerboseProbeLogs = !_kindleVerboseProbeLogs;
-    _syncVerboseProbeButtonState();
-    _updateInPageStatus(
-      _kindleVerboseProbeLogs ? 'Verbose logs ON' : 'Verbose logs OFF',
-      clearAfter: const Duration(seconds: 2),
-    );
-  }
-
-  void _syncDebugHudButtonState() {
-    final controller = _webController;
-    if (controller == null) return;
-    final showControl =
-        kDebugMode &&
-        (_jsBridge.activeStrategy?.siteName == 'kindle' ||
-            _currentUrl.contains('read.amazon.co.jp'));
-    controller.evaluateJavascript(
-      source:
-          'if(window.__frankSetDebugHudState) window.__frankSetDebugHudState(${_kindleDebugHudEnabled ? 'true' : 'false'}, ${showControl ? 'true' : 'false'});',
-    );
-  }
-
-  void _syncVerboseProbeButtonState() {
-    final controller = _webController;
-    if (controller == null) return;
-    final showControl =
-        kDebugMode &&
-        (_jsBridge.activeStrategy?.siteName == 'kindle' ||
-            _currentUrl.contains('read.amazon.co.jp'));
-    controller.evaluateJavascript(
-      source:
-          'if(window.__frankSetVerboseState) window.__frankSetVerboseState(${_kindleVerboseProbeLogs ? 'true' : 'false'}, ${showControl ? 'true' : 'false'});',
-    );
-  }
 
   void _toggleOverlayEditMode() {
     if (_overlayEditMode && _dirtyMetadataPageIds.isNotEmpty) {
@@ -2169,12 +2071,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         return aMarked.compareTo(bMarked);
       });
     }
-    debugPrint(
-      '[Feedback] syncMarksOverlay: editMode=$_overlayEditMode, '
-      'marks=${rawMarks.length}, '
-      'metadataPages=${_metadataByPageId.keys.toList()}, '
-      'currentPage=$_currentKindlePageId',
-    );
     final payload = <String, Object?>{
       'enabled': _overlayEditMode,
       'marks': rawMarks,
@@ -2222,7 +2118,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       notifier.removeJob(pageId);
     }
     if (kindlePageIds.isNotEmpty) {
-      debugPrint('[Reader] Cancelled ${kindlePageIds.length} Kindle jobs');
     }
   }
 
@@ -2288,11 +2183,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (force && _metadataLoadingPageIds.contains(pageId)) return;
     final job = ref.read(jobsProvider)[pageId];
     if (job == null) {
-      debugPrint('[Feedback] No job for $pageId — cannot load metadata');
       return;
     }
     if (!job.isComplete) {
-      debugPrint('[Feedback] Job $pageId not complete (${job.status.name}) — skipping metadata fetch');
       return;
     }
     final sourceHash = job.sourceHash;
@@ -2346,7 +2239,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       );
       final metadata = resp['metadata'];
       if (metadata is! Map) {
-        debugPrint('[Feedback] Server returned no metadata map for $pageId');
         return;
       }
       final regions = metadata['regions'];
@@ -2373,7 +2265,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         final cache = ref.read(cacheServiceProvider);
         await cache.updateMetadata(sourceHash, pipeline, jsonEncode(resp));
       } catch (e) {
-        debugPrint('[Feedback] Failed to persist metadata locally: $e');
       }
     } catch (e) {
       debugPrint('[Feedback] Failed to load metadata for $pageId (attempt ${retryCount + 1}): $e');
@@ -2667,7 +2558,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         continue;
       }
       try {
-        debugPrint('[Feedback] Saving page=$pageId');
         final patchResp = await api.patchCacheMetadataByHash(
           settings: settings,
           pipeline: pipeline,
@@ -2677,11 +2567,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         );
         final rerenderJobId = patchResp['job_id'] as String?;
         if (rerenderJobId == null || rerenderJobId.isEmpty) {
-          debugPrint('[Feedback] Missing rerender job id for page=$pageId');
           failed++;
           continue;
         }
-        debugPrint('[Feedback] Patch accepted page=$pageId job=$rerenderJobId');
         await _waitForJobCompletion(rerenderJobId);
         final freshImage = await _refreshLocalEditedCache(
           pageId: pageId,
@@ -2701,7 +2589,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       }
     }
 
+    // Exit feedback mode after save
+    _overlayEditMode = false;
+    _syncEditModeButtonState();
     _syncFeedbackActionButtons();
+    _syncEditModeToPage();
     _syncFeedbackMarksOverlay();
     if (failed == 0) {
       _updateInPageStatus(
@@ -2758,9 +2650,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       chapter: job?.chapter,
       pageNumber: job?.pageNumber,
     );
-    debugPrint(
-      '[Feedback] Refreshed local cache page=$pageId hash=${sourceHash.substring(0, 12)}',
-    );
     return fresh;
   }
 
@@ -2772,11 +2661,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final right = '$base-R';
       notifier.removeJob(left);
       notifier.removeJob(right);
-      debugPrint('[Feedback] Invalidated spread jobs $left and $right');
       return;
     }
     notifier.removeJob(pageId);
-    debugPrint('[Feedback] Invalidated job $pageId');
   }
 
   void _cancelFeedbackEdits() {
@@ -2798,7 +2685,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _metadataOriginalByPageId.remove(pageId);
     }
     _dirtyMetadataPageIds.clear();
+    // Exit feedback mode after cancel
+    _overlayEditMode = false;
+    _syncEditModeButtonState();
     _syncFeedbackActionButtons();
+    _syncEditModeToPage();
     _syncFeedbackMarksOverlay();
     _updateInPageStatus(
       'Feedback edits canceled',
@@ -2858,7 +2749,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final hash = await cache.hashImage(imageBytes);
     final cached = await cache.lookupByHash(hash, _kindlePipeline);
     if (cached != null) {
-      debugPrint('[BgPrefetch] Already cached (hash=${hash.substring(0, 12)})');
       return;
     }
 

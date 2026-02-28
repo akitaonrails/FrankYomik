@@ -29,7 +29,7 @@ void main() {
     test('defaults', () {
       const s = ServerSettings();
       expect(s.serverUrl, 'http://localhost:8080');
-      expect(s.pipeline, 'manga_furigana');
+      expect(s.pipeline, 'manga_translate');
       expect(s.autoTranslate, true);
       expect(s.isConfigured, false);
     });

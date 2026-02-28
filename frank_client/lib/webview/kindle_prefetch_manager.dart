@@ -65,7 +65,6 @@ class KindlePrefetchManager {
       _bgController = BackgroundWebViewController();
       _bgController!.startListening(
         onLoadStop: (url) {
-          debugPrint('[BgPrefetch] BG loaded: $url');
         },
       );
 
@@ -154,7 +153,6 @@ class KindlePrefetchManager {
       if (blob != null) break;
       await Future.delayed(const Duration(milliseconds: 300));
     }
-    debugPrint('[BgPrefetch] Resynced to $url (startIndex=$_startIndex)');
     _emitState('resynced');
     _prefetchNextBatch();
   }
@@ -378,7 +376,6 @@ class KindlePrefetchManager {
       _bgController = null;
     }
     initialized = false;
-    debugPrint('[BgPrefetch] Disposed');
   }
 
   void _emitState(String note) {

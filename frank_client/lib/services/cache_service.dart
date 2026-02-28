@@ -93,7 +93,6 @@ class CacheService {
     final memKey = '$hash:$pipeline';
     final memHit = _memoryCache[memKey];
     if (memHit != null) {
-      debugPrint('[Cache] Memory hit for hash=${hash.substring(0, 12)}');
       return memHit;
     }
 
@@ -105,19 +104,12 @@ class CacheService {
       whereArgs: [hash, pipeline],
       limit: 1,
     );
-    if (rows == null || rows.isEmpty) {
-      debugPrint('[Cache] Miss for hash=${hash.substring(0, 12)} pipeline=$pipeline');
-      return null;
-    }
+    if (rows == null || rows.isEmpty) return null;
 
     final filePath = rows.first['file_path'] as String;
     final file = File(filePath);
-    if (!await file.exists()) {
-      debugPrint('[Cache] DB hit but file missing: $filePath');
-      return null;
-    }
+    if (!await file.exists()) return null;
     final bytes = await file.readAsBytes();
-    debugPrint('[Cache] Disk hit for hash=${hash.substring(0, 12)} (${bytes.length} bytes)');
 
     // Populate memory cache for future lookups
     _memoryCache[memKey] = bytes;
@@ -168,7 +160,6 @@ class CacheService {
       where: 'image_hash = ? AND pipeline = ?',
       whereArgs: [hash, pipeline],
     );
-    debugPrint('[Cache] Updated metadata for ${hash.substring(0, 12)}');
   }
 
   /// Store a translated image in the local cache.
@@ -204,7 +195,6 @@ class CacheService {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    debugPrint('[Cache] Stored ${hash.substring(0, 12)}');
   }
 
   /// Evict expired entries (older than maxAgeDays) and enforce size limit.
@@ -229,7 +219,6 @@ class CacheService {
     }
     if (expired.isNotEmpty) {
       await _db!.delete('pages', where: 'created_at < ?', whereArgs: [cutoff]);
-      debugPrint('[Cache] Evicted ${expired.length} expired entries');
     }
 
     // 2. Enforce size limit — delete oldest entries until under maxCacheBytes
@@ -260,7 +249,6 @@ class CacheService {
     if (toDelete.isNotEmpty) {
       final ids = toDelete.join(',');
       await _db!.delete('pages', where: 'id IN ($ids)');
-      debugPrint('[Cache] Evicted ${toDelete.length} entries over size limit');
     }
   }
 

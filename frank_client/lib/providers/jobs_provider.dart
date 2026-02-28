@@ -56,10 +56,8 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     // Check local cache first (hash-based — works for re-visits)
     final effectivePipeline = pipeline ?? _settings.pipeline;
     final hash = await _cache.hashImage(imageBytes);
-    debugPrint('[Jobs] $pageId hash=${hash.substring(0, 12)}');
     final cached = await _cache.lookupByHash(hash, effectivePipeline);
     if (cached != null) {
-      debugPrint('[Jobs] LOCAL CACHE HIT (hash) for $pageId');
       state = {
         ...state,
         pageId: PageJob(
@@ -97,7 +95,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         pageNumber,
       );
       if (metaCached != null) {
-        debugPrint('[Jobs] LOCAL CACHE HIT (meta) for $pageId');
         state = {
           ...state,
           pageId: PageJob(
@@ -126,8 +123,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         return;
       }
     }
-
-    debugPrint('[Jobs] Cache miss for $pageId, submitting to server');
 
     // Create pending job
     final job = PageJob(
@@ -314,14 +309,12 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       );
       final metadataJson = jsonEncode(resp);
       await _cache.updateMetadata(hash, pipeline, metadataJson);
-      debugPrint('[Jobs] Backfilled metadata from server for ${hash.substring(0, 12)}');
       return;
     } catch (_) {
       // Server doesn't have it either — need to reprocess
     }
 
     // Resubmit to server so the worker produces fresh metadata.
-    debugPrint('[Jobs] Resubmitting ${hash.substring(0, 12)} for metadata backfill');
     try {
       final response = await _api.submitJob(
         settings: _settings,
@@ -345,9 +338,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         _ws.subscribeToJobs([jobId]);
         _startPollingFallback();
       }
-    } catch (e) {
-      debugPrint('[Jobs] Metadata backfill resubmit failed for ${hash.substring(0, 12)}: $e');
-    }
+    } catch (_) {}
   }
 
   /// Fetch metadata from server and persist in local SQLite cache.
@@ -361,9 +352,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       );
       final metadataJson = jsonEncode(resp);
       await _cache.updateMetadata(hash, pipeline, metadataJson);
-      debugPrint('[Jobs] Cached metadata for ${hash.substring(0, 12)}');
-    } catch (e) {
-      debugPrint('[Jobs] Failed to fetch/cache metadata for ${hash.substring(0, 12)}: $e');
+    } catch (_) {
     }
   }
 
@@ -421,7 +410,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             }
           } else if (jobStatus == 'failed') {
             _backfillJobs.remove(entry.key);
-            debugPrint('[Jobs] Backfill job ${entry.key} failed');
           }
         } catch (_) {}
       }
