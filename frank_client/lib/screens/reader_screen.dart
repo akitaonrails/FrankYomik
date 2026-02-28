@@ -15,8 +15,6 @@ import '../webview/overlay_controller.dart';
 import '../webview/platform/app_webview.dart';
 import '../webview/platform/app_webview_controller.dart';
 import '../webview/strategies/kindle_strategy.dart';
-import '../widgets/progress_indicator.dart';
-import 'inspector_screen.dart';
 
 /// Anti-bot JS injected at document-start to mask WebView fingerprints.
 /// Each override is wrapped in try-catch — some properties may be
@@ -56,11 +54,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final _capture = ImageCaptureService();
 
   String _currentUrl = '';
-  bool _inspectorMode = false;
-  bool _showOverlay = true;
-
-  /// Whether the floating toolbar is visible.
-  bool _toolbarVisible = false;
+  final bool _inspectorMode = false;
+  final bool _showOverlay = true;
 
   /// The pageId of the currently visible Kindle page (for overlay gating).
   String? _currentKindlePageId;
@@ -108,20 +103,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     super.dispose();
   }
 
-  void _showToolbar() {
-    if (_toolbarVisible) return;
-    setState(() => _toolbarVisible = true);
-    Future.delayed(const Duration(seconds: 4), () {
-      if (mounted && _toolbarVisible) {
-        setState(() => _toolbarVisible = false);
-      }
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
-    final topPadding = MediaQuery.of(context).padding.top;
-
     return Scaffold(
       body: Stack(
         children: [
@@ -192,106 +175,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               _jsBridge.onUrlChanged(controller, urlStr);
             },
           ),
-          // Hover zone at top to reveal toolbar (desktop)
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 32,
-            child: MouseRegion(
-              onEnter: (_) => _showToolbar(),
-              child: GestureDetector(
-                onTap: _showToolbar,
-                behavior: HitTestBehavior.translucent,
-              ),
-            ),
-          ),
-          // Floating toolbar
-          if (_toolbarVisible)
-            Positioned(
-              top: topPadding,
-              left: 0,
-              right: 0,
-              child: Material(
-                elevation: 4,
-                color: Theme.of(context).colorScheme.surface.withAlpha(230),
-                child: SafeArea(
-                  bottom: false,
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back),
-                        tooltip: 'Back',
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                      Expanded(
-                        child: Text(
-                          _currentUrl.isEmpty ? widget.initialUrl : _currentUrl,
-                          style: const TextStyle(fontSize: 12),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          _showOverlay
-                              ? Icons.visibility
-                              : Icons.visibility_off,
-                        ),
-                        tooltip: _showOverlay
-                            ? 'Hide translations'
-                            : 'Show translations',
-                        onPressed: _toggleOverlayVisibility,
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.translate),
-                        tooltip: 'Translate current page',
-                        onPressed: _captureAndTranslate,
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          _inspectorMode
-                              ? Icons.bug_report
-                              : Icons.pest_control,
-                        ),
-                        tooltip: _inspectorMode
-                            ? 'Disable inspector'
-                            : 'Enable inspector',
-                        onPressed: _toggleInspector,
-                      ),
-                      if (_inspectorMode)
-                        IconButton(
-                          icon: const Icon(Icons.list),
-                          tooltip: 'Inspector logs',
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  InspectorScreen(inspector: _inspector),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          // Progress chip overlay — scoped Consumer to avoid full-tree rebuilds
-          Consumer(
-            builder: (context, ref, _) {
-              final jobs = ref.watch(jobsProvider);
-              final latestActive = jobs.values.where((j) => j.isActive).toList()
-                ..sort((a, b) => b.percent.compareTo(a.percent));
-              if (latestActive.isEmpty) return const SizedBox.shrink();
-              return Positioned(
-                bottom: 16,
-                left: 16,
-                right: 16,
-                child: Center(
-                  child: TranslationProgressChip(job: latestActive.first),
-                ),
-              );
-            },
-          ),
         ],
       ),
     );
@@ -343,31 +226,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       'timestamp': DateTime.now().millisecondsSinceEpoch,
       ...data,
     });
-  }
-
-  /// Toggle overlay visibility via JS (DOM-based overlays for both sites).
-  void _toggleOverlayVisibility() {
-    setState(() => _showOverlay = !_showOverlay);
-    final controller = _webController;
-    if (controller == null) return;
-    // Toggle all frank-translated images back to original or translated
-    controller.evaluateJavascript(
-      source:
-          '''
-(function() {
-  var imgs = document.querySelectorAll('img[data-frank-toggle]');
-  var show = ${_showOverlay ? 'true' : 'false'};
-  for (var i = 0; i < imgs.length; i++) {
-    if (show && imgs[i].dataset.frankTranslated === 'false' && imgs[i].dataset.frankOriginalSrc) {
-      // Re-show translated: we can't easily restore the blob URL, so skip
-    } else if (!show && imgs[i].dataset.frankTranslated === 'true' && imgs[i].dataset.frankOriginalSrc) {
-      imgs[i].src = imgs[i].dataset.frankOriginalSrc;
-      imgs[i].dataset.frankTranslated = 'false';
-    }
-  }
-})();
-''',
-    );
   }
 
   void _onPageDetected(Map<String, dynamic> pageInfo) {
@@ -942,21 +800,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _watchForCompletion(pageId);
   }
 
-  void _toggleInspector() {
-    setState(() => _inspectorMode = !_inspectorMode);
-    final controller = _webController;
-    if (controller == null) return;
-
-    if (_inspectorMode) {
-      _inspector.inject(controller);
-      _overlay.enableTapMode(controller);
-      _injectKindleDiagnosticIfNeeded(controller);
-      _injectKindleDomExplorerIfNeeded(controller);
-    } else {
-      _overlay.disableTapMode(controller);
-    }
-  }
-
   void _injectKindleDiagnosticIfNeeded(AppWebViewController controller) {
     if (_jsBridge.activeStrategy?.siteName == 'kindle') {
       controller.evaluateJavascript(source: KindleStrategy.diagnosticScript);
@@ -971,7 +814,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   /// Inject CSS that caps image width on wide landscape viewports,
-  /// and an in-page floating toolbar with translate/back/progress controls.
+  /// and an in-page floating Kindle control bar.
   void _injectDesktopViewportFit(AppWebViewController controller) {
     controller.evaluateJavascript(
       source: '''
@@ -1004,6 +847,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   window.addEventListener('resize', updateLayout);
 
   /* --- Floating toolbar --- */
+  var toggle = document.createElement('button');
+  toggle.id = '__frankBarToggle';
+  toggle.textContent = '\\u2630';
+  toggle.title = 'Show/Hide Frank controls';
+  toggle.style.cssText =
+    'position:fixed; top:8px; left:8px; z-index:1000000;' +
+    'width:34px; height:34px; border:none; border-radius:8px;' +
+    'background:rgba(30,30,30,0.72); color:#fff; cursor:pointer;' +
+    'font:700 17px/34px sans-serif; text-align:center;' +
+    'box-shadow:0 2px 8px rgba(0,0,0,0.35);' +
+    'backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);';
+  document.body.appendChild(toggle);
+
   var bar = document.createElement('div');
   bar.id = '__frankBar';
   bar.innerHTML =
@@ -1014,7 +870,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
     '<span id="__frankStatus"></span>';
   bar.style.cssText =
-    'position:fixed; top:8px; left:8px; z-index:999999;' +
+    'position:fixed; top:8px; left:48px; z-index:999999;' +
     'display:flex; align-items:center; gap:6px;' +
     'background:rgba(30,30,30,0.85); color:#fff; padding:6px 10px;' +
     'border-radius:8px; font:13px/1.3 sans-serif; box-shadow:0 2px 8px rgba(0,0,0,0.4);' +
@@ -1046,6 +902,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   pipeBtn.style.cssText = btnStyle + 'display:none;';
   transBtn.style.cssText = btnStyle;
   copyDbgBtn.style.cssText = btnStyle + 'display:none;';
+
+  var collapsed = false;
+  function setCollapsed(next) {
+    collapsed = !!next;
+    bar.style.display = collapsed ? 'none' : 'flex';
+    toggle.textContent = collapsed ? '\\u25B6' : '\\u2630';
+    toggle.title = collapsed ? 'Show Frank controls' : 'Hide Frank controls';
+  }
+  setCollapsed(false);
+
+  toggle.addEventListener('click', function(e) {
+    e.stopPropagation();
+    setCollapsed(!collapsed);
+  });
 
   backBtn.addEventListener('click', function(e) {
     e.stopPropagation();
