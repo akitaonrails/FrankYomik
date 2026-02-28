@@ -2072,6 +2072,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           continue;
         }
         await _waitForJobCompletion(rerenderJobId);
+        await _refreshLocalEditedCache(
+          pageId: pageId,
+          pipeline: pipeline,
+          sourceHash: sourceHash,
+        );
         await _loadMetadataForPage(pageId, force: true);
         _dirtyMetadataPageIds.remove(pageId);
         _metadataOriginalByPageId.remove(pageId);
@@ -2094,6 +2099,30 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         clearAfter: const Duration(seconds: 3),
       );
     }
+  }
+
+  Future<void> _refreshLocalEditedCache({
+    required String pageId,
+    required String pipeline,
+    required String sourceHash,
+  }) async {
+    final api = ref.read(apiServiceProvider);
+    final settings = ref.read(settingsProvider);
+    final cache = ref.read(cacheServiceProvider);
+    final fresh = await api.getCacheImageByHash(
+      settings: settings,
+      pipeline: pipeline,
+      sourceHash: sourceHash,
+    );
+    final job = ref.read(jobsProvider)[pageId];
+    await cache.store(
+      hash: sourceHash,
+      pipeline: pipeline,
+      imageBytes: fresh,
+      title: job?.title,
+      chapter: job?.chapter,
+      pageNumber: job?.pageNumber,
+    );
   }
 
   void _cancelFeedbackEdits() {

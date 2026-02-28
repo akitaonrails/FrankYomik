@@ -123,6 +123,24 @@ class ApiService {
     return response.bodyBytes;
   }
 
+  /// Download cached image bytes by source hash.
+  Future<Uint8List> getCacheImageByHash({
+    required ServerSettings settings,
+    required String pipeline,
+    required String sourceHash,
+  }) async {
+    final uri = Uri.parse(
+      '${settings.serverUrl}/api/v1/cache/by-hash/$pipeline/$sourceHash/image',
+    );
+    final response = await _client.get(uri, headers: _headers(settings));
+    if (response.statusCode != 200) {
+      throw ApiException(
+        'Cache image download failed (${response.statusCode})',
+      );
+    }
+    return response.bodyBytes;
+  }
+
   /// Check server health (no auth required).
   Future<Map<String, dynamic>> getHealth(ServerSettings settings) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/health');
