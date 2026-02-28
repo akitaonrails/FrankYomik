@@ -200,6 +200,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
 
       state = {...state};
     } catch (e) {
+      debugPrint('[Jobs] Submit error for $pageId: $e');
       job.status = PageJobStatus.failed;
       job.error = e.toString();
       state = {...state};

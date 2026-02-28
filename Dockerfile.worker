@@ -57,12 +57,15 @@ COPY pipeline/ pipeline/
 COPY webtoon/ webtoon/
 COPY worker/ worker/
 
-# Model cache and home directories for UID 65532 (matches distroless:nonroot
-# used by the API, so both can read/write the shared cache volume).
-RUN mkdir -p /home/worker/.cache/huggingface \
-             /home/worker/.cache/manga_ocr \
-             /home/worker/.EasyOCR/model \
-             /app/cache \
+# Create worker user with UID 65532 (matches distroless:nonroot used by the
+# API, so both can read/write the shared cache volume).  The passwd entry is
+# required so that gosu can resolve HOME correctly.
+RUN echo "worker:x:65532:65532:worker:/home/worker:/usr/sbin/nologin" >> /etc/passwd \
+    && echo "worker:x:65532:" >> /etc/group \
+    && mkdir -p /home/worker/.cache/huggingface \
+                /home/worker/.cache/manga_ocr \
+                /home/worker/.EasyOCR/model \
+                /app/cache \
     && chown -R 65532:65532 /home/worker /app
 
 COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
@@ -70,6 +73,7 @@ RUN chmod +x /usr/local/bin/worker-entrypoint.sh
 
 ENV HOME=/home/worker
 ENV HF_HOME=/home/worker/.cache/huggingface
+ENV EASYOCR_MODULE_PATH=/home/worker/.EasyOCR
 
 # Starts as root to fix volume permissions, then drops to 65532.
 ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
