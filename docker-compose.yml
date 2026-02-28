@@ -43,6 +43,15 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # One-shot container that fixes shared-cache volume ownership before
+  # the API or worker start.  Needed because distroless (API) has no chown.
+  init-perms:
+    image: busybox
+    volumes:
+      - shared-cache:/data/cache
+    command: ["sh", "-c", "chown -R 65532:65532 /data/cache"]
+    restart: "no"
+
   api:
     build:
       context: .
@@ -54,10 +63,12 @@ services:
       AUTH_TOKEN: ${AUTH_TOKEN:?Set AUTH_TOKEN in .env or environment}
       CACHE_DIR: /data/cache
     volumes:
-      - shared-cache:/data/cache:ro
+      - shared-cache:/data/cache
     depends_on:
       redis:
         condition: service_healthy
+      init-perms:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   worker:
@@ -85,6 +96,8 @@ services:
       ollama:
         condition: service_healthy
       ollama-pull:
+        condition: service_completed_successfully
+      init-perms:
         condition: service_completed_successfully
     restart: unless-stopped
 

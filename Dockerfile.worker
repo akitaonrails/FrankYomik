@@ -36,8 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root user
-RUN groupadd -r worker && useradd -r -g worker -m -d /home/worker worker
+# gosu for entrypoint privilege drop
+RUN apt-get update && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy venv from builder
 COPY --from=builder /opt/venv /opt/venv
@@ -56,16 +57,20 @@ COPY pipeline/ pipeline/
 COPY webtoon/ webtoon/
 COPY worker/ worker/
 
-# Model cache directories (mount as volumes for persistence)
+# Model cache and home directories for UID 65532 (matches distroless:nonroot
+# used by the API, so both can read/write the shared cache volume).
 RUN mkdir -p /home/worker/.cache/huggingface \
              /home/worker/.cache/manga_ocr \
              /home/worker/.EasyOCR/model \
              /app/cache \
-    && chown -R worker:worker /home/worker /app
+    && chown -R 65532:65532 /home/worker /app
 
-USER worker
+COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
+RUN chmod +x /usr/local/bin/worker-entrypoint.sh
+
 ENV HOME=/home/worker
 ENV HF_HOME=/home/worker/.cache/huggingface
 
-ENTRYPOINT ["python3.12", "-m", "worker"]
+# Starts as root to fix volume permissions, then drops to 65532.
+ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
 CMD ["--pipeline", "both"]
