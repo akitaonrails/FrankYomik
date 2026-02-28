@@ -17,6 +17,7 @@ import '../webview/overlay_controller.dart';
 import '../webview/platform/app_webview.dart';
 import '../webview/platform/app_webview_controller.dart';
 import '../webview/strategies/kindle_strategy.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Anti-bot JS injected at document-start to mask WebView fingerprints.
 /// Each override is wrapped in try-catch — some properties may be
@@ -85,6 +86,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// Selected pipeline for Kindle pages (furigana vs english translation).
   String _kindlePipeline = 'manga_furigana';
+
+  /// Current Kindle ASIN for per-title pipeline persistence.
+  String? _currentAsin;
 
   /// Background webview prefetch manager (Linux-only).
   var _kindlePrefetch = KindlePrefetchManager();
@@ -160,6 +164,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       'if(window.__frankDetectedPages) window.__frankDetectedPages.clear();',
                 );
                 _currentKindlePageId = null;
+                _currentAsin = null;
                 _kindleBlobByPageId.clear();
                 _kindleRectByPageId.clear();
                 _cancelKindleReapplies();
@@ -356,6 +361,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       debugPrint(
         '[Reader] kindle detect pageId=$pageId index=$kindleIndex nav=$newIntent',
       );
+      // Load per-title pipeline preference from ASIN
+      final meta = _jsBridge.parseCurrentUrl(_currentUrl);
+      final asin = meta?.title;
+      if (asin != null && asin.isNotEmpty && asin != _currentAsin) {
+        _currentAsin = asin;
+        SharedPreferences.getInstance().then((prefs) {
+          final saved = prefs.getString('kindle_pipeline_$asin');
+          if (saved != null && saved.isNotEmpty && saved != _kindlePipeline) {
+            setState(() { _kindlePipeline = saved; });
+            _syncPipelineButtonState();
+            debugPrint('[Reader] Loaded pipeline preference for $asin: $saved');
+          }
+        });
+      }
       _triggerKindlePrefetch(kindleIndex, newIntent);
       _pushKindleDebugHudToPage();
       _syncFeedbackMarksOverlay();
@@ -1255,8 +1274,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   var marksLayer = document.createElement('div');
   marksLayer.id = '__frankFeedbackMarks';
+  // Zero-size container with overflow:visible — avoids creating a large GPU
+  // compositing surface that WebKitGTK renders as an opaque dark rectangle.
+  // Child mark divs use position:fixed so they still cover the viewport.
   marksLayer.style.cssText =
-    'position:fixed; left:0; top:0; width:100vw; height:100vh;' +
+    'position:fixed; left:0; top:0; width:0; height:0; overflow:visible;' +
     'z-index:1000000; pointer-events:none; display:none;';
   document.body.appendChild(marksLayer);
 
@@ -1309,6 +1331,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
   function findImageByPageId(pageId) {
     if (!pageId) return null;
+    // 1. Exact match via data-frank-page-id attribute
     var imgs = document.querySelectorAll('img');
     var best = null;
     var bestScore = -Infinity;
@@ -1322,6 +1345,45 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         bestScore = area;
         best = img;
       }
+    }
+    if (best) return best;
+
+    // 2. Fallback: single translated image (overlay applied but id was lost)
+    var translated = document.querySelectorAll('img[data-frank-translated="true"]');
+    if (translated.length === 1) {
+      console.log('[FeedbackMarks] findImageByPageId fallback: single translated img');
+      return translated[0];
+    }
+
+    // 3. Fallback: largest visible image in viewport (Kindle dominant page image)
+    var bestArea = 0;
+    for (var j = 0; j < imgs.length; j++) {
+      var im = imgs[j];
+      var rect = im.getBoundingClientRect();
+      if (rect.width < 100 || rect.height < 100) continue;
+      if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
+      if (rect.right < 0 || rect.left > window.innerWidth) continue;
+      var a = rect.width * rect.height;
+      if (a > bestArea) { bestArea = a; best = im; }
+    }
+    if (best) {
+      console.log('[FeedbackMarks] findImageByPageId fallback: largest visible img (' + bestArea + 'px²)');
+      return best;
+    }
+
+    // 4. Same for canvas elements (Kindle sometimes uses canvas)
+    var canvases = document.querySelectorAll('canvas');
+    for (var k = 0; k < canvases.length; k++) {
+      var c = canvases[k];
+      var cr = c.getBoundingClientRect();
+      if (cr.width < 100 || cr.height < 100) continue;
+      if (cr.bottom < 0 || cr.top > window.innerHeight) continue;
+      if (cr.right < 0 || cr.left > window.innerWidth) continue;
+      var ca = cr.width * cr.height;
+      if (ca > bestArea) { bestArea = ca; best = c; }
+    }
+    if (best) {
+      console.log('[FeedbackMarks] findImageByPageId fallback: canvas (' + bestArea + 'px²)');
     }
     return best;
   }
@@ -1351,6 +1413,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     renderedFeedbackMarks = [];
   }
   function renderFeedbackMarks() {
+    console.log('[FeedbackMarks] renderFeedbackMarks called, marks count: ' + (Array.isArray(feedbackMarks) ? feedbackMarks.length : 0) + ', editMode: ' + editMode + ', enabled: ' + feedbackMarksEnabled);
     if (!editMode || !feedbackMarksEnabled || !Array.isArray(feedbackMarks) || feedbackMarks.length === 0) {
       clearFeedbackMarks();
       marksLayer.style.display = 'none';
@@ -1358,12 +1421,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     clearFeedbackMarks();
     marksLayer.style.display = 'block';
+    var imagesFound = 0, marksRendered = 0;
     for (var i = 0; i < feedbackMarks.length; i++) {
       var mark = feedbackMarks[i];
       if (!mark || typeof mark !== 'object') continue;
       var anchorPageId = mark.anchorPageId || mark.pageId;
       var img = findImageByPageId(anchorPageId);
-      if (!img) continue;
+      if (!img) {
+        console.warn('[FeedbackMarks] No image found for pageId: ' + anchorPageId);
+        continue;
+      }
+      imagesFound++;
       var r = img.getBoundingClientRect();
       if (!r || r.width < 10 || r.height < 10) continue;
       var x = Number(mark.x || 0);
@@ -1413,6 +1481,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         box.appendChild(dlabel);
       }
       marksLayer.appendChild(box);
+      marksRendered++;
 
       renderedFeedbackMarks.push({
         anchorPageId: String(anchorPageId || ''),
@@ -1426,6 +1495,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         area: pw * ph
       });
     }
+    console.log('[FeedbackMarks] Done: ' + imagesFound + ' images found, ' + marksRendered + ' marks rendered');
   }
   function scheduleFeedbackMarksRender() {
     if (marksRaf !== null) return;
@@ -1824,6 +1894,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _syncPipelineButtonState();
     debugPrint('[Reader] Pipeline switched to $_kindlePipeline');
 
+    // Persist per-title pipeline preference
+    final asin = _currentAsin;
+    if (asin != null && asin.isNotEmpty) {
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setString('kindle_pipeline_$asin', _kindlePipeline);
+      });
+    }
+
     // Cancel all Kindle jobs and re-submit current page
     _cancelKindleJobs();
     if (ref.read(settingsProvider).autoTranslate &&
@@ -2199,10 +2277,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     if (force && _metadataLoadingPageIds.contains(pageId)) return;
     final job = ref.read(jobsProvider)[pageId];
-    if (job == null) return;
+    if (job == null) {
+      debugPrint('[Feedback] No job for $pageId — cannot load metadata');
+      return;
+    }
     final sourceHash = job.sourceHash;
     final pipeline = job.pipeline;
-    if (sourceHash == null || sourceHash.isEmpty || pipeline == null) return;
+    if (sourceHash == null || sourceHash.isEmpty || pipeline == null) {
+      debugPrint(
+        '[Feedback] Missing hash/pipeline for $pageId '
+        '(hash=${sourceHash?.substring(0, 12) ?? 'null'}, pipeline=$pipeline)',
+      );
+      return;
+    }
     _metadataLoadingPageIds.add(pageId);
     try {
       final api = ref.read(apiServiceProvider);
@@ -2213,7 +2300,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         sourceHash: sourceHash,
       );
       final metadata = resp['metadata'];
-      if (metadata is! Map) return;
+      if (metadata is! Map) {
+        debugPrint('[Feedback] Server returned no metadata map for $pageId');
+        return;
+      }
+      final regions = metadata['regions'];
+      debugPrint(
+        '[Feedback] Loaded metadata for $pageId: '
+        '${regions is List ? regions.length : 0} regions',
+      );
       _metadataByPageId[pageId] = {
         'pipeline': pipeline,
         'sourceHash': sourceHash,
@@ -2227,8 +2322,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         _syncFeedbackActionButtons();
       }
       _syncFeedbackMarksOverlay();
-    } catch (_) {
-      // Best-effort metadata hydration.
+    } catch (e) {
+      debugPrint('[Feedback] Failed to load metadata for $pageId: $e');
     } finally {
       _metadataLoadingPageIds.remove(pageId);
     }
@@ -2489,6 +2584,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final settings = ref.read(settingsProvider);
     final dirtyPages = _dirtyMetadataPageIds.toList();
     var failed = 0;
+    final savedImages = <String, Uint8List>{};
 
     _updateInPageStatus('Saving ${dirtyPages.length} page(s)...');
 
@@ -2526,11 +2622,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         }
         debugPrint('[Feedback] Patch accepted page=$pageId job=$rerenderJobId');
         await _waitForJobCompletion(rerenderJobId);
-        await _refreshLocalEditedCache(
+        final freshImage = await _refreshLocalEditedCache(
           pageId: pageId,
           pipeline: pipeline,
           sourceHash: sourceHash,
         );
+        if (freshImage != null) {
+          savedImages[pageId] = freshImage;
+        }
         _invalidateEditedPageJobs(pageId);
         await _loadMetadataForPage(pageId, force: true);
         _dirtyMetadataPageIds.remove(pageId);
@@ -2548,16 +2647,35 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         'Feedback saved',
         clearAfter: const Duration(seconds: 2),
       );
-      _refreshCurrentPageFromCache();
     } else {
       _updateInPageStatus(
         'Saved with $failed failure(s)',
         clearAfter: const Duration(seconds: 3),
       );
     }
+    // Apply fresh rendered overlays directly — don't re-capture the page,
+    // because the WebView is showing the old translated image whose hash
+    // won't match the original source hash in the cache.
+    final appliedSpreads = <String>{};
+    for (final entry in savedImages.entries) {
+      final pid = entry.key;
+      // For spread halves (L/R), stitch and apply as spread.
+      if (pid.endsWith('-L') || pid.endsWith('-R')) {
+        final base = pid.substring(0, pid.length - 2);
+        if (appliedSpreads.contains(base)) continue;
+        final leftImg = savedImages['$base-L'];
+        final rightImg = savedImages['$base-R'];
+        if (leftImg != null && rightImg != null) {
+          appliedSpreads.add(base);
+          _applySpreadOverlay(base, leftImg, rightImg);
+          continue;
+        }
+      }
+      _applyOverlay(pid, entry.value);
+    }
   }
 
-  Future<void> _refreshLocalEditedCache({
+  Future<Uint8List?> _refreshLocalEditedCache({
     required String pageId,
     required String pipeline,
     required String sourceHash,
@@ -2582,6 +2700,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     debugPrint(
       '[Feedback] Refreshed local cache page=$pageId hash=${sourceHash.substring(0, 12)}',
     );
+    return fresh;
   }
 
   void _invalidateEditedPageJobs(String pageId) {

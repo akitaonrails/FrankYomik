@@ -498,4 +498,95 @@ void main() {
       expect(script.contains('readAsDataURL'), true);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Feedback feature regression tests
+  // ---------------------------------------------------------------------------
+
+  group('PageJob cache-hit includes pipeline', () {
+    test('PageJob constructor accepts pipeline parameter', () {
+      final job = PageJob(
+        pageId: 'test-1',
+        pipeline: 'manga_furigana',
+        sourceHash: 'abc123',
+        status: PageJobStatus.completed,
+        cached: true,
+      );
+      expect(job.pipeline, 'manga_furigana');
+      expect(job.sourceHash, 'abc123');
+      expect(job.cached, true);
+    });
+  });
+
+  group('Feedback feature patterns in reader_screen.dart', () {
+    late String readerSource;
+
+    setUpAll(() {
+      readerSource = File('lib/screens/reader_screen.dart').readAsStringSync();
+    });
+
+    test('metadata loading logs missing pipeline/hash', () {
+      // _loadMetadataForPage must log when pipeline or sourceHash is missing
+      // so we can diagnose feedback not working on cached pages.
+      expect(readerSource.contains('Missing hash/pipeline for'), true);
+    });
+
+    test('metadata loading logs region count on success', () {
+      expect(readerSource.contains('regions'), true);
+      expect(readerSource.contains('Loaded metadata for'), true);
+    });
+
+    test('feedback save applies overlay directly (not re-capture)', () {
+      // After saving feedback edits, fresh images must be applied as overlays
+      // directly. Re-capturing would screenshot the translated overlay image,
+      // producing a hash that doesn't match the original source hash.
+      expect(readerSource.contains('savedImages[pageId] = freshImage'), true);
+      expect(readerSource.contains('_applyOverlay(pid, entry.value)'), true,
+          reason: 'must apply fresh overlay directly after feedback save');
+    });
+
+    test('feedback save handles spread pages (L/R stitching)', () {
+      expect(readerSource.contains("savedImages['\$base-L']"), true);
+      expect(readerSource.contains("savedImages['\$base-R']"), true);
+      expect(readerSource.contains('_applySpreadOverlay(base, leftImg, rightImg)'), true);
+    });
+
+    test('_refreshLocalEditedCache returns fresh image bytes', () {
+      // Must return Uint8List? so the caller can apply overlay
+      expect(readerSource.contains('Future<Uint8List?> _refreshLocalEditedCache'), true);
+      expect(readerSource.contains('return fresh;'), true);
+    });
+
+    test('feedback toolbar JS has all required buttons', () {
+      expect(readerSource.contains('__frankFeedback'), true);
+      expect(readerSource.contains('__frankSaveEdits'), true);
+      expect(readerSource.contains('__frankCancelEdits'), true);
+      expect(readerSource.contains('toggle_feedback_mode'), true);
+      expect(readerSource.contains('save_feedback_edits'), true);
+      expect(readerSource.contains('cancel_feedback_edits'), true);
+    });
+
+    test('feedback edit menu has all action buttons', () {
+      expect(readerSource.contains('data-action="false_positive"'), true);
+      expect(readerSource.contains('data-action="undetected"'), true);
+      expect(readerSource.contains('data-action="wrong_sfx"'), true);
+      expect(readerSource.contains('data-action="edit_translation"'), true);
+      expect(readerSource.contains('data-action="undo_mark"'), true);
+    });
+
+    test('feedback marks rendering styles exist for all mark types', () {
+      expect(readerSource.contains("kind === 'false_positive'"), true);
+      expect(readerSource.contains("kind === 'wrong_sfx'"), true);
+      expect(readerSource.contains("kind === 'undetected'"), true);
+      // Default style for manual_translation
+      expect(readerSource.contains("label: 'TXT'"), true);
+    });
+
+    test('detection box styles distinguish region kinds', () {
+      expect(readerSource.contains("regionKind === 'artwork_text'"), true);
+      expect(readerSource.contains("regionKind === 'sfx'"), true);
+      // Default detection style for bubbles
+      expect(readerSource.contains("label: 'B'"), true);
+    });
+  });
 }
