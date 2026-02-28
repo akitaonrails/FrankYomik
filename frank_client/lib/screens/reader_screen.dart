@@ -80,6 +80,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   int _kindleOverlayFallback = 0;
   final Map<String, Map<String, dynamic>> _metadataByPageId = {};
   final Map<String, Map<String, dynamic>> _metadataOriginalByPageId = {};
+  final Set<String> _metadataLoadingPageIds = <String>{};
   final Set<String> _dirtyMetadataPageIds = <String>{};
 
   /// Selected pipeline for Kindle pages (furigana vs english translation).
@@ -164,6 +165,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 _kindleOverlayFallback = 0;
                 _metadataByPageId.clear();
                 _metadataOriginalByPageId.clear();
+                _metadataLoadingPageIds.clear();
                 _dirtyMetadataPageIds.clear();
                 // Cancel all completion listeners from previous page
                 for (final sub in _completionListeners.values) {
@@ -183,6 +185,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 _syncEditModeButtonState();
                 _syncFeedbackActionButtons();
                 _syncEditModeToPage();
+                _syncFeedbackMarksOverlay();
               });
               if (_inspectorMode) {
                 _inspector.inject(controller);
@@ -350,6 +353,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       );
       _triggerKindlePrefetch(kindleIndex, newIntent);
       _pushKindleDebugHudToPage();
+      _syncFeedbackMarksOverlay();
     }
 
     _logKindle('kindle_detect', {
@@ -357,6 +361,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       'pageMode': pageInfo['pageMode'],
       'type': pageInfo['type'],
     });
+    if (_overlayEditMode) {
+      _syncFeedbackMarksOverlay();
+    }
 
     final settings = ref.read(settingsProvider);
 
@@ -1203,6 +1210,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     'background:rgba(20,20,20,0.95); color:#fff; border:1px solid rgba(255,255,255,0.25);' +
     'border-radius:6px; padding:4px;';
   editMenu.innerHTML =
+    '<button data-action="undo_mark" style="width:100%;text-align:left;display:none;">Undo mark</button>' +
     '<button data-action="false_positive" style="width:100%;text-align:left;">Mark false positive balloon</button>' +
     '<button data-action="undetected" style="width:100%;text-align:left;">Mark undetected balloon</button>' +
     '<button data-action="wrong_sfx" style="width:100%;text-align:left;">Mark wrong SFX</button>' +
@@ -1215,8 +1223,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       'display:block; background:none; border:none; color:#fff; padding:6px 8px; cursor:pointer; font:12px sans-serif;';
   }
 
+  var marksLayer = document.createElement('div');
+  marksLayer.id = '__frankFeedbackMarks';
+  marksLayer.style.cssText =
+    'position:fixed; left:0; top:0; width:100vw; height:100vh;' +
+    'z-index:1000000; pointer-events:none; display:none;';
+  document.body.appendChild(marksLayer);
+
   var editMode = false;
   var editPayload = null;
+  var feedbackMarksEnabled = false;
+  var feedbackMarks = [];
+  var renderedFeedbackMarks = [];
+  var marksRaf = null;
   function isUiTarget(target) {
     if (!target || !target.closest) return false;
     return !!target.closest('#__frankBar,#__frankBarToggle,#__frankEditMenu');
@@ -1258,6 +1277,127 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     return best;
   }
+  function findImageByPageId(pageId) {
+    if (!pageId) return null;
+    var imgs = document.querySelectorAll('img');
+    var best = null;
+    var bestScore = -Infinity;
+    for (var i = 0; i < imgs.length; i++) {
+      var img = imgs[i];
+      if (!isVisibleImage(img)) continue;
+      if (!img.dataset || img.dataset.frankPageId !== pageId) continue;
+      var r = img.getBoundingClientRect();
+      var area = r.width * r.height;
+      if (area > bestScore) {
+        bestScore = area;
+        best = img;
+      }
+    }
+    return best;
+  }
+  function markStyle(kind) {
+    if (kind === 'false_positive') {
+      return { border: 'rgba(244,67,54,0.98)', fill: 'rgba(244,67,54,0.16)', dash: false, label: 'FP' };
+    }
+    if (kind === 'wrong_sfx') {
+      return { border: 'rgba(255,152,0,0.98)', fill: 'rgba(255,152,0,0.16)', dash: false, label: 'SFX' };
+    }
+    if (kind === 'undetected') {
+      return { border: 'rgba(33,150,243,0.98)', fill: 'rgba(33,150,243,0.12)', dash: true, label: 'NEW' };
+    }
+    return { border: 'rgba(156,39,176,0.98)', fill: 'rgba(156,39,176,0.14)', dash: false, label: 'TXT' };
+  }
+  function clearFeedbackMarks() {
+    marksLayer.innerHTML = '';
+    renderedFeedbackMarks = [];
+  }
+  function renderFeedbackMarks() {
+    if (!editMode || !feedbackMarksEnabled || !Array.isArray(feedbackMarks) || feedbackMarks.length === 0) {
+      clearFeedbackMarks();
+      marksLayer.style.display = 'none';
+      return;
+    }
+    clearFeedbackMarks();
+    marksLayer.style.display = 'block';
+    for (var i = 0; i < feedbackMarks.length; i++) {
+      var mark = feedbackMarks[i];
+      if (!mark || typeof mark !== 'object') continue;
+      var anchorPageId = mark.anchorPageId || mark.pageId;
+      var img = findImageByPageId(anchorPageId);
+      if (!img) continue;
+      var r = img.getBoundingClientRect();
+      if (!r || r.width < 10 || r.height < 10) continue;
+      var x = Number(mark.x || 0);
+      var y = Number(mark.y || 0);
+      var w = Number(mark.w || 0);
+      var h = Number(mark.h || 0);
+      if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h)) continue;
+      x = Math.max(0, Math.min(1, x));
+      y = Math.max(0, Math.min(1, y));
+      w = Math.max(0.005, Math.min(1, w));
+      h = Math.max(0.005, Math.min(1, h));
+
+      var px = r.left + (x * r.width);
+      var py = r.top + (y * r.height);
+      var pw = Math.max(10, w * r.width);
+      var ph = Math.max(10, h * r.height);
+      var style = markStyle(mark.type);
+
+      var box = document.createElement('div');
+      box.style.cssText =
+        'position:fixed; pointer-events:none; box-sizing:border-box;' +
+        'left:' + px + 'px; top:' + py + 'px; width:' + pw + 'px; height:' + ph + 'px;' +
+        'border:2px ' + (style.dash ? 'dashed' : 'solid') + ' ' + style.border + ';' +
+        'background:' + style.fill + '; border-radius:4px;';
+
+      var badge = document.createElement('div');
+      badge.textContent = style.label;
+      badge.style.cssText =
+        'position:absolute; left:-1px; top:-18px; pointer-events:none;' +
+        'background:' + style.border + '; color:#fff; border-radius:3px;' +
+        'font:700 10px/1 sans-serif; padding:2px 4px;';
+      box.appendChild(badge);
+      marksLayer.appendChild(box);
+
+      renderedFeedbackMarks.push({
+        anchorPageId: String(anchorPageId || ''),
+        pageId: String(mark.pageId || ''),
+        regionId: String(mark.regionId || ''),
+        left: px,
+        top: py,
+        right: px + pw,
+        bottom: py + ph,
+        area: pw * ph
+      });
+    }
+  }
+  function scheduleFeedbackMarksRender() {
+    if (marksRaf !== null) return;
+    marksRaf = window.requestAnimationFrame(function() {
+      marksRaf = null;
+      renderFeedbackMarks();
+    });
+  }
+  function findFeedbackMarkAt(clientX, clientY, anchorPageId) {
+    var best = null;
+    var bestArea = Infinity;
+    for (var i = 0; i < renderedFeedbackMarks.length; i++) {
+      var m = renderedFeedbackMarks[i];
+      if (!m) continue;
+      if (anchorPageId && m.anchorPageId && m.anchorPageId !== anchorPageId) continue;
+      var pad = 6;
+      if (clientX < (m.left - pad) || clientX > (m.right + pad) || clientY < (m.top - pad) || clientY > (m.bottom + pad)) {
+        continue;
+      }
+      var area = Number(m.area || 0);
+      if (!isFinite(area) || area <= 0) area = 1;
+      if (!best || area < bestArea) {
+        best = m;
+        bestArea = area;
+      }
+    }
+    return best;
+  }
   function openEditMenu(clientX, clientY, img) {
     var r = img.getBoundingClientRect();
     if (!r || r.width < 10 || r.height < 10) return false;
@@ -1265,11 +1405,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     var yNorm = (clientY - r.top) / r.height;
     xNorm = Math.max(0, Math.min(1, xNorm));
     yNorm = Math.max(0, Math.min(1, yNorm));
+    var anchorPageId = img.dataset ? img.dataset.frankPageId : null;
+    var markHit = findFeedbackMarkAt(clientX, clientY, anchorPageId);
     editPayload = {
-      pageId: img.dataset ? img.dataset.frankPageId : null,
+      pageId: markHit ? (markHit.pageId || anchorPageId || null) : (anchorPageId || null),
+      regionId: markHit ? (markHit.regionId || null) : null,
+      anchorPageId: anchorPageId || null,
       xNorm: xNorm,
       yNorm: yNorm
     };
+    var undoBtn = editMenu.querySelector('button[data-action="undo_mark"]');
+    if (undoBtn) undoBtn.style.display = markHit ? 'block' : 'none';
     editMenu.style.left = Math.max(4, Math.min(window.innerWidth - 220, clientX)) + 'px';
     editMenu.style.top = Math.max(4, Math.min(window.innerHeight - 120, clientY)) + 'px';
     editMenu.style.display = 'block';
@@ -1279,16 +1425,26 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     editMenu.style.display = 'none';
     editPayload = null;
   }
-  document.addEventListener('click', function() { hideEditMenu(); }, true);
+  document.addEventListener('click', function(e) {
+    if (!editMenu || editMenu.style.display === 'none') return;
+    var t = e && e.target;
+    if (t && t.closest && t.closest('#__frankEditMenu')) return;
+    hideEditMenu();
+  }, true);
   document.addEventListener('scroll', function() { hideEditMenu(); }, true);
   editMenu.addEventListener('contextmenu', function(e) { e.preventDefault(); });
   editMenu.addEventListener('click', function(e) {
     var t = e.target;
     if (!t || !t.dataset || !t.dataset.action) return;
     if (!editPayload) return;
+    if (t.dataset.action === 'undo_mark' && !editPayload.regionId) {
+      hideEditMenu();
+      return;
+    }
     window.flutter_inappwebview.callHandler('onOverlayEditAction', {
       action: t.dataset.action,
       pageId: editPayload.pageId || null,
+      regionId: editPayload.regionId || null,
       xNorm: editPayload.xNorm,
       yNorm: editPayload.yNorm
     });
@@ -1316,6 +1472,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     e.stopPropagation();
     openEditMenu(e.clientX, e.clientY, img);
   }, true);
+  window.addEventListener('resize', scheduleFeedbackMarksRender);
+  document.addEventListener('scroll', scheduleFeedbackMarksRender, true);
+  window.setInterval(function() {
+    if (editMode && feedbackMarksEnabled && feedbackMarks.length > 0) {
+      scheduleFeedbackMarksRender();
+    }
+  }, 350);
 
   var backBtn = document.getElementById('__frankBack');
   var autoBtn = document.getElementById('__frankAuto');
@@ -1445,6 +1608,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   window.__frankSetEditMode = function(enabled) {
     editMode = !!enabled;
     if (!editMode) hideEditMenu();
+    scheduleFeedbackMarksRender();
+  };
+  window.__frankSetFeedbackMarks = function(payload) {
+    if (!payload || typeof payload !== 'object') {
+      feedbackMarksEnabled = false;
+      feedbackMarks = [];
+      scheduleFeedbackMarksRender();
+      return;
+    }
+    feedbackMarksEnabled = !!payload.enabled;
+    feedbackMarks = Array.isArray(payload.marks) ? payload.marks : [];
+    scheduleFeedbackMarksRender();
   };
   window.__frankSetDebugHud = function(text, visible) {
     var el = document.getElementById('__frankDebugHud');
@@ -1538,12 +1713,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         if (raw is! Map) return null;
         final action = raw['action'] as String?;
         final pageId = raw['pageId'] as String?;
+        final regionId = raw['regionId'] as String?;
         final xNorm = (raw['xNorm'] as num?)?.toDouble();
         final yNorm = (raw['yNorm'] as num?)?.toDouble();
         if (action == null || xNorm == null || yNorm == null) return null;
         _handleOverlayEditAction(
           action: action,
           pageId: pageId,
+          regionId: regionId,
           xNorm: xNorm,
           yNorm: yNorm,
         );
@@ -1668,6 +1845,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _syncEditModeButtonState();
     _syncFeedbackActionButtons();
     _syncEditModeToPage();
+    _syncFeedbackMarksOverlay();
     _updateInPageStatus(
       _overlayEditMode ? 'Feedback mode ON' : 'Feedback mode OFF',
       clearAfter: const Duration(seconds: 2),
@@ -1693,6 +1871,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       source:
           'if(window.__frankSetEditMode) window.__frankSetEditMode(${_overlayEditMode ? 'true' : 'false'});',
     );
+    _syncFeedbackMarksOverlay();
   }
 
   void _syncFeedbackActionButtons() {
@@ -1703,6 +1882,152 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     controller.evaluateJavascript(
       source:
           'if(window.__frankSetFeedbackActions) window.__frankSetFeedbackActions(${showActions ? 'true' : 'false'}, $dirtyCount);',
+    );
+  }
+
+  List<Map<String, Object?>> _extractFeedbackMarks({
+    required String metadataPageId,
+    required String anchorPageId,
+    required double xOffset,
+    required double xScale,
+  }) {
+    final entry = _metadataByPageId[metadataPageId];
+    if (entry == null) return const <Map<String, Object?>>[];
+    final metadata = entry['metadata'];
+    if (metadata is! Map) return const <Map<String, Object?>>[];
+    final regionsRaw = metadata['regions'];
+    if (regionsRaw is! List) return const <Map<String, Object?>>[];
+
+    final marks = <Map<String, Object?>>[];
+    for (var i = 0; i < regionsRaw.length; i++) {
+      final regionRaw = regionsRaw[i];
+      if (regionRaw is! Map) continue;
+      final region = Map<String, dynamic>.from(regionRaw);
+      final userRaw = region['user'];
+      final user = userRaw is Map
+          ? Map<String, dynamic>.from(userRaw)
+          : <String, dynamic>{};
+
+      final manual = ((user['manual_translation'] as String?) ?? '').trim();
+      String? type;
+      if (user['false_positive'] == true) {
+        type = 'false_positive';
+      } else if (user['wrong_sfx'] == true) {
+        type = 'wrong_sfx';
+      } else if (user['undetected'] == true) {
+        type = 'undetected';
+      } else if (manual.isNotEmpty) {
+        type = 'manual_translation';
+      }
+      if (type == null) continue;
+
+      final norm = region['bbox_norm'];
+      if (norm is! List || norm.length != 4) continue;
+      final x1 = (norm[0] as num?)?.toDouble();
+      final y1 = (norm[1] as num?)?.toDouble();
+      final x2 = (norm[2] as num?)?.toDouble();
+      final y2 = (norm[3] as num?)?.toDouble();
+      if (x1 == null || y1 == null || x2 == null || y2 == null) continue;
+
+      final localX1 = x1.clamp(0.0, 1.0).toDouble();
+      final localY1 = y1.clamp(0.0, 1.0).toDouble();
+      final localX2 = x2.clamp(0.0, 1.0).toDouble();
+      final localY2 = y2.clamp(0.0, 1.0).toDouble();
+      if (localX2 <= localX1 || localY2 <= localY1) continue;
+
+      final globalX1 = (xOffset + (localX1 * xScale))
+          .clamp(0.0, 1.0)
+          .toDouble();
+      final globalX2 = (xOffset + (localX2 * xScale))
+          .clamp(0.0, 1.0)
+          .toDouble();
+      if (globalX2 <= globalX1) continue;
+
+      final regionId = (region['id'] as String?) ?? 'idx-$i';
+      marks.add({
+        'anchorPageId': anchorPageId,
+        'pageId': metadataPageId,
+        'regionId': regionId,
+        'type': type,
+        'x': globalX1,
+        'y': localY1,
+        'w': globalX2 - globalX1,
+        'h': localY2 - localY1,
+      });
+    }
+    return marks;
+  }
+
+  List<Map<String, Object?>> _collectFeedbackMarksForCurrentView() {
+    final site = _jsBridge.activeStrategy?.siteName;
+    if (site == 'kindle') {
+      final currentPageId = _currentKindlePageId;
+      if (currentPageId == null || currentPageId.isEmpty) {
+        return const <Map<String, Object?>>[];
+      }
+      if (currentPageId.endsWith('-spread')) {
+        final leftId = '$currentPageId-L';
+        final rightId = '$currentPageId-R';
+        _ensureMetadataForPage(leftId);
+        _ensureMetadataForPage(rightId);
+        final marks = <Map<String, Object?>>[];
+        marks.addAll(
+          _extractFeedbackMarks(
+            metadataPageId: leftId,
+            anchorPageId: currentPageId,
+            xOffset: 0.0,
+            xScale: 0.5,
+          ),
+        );
+        marks.addAll(
+          _extractFeedbackMarks(
+            metadataPageId: rightId,
+            anchorPageId: currentPageId,
+            xOffset: 0.5,
+            xScale: 0.5,
+          ),
+        );
+        return marks;
+      }
+      _ensureMetadataForPage(currentPageId);
+      return _extractFeedbackMarks(
+        metadataPageId: currentPageId,
+        anchorPageId: currentPageId,
+        xOffset: 0.0,
+        xScale: 1.0,
+      );
+    }
+
+    if (site == 'webtoon') {
+      final marks = <Map<String, Object?>>[];
+      for (final pageId in _metadataByPageId.keys) {
+        if (!pageId.startsWith('wt-')) continue;
+        marks.addAll(
+          _extractFeedbackMarks(
+            metadataPageId: pageId,
+            anchorPageId: pageId,
+            xOffset: 0.0,
+            xScale: 1.0,
+          ),
+        );
+      }
+      return marks;
+    }
+    return const <Map<String, Object?>>[];
+  }
+
+  void _syncFeedbackMarksOverlay() {
+    final controller = _webController;
+    if (controller == null) return;
+    final payload = <String, Object?>{
+      'enabled': _overlayEditMode,
+      'marks': _overlayEditMode
+          ? _collectFeedbackMarksForCurrentView()
+          : const <Map<String, Object?>>[],
+    };
+    controller.evaluateJavascript(
+      source:
+          'if(window.__frankSetFeedbackMarks) window.__frankSetFeedbackMarks(${jsonEncode(payload)});',
     );
   }
 
@@ -1797,12 +2122,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   Future<void> _loadMetadataForPage(String pageId, {bool force = false}) async {
-    if (!force && _metadataByPageId.containsKey(pageId)) return;
+    if (!force &&
+        (_metadataByPageId.containsKey(pageId) ||
+            _metadataLoadingPageIds.contains(pageId))) {
+      return;
+    }
+    if (force && _metadataLoadingPageIds.contains(pageId)) return;
     final job = ref.read(jobsProvider)[pageId];
     if (job == null) return;
     final sourceHash = job.sourceHash;
     final pipeline = job.pipeline;
     if (sourceHash == null || sourceHash.isEmpty || pipeline == null) return;
+    _metadataLoadingPageIds.add(pageId);
     try {
       final api = ref.read(apiServiceProvider);
       final settings = ref.read(settingsProvider);
@@ -1825,14 +2156,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         _dirtyMetadataPageIds.remove(pageId);
         _syncFeedbackActionButtons();
       }
+      _syncFeedbackMarksOverlay();
     } catch (_) {
       // Best-effort metadata hydration.
+    } finally {
+      _metadataLoadingPageIds.remove(pageId);
     }
   }
 
   Future<void> _handleOverlayEditAction({
     required String action,
     required String? pageId,
+    required String? regionId,
     required double xNorm,
     required double yNorm,
   }) async {
@@ -1851,6 +2186,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       await _applyMetadataActionToPage(
         pageId: halfPageId,
         action: action,
+        regionId: regionId,
         xNorm: localX.clamp(0.0, 1.0),
         yNorm: yNorm.clamp(0.0, 1.0),
       );
@@ -1860,9 +2196,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     await _applyMetadataActionToPage(
       pageId: targetPageId,
       action: action,
+      regionId: regionId,
       xNorm: xNorm.clamp(0.0, 1.0),
       yNorm: yNorm.clamp(0.0, 1.0),
     );
+  }
+
+  int _findRegionById(List<dynamic> regions, String regionId) {
+    for (var i = 0; i < regions.length; i++) {
+      final r = regions[i];
+      if (r is! Map) continue;
+      if ((r['id'] as String?) == regionId) return i;
+    }
+    return -1;
   }
 
   int _findRegionAt(List<dynamic> regions, double xNorm, double yNorm) {
@@ -1885,6 +2231,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   Future<void> _applyMetadataActionToPage({
     required String pageId,
     required String action,
+    required String? regionId,
     required double xNorm,
     required double yNorm,
   }) async {
@@ -1906,7 +2253,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       metadata['regions'] = regions;
     }
 
-    final idx = _findRegionAt(regions, xNorm, yNorm);
+    final idx = (regionId != null && regionId.isNotEmpty)
+        ? _findRegionById(regions, regionId)
+        : _findRegionAt(regions, xNorm, yNorm);
     Map<String, dynamic>? region =
         (idx >= 0 && regions[idx] is Map<String, dynamic>)
         ? Map<String, dynamic>.from(regions[idx] as Map<String, dynamic>)
@@ -1945,6 +2294,37 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         },
       };
       regions.add(r);
+    } else if (action == 'undo_mark') {
+      if (region == null) {
+        _updateInPageStatus(
+          'No existing mark at click',
+          clearAfter: const Duration(seconds: 2),
+        );
+        return;
+      }
+      final user = Map<String, dynamic>.from(
+        (region['user'] as Map?)?.cast<String, dynamic>() ??
+            <String, dynamic>{
+              'false_positive': false,
+              'wrong_sfx': false,
+              'undetected': false,
+              'manual_translation': '',
+            },
+      );
+      final wasUserUndetected = user['undetected'] == true;
+      final regionTag = (region['id'] as String?) ?? '';
+      if (wasUserUndetected && regionTag.startsWith('u-')) {
+        regions.removeAt(idx);
+      } else {
+        user['false_positive'] = false;
+        user['wrong_sfx'] = false;
+        user['undetected'] = false;
+        user['manual_translation'] = '';
+        region['user'] = user;
+        if (idx >= 0) {
+          regions[idx] = region;
+        }
+      }
     } else {
       if (region == null) {
         _updateInPageStatus(
@@ -1991,6 +2371,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _metadataByPageId[pageId]!['metadata'] = metadata;
     _dirtyMetadataPageIds.add(pageId);
     _syncFeedbackActionButtons();
+    _syncFeedbackMarksOverlay();
     _updateInPageStatus(
       'Edit staged. Use Save or Cancel.',
       clearAfter: const Duration(seconds: 2),
@@ -2059,6 +2440,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         continue;
       }
       try {
+        debugPrint('[Feedback] Saving page=$pageId');
         final patchResp = await api.patchCacheMetadataByHash(
           settings: settings,
           pipeline: pipeline,
@@ -2068,15 +2450,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         );
         final rerenderJobId = patchResp['job_id'] as String?;
         if (rerenderJobId == null || rerenderJobId.isEmpty) {
+          debugPrint('[Feedback] Missing rerender job id for page=$pageId');
           failed++;
           continue;
         }
+        debugPrint('[Feedback] Patch accepted page=$pageId job=$rerenderJobId');
         await _waitForJobCompletion(rerenderJobId);
         await _refreshLocalEditedCache(
           pageId: pageId,
           pipeline: pipeline,
           sourceHash: sourceHash,
         );
+        _invalidateEditedPageJobs(pageId);
         await _loadMetadataForPage(pageId, force: true);
         _dirtyMetadataPageIds.remove(pageId);
         _metadataOriginalByPageId.remove(pageId);
@@ -2087,6 +2472,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
 
     _syncFeedbackActionButtons();
+    _syncFeedbackMarksOverlay();
     if (failed == 0) {
       _updateInPageStatus(
         'Feedback saved',
@@ -2123,6 +2509,24 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       chapter: job?.chapter,
       pageNumber: job?.pageNumber,
     );
+    debugPrint(
+      '[Feedback] Refreshed local cache page=$pageId hash=${sourceHash.substring(0, 12)}',
+    );
+  }
+
+  void _invalidateEditedPageJobs(String pageId) {
+    final notifier = ref.read(jobsProvider.notifier);
+    if (pageId.endsWith('-L') || pageId.endsWith('-R')) {
+      final base = pageId.substring(0, pageId.length - 2);
+      final left = '$base-L';
+      final right = '$base-R';
+      notifier.removeJob(left);
+      notifier.removeJob(right);
+      debugPrint('[Feedback] Invalidated spread jobs $left and $right');
+      return;
+    }
+    notifier.removeJob(pageId);
+    debugPrint('[Feedback] Invalidated job $pageId');
   }
 
   void _cancelFeedbackEdits() {
@@ -2145,6 +2549,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     _dirtyMetadataPageIds.clear();
     _syncFeedbackActionButtons();
+    _syncFeedbackMarksOverlay();
     _updateInPageStatus(
       'Feedback edits canceled',
       clearAfter: const Duration(seconds: 2),
