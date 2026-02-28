@@ -5,6 +5,7 @@ import 'platform/app_webview_controller.dart';
 class DomInspector {
   bool isActive = false;
   final List<Map<String, dynamic>> _logs = [];
+  static const _maxLogs = 500;
 
   List<Map<String, dynamic>> get logs => List.unmodifiable(_logs);
 
@@ -20,6 +21,9 @@ class DomInspector {
       callback: (args) {
         if (args.isNotEmpty && args[0] is Map) {
           _logs.add(Map<String, dynamic>.from(args[0] as Map));
+          if (_logs.length > _maxLogs) {
+            _logs.removeAt(0);
+          }
         }
         return null;
       },
@@ -27,7 +31,12 @@ class DomInspector {
   }
 
   /// Add a Dart-side log entry into the same stream as JS logs.
-  void log(Map<String, dynamic> entry) => _logs.add(entry);
+  void log(Map<String, dynamic> entry) {
+    _logs.add(entry);
+    if (_logs.length > _maxLogs) {
+      _logs.removeAt(0);
+    }
+  }
 
   void clear() => _logs.clear();
 

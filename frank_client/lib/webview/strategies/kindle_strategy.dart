@@ -38,12 +38,20 @@ class KindleStrategy extends SiteStrategy {
 ''';
 
   @override
-  String get detectionScript => '''
+  String get detectionScript =>
+      '''
 (function() {
   if (window.__frankDetectorActive) return;
   window.__frankDetectorActive = true;
+  window.__frankSessionId = window.__frankSessionId ||
+    (Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
   window.__frankPageCounter = window.__frankPageCounter || 0;
+  window.__frankNavIntent = window.__frankNavIntent || 'forward';
   window.__frankLastBlob = null;
+  window.__frankLastRect = null;
+  window.__frankLastEmitAt = 0;
+  window.__frankLastEmitBlob = null;
+  window.__frankUserNavAt = Date.now();
 
 $_findVisibleBlobFn
 
@@ -53,15 +61,38 @@ $_findVisibleBlobFn
 
     var blobSrc = target.src;
     if (blobSrc === window.__frankLastBlob) return; // Same page
-    window.__frankLastBlob = blobSrc;
-    window.__frankPageCounter++;
 
     var rect = target.getBoundingClientRect();
     var w = rect.width;
     var h = rect.height;
+    var now = Date.now();
+    var userNavRecent = (now - window.__frankUserNavAt) < 4000;
+
+    // Kindle may regenerate blob URLs without a true page turn (resize/repaint).
+    // Treat blob-only churn as a page turn only if user navigation happened
+    // recently, or if geometry changed meaningfully.
+    if (!userNavRecent && window.__frankLastRect) {
+      var last = window.__frankLastRect;
+      var dw = Math.abs(w - last.w) / Math.max(1, last.w);
+      var dh = Math.abs(h - last.h) / Math.max(1, last.h);
+      var emittedVeryRecently = (now - window.__frankLastEmitAt) < 600;
+      // Kindle can briefly churn blob URLs during repaint. Suppress only
+      // near-immediate churn, but do not consume the new blob as "seen".
+      if (dw < 0.02 && dh < 0.02 && emittedVeryRecently) {
+        return;
+      }
+    }
+
+    window.__frankLastBlob = blobSrc;
+    window.__frankLastRect = { w: w, h: h };
+    window.__frankLastEmitAt = now;
+    window.__frankLastEmitBlob = blobSrc;
+    window.__frankPageCounter++;
+
     var isSpread = w > h * $spreadThreshold;
     var pageMode = isSpread ? 'spread' : 'single';
-    var pageId = 'kindle-' + window.__frankPageCounter + (isSpread ? '-spread' : '');
+    var pageId = 'kindle-' + window.__frankSessionId + '-' + window.__frankPageCounter +
+      (isSpread ? '-spread' : '');
 
     // Try to extract stable page number from the DOM
     var kindlePage = '';
@@ -81,6 +112,7 @@ $_findVisibleBlobFn
       index: window.__frankPageCounter,
       type: 'dom',
       pageMode: pageMode,
+      navIntent: window.__frankNavIntent || 'forward',
       imgSrc: blobSrc,
       naturalWidth: target.naturalWidth,
       naturalHeight: target.naturalHeight,
@@ -91,11 +123,41 @@ $_findVisibleBlobFn
   }
 
   setInterval(detectPageChange, 1000);
-  document.addEventListener('click', function() { setTimeout(detectPageChange, 500); });
-  document.addEventListener('keyup', function() { setTimeout(detectPageChange, 500); });
+  document.addEventListener('click', function(e) {
+    // Kindle manga is RTL: clicks on left half usually mean "next page".
+    if (e && typeof e.clientX === 'number') {
+      window.__frankNavIntent = (e.clientX <= (window.innerWidth / 2))
+        ? 'forward' : 'backward';
+    }
+    window.__frankUserNavAt = Date.now();
+    setTimeout(detectPageChange, 500);
+  });
+  document.addEventListener('pointerdown', function() {
+    window.__frankUserNavAt = Date.now();
+  }, true);
+  document.addEventListener('mousedown', function() {
+    window.__frankUserNavAt = Date.now();
+  }, true);
+  document.addEventListener('touchstart', function() {
+    window.__frankUserNavAt = Date.now();
+  }, true);
+  document.addEventListener('wheel', function() {
+    window.__frankUserNavAt = Date.now();
+  }, { passive: true });
+  document.addEventListener('keydown', function(e) {
+    if (!e || !e.key) return;
+    if (e.key === 'ArrowLeft') window.__frankNavIntent = 'forward';
+    else if (e.key === 'ArrowRight') window.__frankNavIntent = 'backward';
+    window.__frankUserNavAt = Date.now();
+  });
+  document.addEventListener('keyup', function() {
+    window.__frankUserNavAt = Date.now();
+    setTimeout(detectPageChange, 500);
+  });
   window.addEventListener('resize', function() {
     // Kindle re-renders on resize — force re-detection after it settles
     window.__frankLastBlob = null;
+    window.__frankUserNavAt = Date.now();
     setTimeout(detectPageChange, 1000);
   });
 
@@ -125,7 +187,8 @@ $_findVisibleBlobFn
 
   /// JS that extracts the visible blob img as a base64 PNG data URL.
   /// Synchronous — draws the img onto a canvas and calls toDataURL().
-  static String get captureCurrentPageScript => '''
+  static String get captureCurrentPageScript =>
+      '''
 (function() {
 $_findVisibleBlobFn
   var target = __frankFindVisibleBlob();
@@ -287,7 +350,8 @@ $_findVisibleBlobFn
 
   /// JS that performs a deep DOM scan of the Kindle reader area.
   /// Results are sent via onInspectorLog with type 'kindle_dom'.
-  static String get diagnosticScript => '''
+  static String get diagnosticScript =>
+      '''
 (function() {
   const results = {
     type: 'kindle_dom',

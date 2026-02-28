@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import '../providers/jobs_provider.dart';
@@ -67,6 +68,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// The last page info detected for Kindle (for re-capture on pipeline change).
   Map<String, dynamic>? _lastKindlePageInfo;
 
+  /// Kindle pageId -> blob src seen at detection time.
+  final Map<String, String> _kindleBlobByPageId = {};
+  Map<String, Object?> _kindlePrefetchState = const {};
+  String _kindleNavIntent = 'forward';
+  int _kindleOverlayOk = 0;
+  int _kindleOverlayFail = 0;
+  int _kindleOverlayFallback = 0;
+
   /// Selected pipeline for Kindle pages (furigana vs english translation).
   String _kindlePipeline = 'manga_furigana';
 
@@ -118,154 +127,212 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         children: [
           // WebView fills entire screen
           AppWebView(
-                initialUrl: widget.initialUrl,
-                userAgent:
-                    'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-                onWebViewCreated: (controller) {
-                  _webController = controller;
-                  _jsBridge.attach(controller);
-                  _inspector.attach(controller);
-                  _registerToolbarHandler(controller);
-                  _jsBridge.onPageDetected = _onPageDetected;
-                },
-                onLoadStop: (controller, url) {
-                  final urlStr = url ?? '';
-                  setState(() => _currentUrl = urlStr);
-                  // Reset state on new page load
-                  _detectedWebtoonPages.clear();
-                  _batchSubmittedUpTo = -1;
-                  _batchInProgress = false;
-                  _currentKindlePageId = null;
-                  // Cancel all completion listeners from previous page
-                  for (final sub in _completionListeners.values) {
-                    sub.close();
-                  }
-                  _completionListeners.clear();
-                  _jsBridge.onUrlChanged(controller, urlStr);
-                  _injectDesktopViewportFit(controller);
-                  // Sync toolbar button states after injection
-                  Future.delayed(const Duration(milliseconds: 500), () {
-                    _syncAutoButtonState();
-                    _syncPipelineButtonState();
-                  });
-                  if (_inspectorMode) {
-                    _inspector.inject(controller);
-                    _injectKindleDiagnosticIfNeeded(controller);
-                  }
-                  // Always inject DOM explorer on Kindle pages
-                  _injectKindleDomExplorerIfNeeded(controller);
-                },
-                onUpdateVisitedHistory: (controller, url, isReload) {
-                  final urlStr = url ?? '';
-                  setState(() => _currentUrl = urlStr);
-                  _jsBridge.onUrlChanged(controller, urlStr);
-                },
+            initialUrl: widget.initialUrl,
+            userAgent:
+                'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+            onWebViewCreated: (controller) {
+              _webController = controller;
+              _jsBridge.attach(controller);
+              _inspector.attach(controller);
+              _registerToolbarHandler(controller);
+              _jsBridge.onPageDetected = _onPageDetected;
+            },
+            onLoadStop: (controller, url) {
+              final urlStr = url ?? '';
+              final prevUrl = _currentUrl;
+              setState(() => _currentUrl = urlStr);
+              final isKindleNow = urlStr.contains('read.amazon.co.jp');
+              final preserveKindleSessionState =
+                  isKindleNow && prevUrl == urlStr;
+
+              debugPrint(
+                '[Reader] onLoadStop url=$urlStr '
+                '(preserveKindleSessionState=$preserveKindleSessionState)',
+              );
+
+              // Reset state on true page load/navigation. Kindle often emits
+              // same-URL load stops while paging; avoid wiping runtime state.
+              if (!preserveKindleSessionState) {
+                _detectedWebtoonPages.clear();
+                _batchSubmittedUpTo = -1;
+                _batchInProgress = false;
+                _currentKindlePageId = null;
+                _kindleBlobByPageId.clear();
+                _kindlePrefetchState = const {};
+                _kindleNavIntent = 'forward';
+                _kindleOverlayOk = 0;
+                _kindleOverlayFail = 0;
+                _kindleOverlayFallback = 0;
+                // Cancel all completion listeners from previous page
+                for (final sub in _completionListeners.values) {
+                  sub.close();
+                }
+                _completionListeners.clear();
+              }
+              _jsBridge.onUrlChanged(controller, urlStr);
+              _injectDesktopViewportFit(controller);
+              // Sync toolbar button states after injection
+              Future.delayed(const Duration(milliseconds: 500), () {
+                _syncAutoButtonState();
+                _syncPipelineButtonState();
+              });
+              if (_inspectorMode) {
+                _inspector.inject(controller);
+                _injectKindleDiagnosticIfNeeded(controller);
+                _injectKindleDomExplorerIfNeeded(controller);
+              }
+              Future.delayed(const Duration(milliseconds: 700), () {
+                if (!mounted) return;
+                _pushKindleDebugHudToPage();
+              });
+            },
+            onUpdateVisitedHistory: (controller, url, isReload) {
+              final urlStr = url ?? '';
+              setState(() => _currentUrl = urlStr);
+              _jsBridge.onUrlChanged(controller, urlStr);
+            },
+          ),
+          // Hover zone at top to reveal toolbar (desktop)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 32,
+            child: MouseRegion(
+              onEnter: (_) => _showToolbar(),
+              child: GestureDetector(
+                onTap: _showToolbar,
+                behavior: HitTestBehavior.translucent,
               ),
-              // Hover zone at top to reveal toolbar (desktop)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: 32,
-                child: MouseRegion(
-                  onEnter: (_) => _showToolbar(),
-                  child: GestureDetector(
-                    onTap: _showToolbar,
-                    behavior: HitTestBehavior.translucent,
-                  ),
-                ),
-              ),
-              // Floating toolbar
-              if (_toolbarVisible)
-                Positioned(
-                  top: topPadding,
-                  left: 0,
-                  right: 0,
-                  child: Material(
-                    elevation: 4,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .surface
-                        .withAlpha(230),
-                    child: SafeArea(
-                      bottom: false,
-                      child: Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.arrow_back),
-                            tooltip: 'Back',
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                          Expanded(
-                            child: Text(
-                              _currentUrl.isEmpty
-                                  ? widget.initialUrl
-                                  : _currentUrl,
-                              style: const TextStyle(fontSize: 12),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          IconButton(
-                            icon: Icon(_showOverlay
-                                ? Icons.visibility
-                                : Icons.visibility_off),
-                            tooltip: _showOverlay
-                                ? 'Hide translations'
-                                : 'Show translations',
-                            onPressed: _toggleOverlayVisibility,
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.translate),
-                            tooltip: 'Translate current page',
-                            onPressed: _captureAndTranslate,
-                          ),
-                          IconButton(
-                            icon: Icon(_inspectorMode
-                                ? Icons.bug_report
-                                : Icons.pest_control),
-                            tooltip: _inspectorMode
-                                ? 'Disable inspector'
-                                : 'Enable inspector',
-                            onPressed: _toggleInspector,
-                          ),
-                          if (_inspectorMode)
-                            IconButton(
-                              icon: const Icon(Icons.list),
-                              tooltip: 'Inspector logs',
-                              onPressed: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      InspectorScreen(inspector: _inspector),
-                                ),
-                              ),
-                            ),
-                        ],
+            ),
+          ),
+          // Floating toolbar
+          if (_toolbarVisible)
+            Positioned(
+              top: topPadding,
+              left: 0,
+              right: 0,
+              child: Material(
+                elevation: 4,
+                color: Theme.of(context).colorScheme.surface.withAlpha(230),
+                child: SafeArea(
+                  bottom: false,
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        tooltip: 'Back',
+                        onPressed: () => Navigator.pop(context),
                       ),
-                    ),
+                      Expanded(
+                        child: Text(
+                          _currentUrl.isEmpty ? widget.initialUrl : _currentUrl,
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          _showOverlay
+                              ? Icons.visibility
+                              : Icons.visibility_off,
+                        ),
+                        tooltip: _showOverlay
+                            ? 'Hide translations'
+                            : 'Show translations',
+                        onPressed: _toggleOverlayVisibility,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.translate),
+                        tooltip: 'Translate current page',
+                        onPressed: _captureAndTranslate,
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          _inspectorMode
+                              ? Icons.bug_report
+                              : Icons.pest_control,
+                        ),
+                        tooltip: _inspectorMode
+                            ? 'Disable inspector'
+                            : 'Enable inspector',
+                        onPressed: _toggleInspector,
+                      ),
+                      if (_inspectorMode)
+                        IconButton(
+                          icon: const Icon(Icons.list),
+                          tooltip: 'Inspector logs',
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  InspectorScreen(inspector: _inspector),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-              // Progress chip overlay — scoped Consumer to avoid full-tree rebuilds
-              Consumer(builder: (context, ref, _) {
-                final jobs = ref.watch(jobsProvider);
-                final latestActive = jobs.values
-                    .where((j) => j.isActive)
-                    .toList()
-                  ..sort((a, b) => b.percent.compareTo(a.percent));
-                if (latestActive.isEmpty) return const SizedBox.shrink();
-                return Positioned(
-                  bottom: 16,
-                  left: 16,
-                  right: 16,
-                  child: Center(
-                    child: TranslationProgressChip(
-                        job: latestActive.first),
-                  ),
-                );
-              }),
+              ),
+            ),
+          // Progress chip overlay — scoped Consumer to avoid full-tree rebuilds
+          Consumer(
+            builder: (context, ref, _) {
+              final jobs = ref.watch(jobsProvider);
+              final latestActive = jobs.values.where((j) => j.isActive).toList()
+                ..sort((a, b) => b.percent.compareTo(a.percent));
+              if (latestActive.isEmpty) return const SizedBox.shrink();
+              return Positioned(
+                bottom: 16,
+                left: 16,
+                right: 16,
+                child: Center(
+                  child: TranslationProgressChip(job: latestActive.first),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
+  }
+
+  String _kindleDebugHudText() {
+    final s = _kindlePrefetchState;
+    final line1 =
+        'kindle=${_currentKindlePageId ?? '-'} nav=$_kindleNavIntent dir=${s['direction'] ?? '-'}';
+    final line2 =
+        'init=${s['initialized'] ?? false} prefetching=${s['prefetching'] ?? false} pending=${s['pendingTopUp'] ?? false} note=${s['lastNote'] ?? '-'}';
+    final line3 =
+        'main=${s['mainPageIndex'] ?? '-'} start=${s['startIndex'] ?? '-'} pref=${s['prefetchedCount'] ?? '-'} ahead=${s['ahead'] ?? '-'}';
+    final line4 =
+        'overlay ok=$_kindleOverlayOk fail=$_kindleOverlayFail fallback=$_kindleOverlayFallback';
+    return '$line1\n$line2\n$line3\n$line4';
+  }
+
+  void _pushKindleDebugHudToPage() {
+    if (!kDebugMode) return;
+    final isKindle =
+        _jsBridge.activeStrategy?.siteName == 'kindle' ||
+        _currentUrl.contains('read.amazon.co.jp');
+    if (!isKindle) return;
+    final controller = _webController;
+    if (controller == null) return;
+    final text = _kindleDebugHudText()
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'")
+        .replaceAll('\n', '\\n');
+    controller.evaluateJavascript(
+      source:
+          "if(window.__frankSetDebugHud) window.__frankSetDebugHud('$text', true);",
+    );
+  }
+
+  Future<void> _copyKindleDebugHudToClipboard() async {
+    final text = _kindleDebugHudText();
+    await Clipboard.setData(ClipboardData(text: text));
+    _updateInPageStatus('Debug copied');
+    debugPrint('[Reader] Kindle debug copied');
   }
 
   /// Log a Kindle lifecycle event (only when inspector mode is active).
@@ -284,7 +351,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final controller = _webController;
     if (controller == null) return;
     // Toggle all frank-translated images back to original or translated
-    controller.evaluateJavascript(source: '''
+    controller.evaluateJavascript(
+      source:
+          '''
 (function() {
   var imgs = document.querySelectorAll('img[data-frank-toggle]');
   var show = ${_showOverlay ? 'true' : 'false'};
@@ -297,7 +366,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 })();
-''');
+''',
+    );
   }
 
   void _onPageDetected(Map<String, dynamic> pageInfo) {
@@ -312,9 +382,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       }
       _currentKindlePageId = pageId;
       _lastKindlePageInfo = pageInfo;
+      final blobSrc = pageInfo['imgSrc'] as String?;
+      if (blobSrc != null && blobSrc.startsWith('blob:')) {
+        _kindleBlobByPageId[pageId] = blobSrc;
+      }
       // Trigger bg webview prefetch on Kindle page change
       final kindleIndex = (pageInfo['index'] as num?)?.toInt() ?? 0;
-      _triggerKindlePrefetch(kindleIndex);
+      final navIntent = pageInfo['navIntent'] as String?;
+      final newIntent = navIntent == 'backward' ? 'backward' : 'forward';
+      _kindleNavIntent = newIntent;
+      debugPrint(
+        '[Reader] kindle detect pageId=$pageId index=$kindleIndex nav=$newIntent',
+      );
+      _triggerKindlePrefetch(kindleIndex, newIntent);
+      _pushKindleDebugHudToPage();
     }
 
     _logKindle('kindle_detect', {
@@ -377,7 +458,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// Handle spread detection: check if L/R sub-pages are already processed.
   void _handleSpreadDetection(
-      String spreadPageId, Map<String, dynamic> pageInfo) {
+    String spreadPageId,
+    Map<String, dynamic> pageInfo,
+  ) {
     // Spread pageId is like 'kindle-5-spread', sub-pages are 'kindle-5-spread-L' and 'kindle-5-spread-R'
     final leftId = '$spreadPageId-L';
     final rightId = '$spreadPageId-R';
@@ -394,8 +477,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         rightJob.isComplete &&
         rightJob.translatedImage != null &&
         _showOverlay) {
-      _applySpreadOverlay(spreadPageId, leftJob.translatedImage!,
-          rightJob.translatedImage!);
+      _applySpreadOverlay(
+        spreadPageId,
+        leftJob.translatedImage!,
+        rightJob.translatedImage!,
+      );
       return;
     }
 
@@ -406,7 +492,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   Future<void> _capturePageImage(
-      String pageId, Map<String, dynamic> pageInfo) async {
+    String pageId,
+    Map<String, dynamic> pageInfo,
+  ) async {
     final controller = _webController;
     if (controller == null) return;
 
@@ -418,8 +506,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final dataUrl = await controller.evaluateJavascript(
         source: KindleStrategy.captureCurrentPageScript,
       );
-      if (dataUrl is String &&
-          dataUrl.startsWith('data:image/png;base64,')) {
+      if (dataUrl is String && dataUrl.startsWith('data:image/png;base64,')) {
         // Decode on background isolate — data URLs can be 4MB+
         final b64 = dataUrl.split(',')[1];
         imageBytes = await compute(base64Decode, b64);
@@ -461,7 +548,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         final spreadPipeline = _jsBridge.activeStrategy?.siteName == 'kindle'
             ? _kindlePipeline
             : _jsBridge.activeStrategy?.defaultPipeline;
-        await ref.read(jobsProvider.notifier).submitPage(
+        await ref
+            .read(jobsProvider.notifier)
+            .submitPage(
               pageId: leftId,
               imageBytes: halves.$1,
               pipeline: spreadPipeline,
@@ -469,7 +558,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               chapter: meta?.chapter,
               sourceUrl: _currentUrl,
             );
-        await ref.read(jobsProvider.notifier).submitPage(
+        await ref
+            .read(jobsProvider.notifier)
+            .submitPage(
               pageId: rightId,
               imageBytes: halves.$2,
               pipeline: spreadPipeline,
@@ -496,7 +587,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
             imageBytes = response.bodyBytes;
           } else {
-            debugPrint('[Reader] Download failed $pageId: HTTP ${response.statusCode}');
+            debugPrint(
+              '[Reader] Download failed $pageId: HTTP ${response.statusCode}',
+            );
           }
         } catch (e) {
           debugPrint('[Reader] Download error $pageId: $e');
@@ -525,7 +618,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final pageNumber = isKindle
         ? null
         : (pageInfo['index']?.toString() ?? meta?.pageNumber);
-    await ref.read(jobsProvider.notifier).submitPage(
+    await ref
+        .read(jobsProvider.notifier)
+        .submitPage(
           pageId: pageId,
           imageBytes: imageBytes,
           pipeline: pipeline,
@@ -563,8 +658,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
       if (toSubmit.isEmpty) return;
 
-      debugPrint('[Batch] Submitting ${toSubmit.length} pages: $toSubmit '
-          '(detected=${_detectedWebtoonPages.length}, submitted=${_batchSubmittedUpTo + 1})');
+      debugPrint(
+        '[Batch] Submitting ${toSubmit.length} pages: $toSubmit '
+        '(detected=${_detectedWebtoonPages.length}, submitted=${_batchSubmittedUpTo + 1})',
+      );
       _updateInPageStatus('Batch: submitting ${toSubmit.length} pages...');
 
       // Submit all pages in parallel for faster throughput
@@ -593,9 +690,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _batchInProgress = false;
       // Check if more pages are waiting — schedule next batch
       final sortedIndices = _detectedWebtoonPages.keys.toList()..sort();
-      final hasMore = sortedIndices.any((idx) =>
-          idx > _batchSubmittedUpTo &&
-          !ref.read(jobsProvider).containsKey('wt-$idx'));
+      final hasMore = sortedIndices.any(
+        (idx) =>
+            idx > _batchSubmittedUpTo &&
+            !ref.read(jobsProvider).containsKey('wt-$idx'),
+      );
       if (hasMore) {
         debugPrint('[Batch] More pages pending, scheduling next batch');
         Future.delayed(const Duration(milliseconds: 100), () {
@@ -617,8 +716,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _updateInPageStatus('$pageId done (cached)!');
       // For Kindle, only overlay if the user is still viewing this page
       final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
-      if (_showOverlay &&
-          (!isKindle || pageId == _currentKindlePageId)) {
+      if (_showOverlay && (!isKindle || pageId == _currentKindlePageId)) {
         _applyOverlay(pageId, existingJob.translatedImage!);
       }
       return;
@@ -640,7 +738,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           // For Kindle, only overlay if the user is still viewing this page
           if (_jsBridge.activeStrategy?.siteName == 'kindle' &&
               pageId != _currentKindlePageId) {
-            debugPrint('[Reader] Skipping overlay for $pageId — user moved to $_currentKindlePageId');
+            debugPrint(
+              '[Reader] Skipping overlay for $pageId — user moved to $_currentKindlePageId',
+            );
           } else {
             _applyOverlay(pageId, job.translatedImage!);
           }
@@ -656,7 +756,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// Watch for both halves of a spread to complete, then apply overlay.
   void _watchForSpreadCompletion(
-      String spreadPageId, String leftId, String rightId) {
+    String spreadPageId,
+    String leftId,
+    String rightId,
+  ) {
     // Check if both halves are already complete (e.g. cache hits from resize)
     final jobs = ref.read(jobsProvider);
     final leftNow = jobs[leftId];
@@ -669,7 +772,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         rightNow.translatedImage != null) {
       if (_showOverlay && spreadPageId == _currentKindlePageId) {
         _applySpreadOverlay(
-            spreadPageId, leftNow.translatedImage!, rightNow.translatedImage!);
+          spreadPageId,
+          leftNow.translatedImage!,
+          rightNow.translatedImage!,
+        );
       }
       return;
     }
@@ -694,7 +800,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         _completionListeners[spreadPageId]?.close();
         _completionListeners.remove(spreadPageId);
         _applySpreadOverlay(
-            spreadPageId, leftJob.translatedImage!, rightJob.translatedImage!);
+          spreadPageId,
+          leftJob.translatedImage!,
+          rightJob.translatedImage!,
+        );
       }
     });
     _completionListeners[spreadPageId] = sub;
@@ -712,16 +821,42 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         originalSrc = _detectedWebtoonPages[index]?['src'] as String?;
       }
       if (originalSrc != null && originalSrc.isNotEmpty) {
-        final ok = await _overlay.replaceImageBySrc(controller, originalSrc, imageBytes);
+        final ok = await _overlay.replaceImageBySrc(
+          controller,
+          originalSrc,
+          imageBytes,
+        );
         debugPrint('[Overlay] $pageId replace=${ok ? 'OK' : 'FAIL'}');
       } else {
-        debugPrint('[Overlay] $pageId no src found (detected: ${_detectedWebtoonPages.keys.toList()})');
+        debugPrint(
+          '[Overlay] $pageId no src found (detected: ${_detectedWebtoonPages.keys.toList()})',
+        );
       }
     } else if (_jsBridge.activeStrategy?.siteName == 'kindle') {
-      final ok = await _overlay.replaceVisibleKindlePage(controller, imageBytes);
+      final expectedBlob = _kindleBlobByPageId[pageId];
+      var ok = await _overlay.replaceVisibleKindlePage(
+        controller,
+        imageBytes,
+        expectedBlobSrc: expectedBlob,
+      );
+      var usedFallback = false;
+      if (!ok && pageId == _currentKindlePageId) {
+        // Kindle may re-generate blob URLs before replacement; fallback only
+        // for the still-visible page to avoid cross-page overlays.
+        usedFallback = true;
+        ok = await _overlay.replaceVisibleKindlePage(controller, imageBytes);
+      }
+      if (ok) {
+        _kindleOverlayOk++;
+      } else {
+        _kindleOverlayFail++;
+      }
+      if (usedFallback) _kindleOverlayFallback++;
+      _pushKindleDebugHudToPage();
       debugPrint('[Overlay] $pageId replace=${ok ? 'OK' : 'FAIL'}');
       _logKindle('kindle_overlay', {
         'pageId': pageId,
+        'expectedBlob': expectedBlob,
         'success': ok,
       });
     }
@@ -729,18 +864,42 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// Apply overlay for a 2-page spread: stitch halves and DOM-replace.
   Future<void> _applySpreadOverlay(
-      String spreadPageId, Uint8List leftImage, Uint8List rightImage) async {
+    String spreadPageId,
+    Uint8List leftImage,
+    Uint8List rightImage,
+  ) async {
     final controller = _webController;
     if (controller == null) return;
 
-    final stitched = await ImageCaptureService.stitchSpreadAsync(leftImage, rightImage);
+    final stitched = await ImageCaptureService.stitchSpreadAsync(
+      leftImage,
+      rightImage,
+    );
     if (stitched == null) return;
 
-    final ok = await _overlay.replaceVisibleKindlePage(controller, stitched);
+    final expectedBlob = _kindleBlobByPageId[spreadPageId];
+    var ok = await _overlay.replaceVisibleKindlePage(
+      controller,
+      stitched,
+      expectedBlobSrc: expectedBlob,
+    );
+    var usedFallback = false;
+    if (!ok && spreadPageId == _currentKindlePageId) {
+      usedFallback = true;
+      ok = await _overlay.replaceVisibleKindlePage(controller, stitched);
+    }
+    if (ok) {
+      _kindleOverlayOk++;
+    } else {
+      _kindleOverlayFail++;
+    }
+    if (usedFallback) _kindleOverlayFallback++;
+    _pushKindleDebugHudToPage();
     debugPrint('[Overlay] spread $spreadPageId replace=${ok ? 'OK' : 'FAIL'}');
     _logKindle('kindle_spread_overlay', {
       'spreadPageId': spreadPageId,
       'stitchedSize': '${stitched.length} bytes',
+      'expectedBlob': expectedBlob,
       'success': ok,
     });
   }
@@ -767,7 +926,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         ? _kindlePipeline
         : _jsBridge.activeStrategy?.defaultPipeline;
 
-    await ref.read(jobsProvider.notifier).submitPage(
+    await ref
+        .read(jobsProvider.notifier)
+        .submitPage(
           pageId: pageId,
           imageBytes: imageBytes,
           pipeline: pipeline,
@@ -790,6 +951,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _inspector.inject(controller);
       _overlay.enableTapMode(controller);
       _injectKindleDiagnosticIfNeeded(controller);
+      _injectKindleDomExplorerIfNeeded(controller);
     } else {
       _overlay.disableTapMode(controller);
     }
@@ -797,23 +959,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _injectKindleDiagnosticIfNeeded(AppWebViewController controller) {
     if (_jsBridge.activeStrategy?.siteName == 'kindle') {
-      controller.evaluateJavascript(
-          source: KindleStrategy.diagnosticScript);
+      controller.evaluateJavascript(source: KindleStrategy.diagnosticScript);
     }
   }
 
-  /// Auto-inject the DOM explorer on Kindle pages (always, not just inspector mode).
+  /// Inject Kindle DOM explorer JS (debug-only, inspector mode).
   void _injectKindleDomExplorerIfNeeded(AppWebViewController controller) {
     if (_jsBridge.activeStrategy?.siteName == 'kindle') {
-      controller.evaluateJavascript(
-          source: KindleStrategy.domExplorerScript);
+      controller.evaluateJavascript(source: KindleStrategy.domExplorerScript);
     }
   }
 
   /// Inject CSS that caps image width on wide landscape viewports,
   /// and an in-page floating toolbar with translate/back/progress controls.
   void _injectDesktopViewportFit(AppWebViewController controller) {
-    controller.evaluateJavascript(source: '''
+    controller.evaluateJavascript(
+      source: '''
 (function() {
   if (window.__frankViewportFit) return;
   window.__frankViewportFit = true;
@@ -850,6 +1011,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     '<button id="__frankAuto" title="Toggle auto-translate">Auto: ON</button>' +
     '<button id="__frankPipeline" title="Switch pipeline" style="display:none;"></button>' +
     '<button id="__frankTranslate" title="Translate visible pages">&#x1F30D; Translate</button>' +
+    '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
     '<span id="__frankStatus"></span>';
   bar.style.cssText =
     'position:fixed; top:8px; left:8px; z-index:999999;' +
@@ -864,14 +1026,26 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   document.body.appendChild(bar);
 
+  /* --- Debug HUD (top-right, hidden unless enabled by Dart) --- */
+  var dbg = document.createElement('pre');
+  dbg.id = '__frankDebugHud';
+  dbg.style.cssText =
+    'position:fixed; top:8px; right:8px; z-index:999999;' +
+    'display:none; pointer-events:none; white-space:pre-wrap;' +
+    'background:rgba(0,0,0,0.72); color:#fff; padding:8px;' +
+    'border-radius:6px; font:11px/1.35 monospace; max-width:48vw;';
+  document.body.appendChild(dbg);
+
   var backBtn = document.getElementById('__frankBack');
   var autoBtn = document.getElementById('__frankAuto');
   var pipeBtn = document.getElementById('__frankPipeline');
   var transBtn = document.getElementById('__frankTranslate');
+  var copyDbgBtn = document.getElementById('__frankCopyDbg');
   backBtn.style.cssText = btnStyle;
   autoBtn.style.cssText = btnStyle;
   pipeBtn.style.cssText = btnStyle + 'display:none;';
   transBtn.style.cssText = btnStyle;
+  copyDbgBtn.style.cssText = btnStyle + 'display:none;';
 
   backBtn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -888,6 +1062,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   transBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'translate');
+  });
+  copyDbgBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'copy_debug');
   });
 
   /* Global functions Dart can call */
@@ -912,8 +1090,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       el.style.color = '#64b5f6';
     }
   };
+  window.__frankSetDebugHud = function(text, visible) {
+    var el = document.getElementById('__frankDebugHud');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.display = visible ? 'block' : 'none';
+    var btn = document.getElementById('__frankCopyDbg');
+    if (btn) btn.style.display = visible ? '' : 'none';
+  };
 })();
-''');
+''',
+    );
   }
 
   /// Register the toolbar action handler on the WebView controller.
@@ -935,6 +1122,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           case 'translate':
             _translateVisiblePages();
             break;
+          case 'copy_debug':
+            _copyKindleDebugHudToClipboard();
+            break;
         }
         return null;
       },
@@ -944,6 +1134,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     controller.addJavaScriptHandler(
       handlerName: 'onKindleDomExplore',
       callback: (args) {
+        if (!_inspectorMode) return null;
         if (args.isEmpty) return null;
         final data = args[0] as Map<String, dynamic>?;
         if (data == null) return null;
@@ -957,9 +1148,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _toggleAutoTranslate() {
     final settings = ref.read(settingsProvider);
     final newValue = !settings.autoTranslate;
-    ref.read(settingsProvider.notifier).update(
-          settings.copyWith(autoTranslate: newValue),
-        );
+    ref
+        .read(settingsProvider.notifier)
+        .update(settings.copyWith(autoTranslate: newValue));
     _syncAutoButtonState();
     debugPrint('[Reader] Auto-translate toggled to $newValue');
     if (newValue) {
@@ -979,7 +1170,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (controller == null) return;
     final on = ref.read(settingsProvider).autoTranslate;
     controller.evaluateJavascript(
-        source: 'if(window.__frankSetAutoState) window.__frankSetAutoState($on);');
+      source: 'if(window.__frankSetAutoState) window.__frankSetAutoState($on);',
+    );
   }
 
   /// Toggle Kindle pipeline between furigana and english translation.
@@ -1007,8 +1199,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
     final label = _kindlePipeline == 'manga_furigana' ? 'Furigana' : 'English';
     controller.evaluateJavascript(
-        source:
-            "if(window.__frankSetPipeline) window.__frankSetPipeline('$label', $isKindle);");
+      source:
+          "if(window.__frankSetPipeline) window.__frankSetPipeline('$label', $isKindle);",
+    );
   }
 
   /// Close completion listeners for Kindle pages the user is no longer viewing.
@@ -1019,6 +1212,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     for (final id in stale) {
       _completionListeners[id]?.close();
       _completionListeners.remove(id);
+      _kindleBlobByPageId.remove(id);
     }
   }
 
@@ -1026,6 +1220,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _cancelKindleJobs() {
     _kindlePrefetch.dispose();
     _kindlePrefetch = KindlePrefetchManager();
+    _kindleBlobByPageId.clear();
     final jobs = ref.read(jobsProvider);
     final notifier = ref.read(jobsProvider.notifier);
     final kindlePageIds = jobs.keys
@@ -1043,27 +1238,53 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// Trigger Kindle prefetch via background webview (Linux-only).
   /// On non-Linux platforms, this is a no-op.
-  void _triggerKindlePrefetch(int pageIndex) {
+  void _triggerKindlePrefetch(int pageIndex, String navIntent) {
     if (!Platform.isLinux) return;
     if (_jsBridge.activeStrategy?.siteName != 'kindle') return;
     if (!ref.read(settingsProvider).autoTranslate) return;
+    final direction = navIntent == 'backward' ? 'backward' : 'forward';
 
     // Lazy-init the bg webview prefetch manager.
-    _kindlePrefetch.onCaptured ??= _handleBgPrefetchedPage;
+    _bindKindlePrefetchCallbacks();
     if (!_kindlePrefetch.initialized && !_kindlePrefetch.disposed) {
-      _kindlePrefetch.init(_currentUrl);
+      _kindlePrefetch.init(_currentUrl).then((_) {
+        if (!mounted || _kindlePrefetch.disposed) return;
+        _kindlePrefetch.onMainPageChanged(
+          pageIndex,
+          direction: direction,
+          syncUrl: _currentUrl,
+        );
+      });
+      return;
     }
 
-    _kindlePrefetch.onMainPageChanged(pageIndex);
+    _kindlePrefetch.onMainPageChanged(
+      pageIndex,
+      direction: direction,
+      syncUrl: _currentUrl,
+    );
+  }
+
+  void _bindKindlePrefetchCallbacks() {
+    _kindlePrefetch.onCaptured ??= _handleBgPrefetchedPage;
+    _kindlePrefetch.onStateChanged = (state) {
+      if (!mounted || !kDebugMode) return;
+      _kindlePrefetchState = Map<String, Object?>.from(state);
+      _pushKindleDebugHudToPage();
+    };
   }
 
   /// Handle a page captured by the background webview prefetch manager.
   Future<void> _handleBgPrefetchedPage(
-      Uint8List imageBytes, String pageMode) async {
+    Uint8List imageBytes,
+    String pageMode,
+  ) async {
     // Use a prefetch-specific pageId based on timestamp to avoid clashes.
     final ts = DateTime.now().millisecondsSinceEpoch;
     final prefetchId = 'kindle-pre-$ts';
-    debugPrint('[BgPrefetch] Received page (${ imageBytes.length} bytes, $pageMode)');
+    debugPrint(
+      '[BgPrefetch] Received page (${imageBytes.length} bytes, $pageMode)',
+    );
 
     // Check if we already have this image cached (by hash)
     final cache = ref.read(cacheServiceProvider);
@@ -1079,7 +1300,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (pageMode == 'spread') {
       final halves = await ImageCaptureService.splitSpreadAsync(imageBytes);
       if (halves == null) return;
-      await ref.read(jobsProvider.notifier).submitPage(
+      await ref
+          .read(jobsProvider.notifier)
+          .submitPage(
             pageId: '$prefetchId-L',
             imageBytes: halves.$1,
             pipeline: _kindlePipeline,
@@ -1088,7 +1311,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             sourceUrl: _currentUrl,
             priority: 'low',
           );
-      await ref.read(jobsProvider.notifier).submitPage(
+      await ref
+          .read(jobsProvider.notifier)
+          .submitPage(
             pageId: '$prefetchId-R',
             imageBytes: halves.$2,
             pipeline: _kindlePipeline,
@@ -1098,7 +1323,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             priority: 'low',
           );
     } else {
-      await ref.read(jobsProvider.notifier).submitPage(
+      await ref
+          .read(jobsProvider.notifier)
+          .submitPage(
             pageId: prefetchId,
             imageBytes: imageBytes,
             pipeline: _kindlePipeline,
@@ -1127,6 +1354,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (controller == null) return;
     final escaped = text.replaceAll("'", "\\'").replaceAll('\n', ' ');
     controller.evaluateJavascript(
-        source: "if(window.__frankSetStatus) window.__frankSetStatus('$escaped');");
+      source:
+          "if(window.__frankSetStatus) window.__frankSetStatus('$escaped');",
+    );
   }
 }

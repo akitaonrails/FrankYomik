@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'platform/app_webview_controller.dart';
 
@@ -15,7 +14,9 @@ class OverlayController {
     final base64Data = await compute(base64Encode, imageBytes);
     // Escape single quotes in the URL
     final escapedSrc = originalSrc.replaceAll("'", "\\'");
-    final result = await controller.evaluateJavascript(source: '''
+    final result = await controller.evaluateJavascript(
+      source:
+          '''
 (function() {
   var targetSrc = '$escapedSrc';
 
@@ -78,7 +79,8 @@ class OverlayController {
 
   return true;
 })();
-''');
+''',
+    );
     return result == true;
   }
 
@@ -86,18 +88,45 @@ class OverlayController {
   /// Finds the largest visible blob img since Kindle centers pages on wide screens.
   Future<bool> replaceVisibleKindlePage(
     AppWebViewController controller,
-    Uint8List imageBytes,
-  ) async {
+    Uint8List imageBytes, {
+    String? expectedBlobSrc,
+  }) async {
     final base64Data = await compute(base64Encode, imageBytes);
-    final result = await controller.evaluateJavascript(source: '''
+    final escapedExpected = expectedBlobSrc?.replaceAll("'", "\\'");
+    final result = await controller.evaluateJavascript(
+      source:
+          '''
 (function() {
-  // Find the largest visible blob img in the viewport
+  var expected = ${escapedExpected != null ? "'$escapedExpected'" : 'null'};
+
+  // Prefer matching the expected blob URL when provided. This avoids replacing
+  // the wrong page if the user navigated while the job was processing.
   var imgs = document.querySelectorAll('img');
   var target = null;
-  var bestArea = 0;
   var vw = window.innerWidth;
   var vh = window.innerHeight;
+
+  if (expected) {
+    for (var i = 0; i < imgs.length; i++) {
+      if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
+      var r0 = imgs[i].getBoundingClientRect();
+      if (r0.width < 100 || r0.height < 100) continue;
+      if (r0.right < 0 || r0.left > vw || r0.bottom < 0 || r0.top > vh) continue;
+      if (imgs[i].src === expected || imgs[i].dataset.frankOriginalSrc === expected) {
+        target = imgs[i];
+        break;
+      }
+    }
+    if (!target) {
+      console.log('[Frank] Expected Kindle blob not visible, skipping overlay');
+      return false;
+    }
+  }
+
+  // Fallback: largest visible blob img in the viewport.
+  var bestArea = 0;
   for (var i = 0; i < imgs.length; i++) {
+    if (target) break;
     if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
     var r = imgs[i].getBoundingClientRect();
     if (r.width < 100 || r.height < 100) continue;
@@ -130,6 +159,18 @@ class OverlayController {
   // Store the translated blob URL so toggle handler can access the latest one.
   target.dataset.frankTranslatedSrc = blobUrl;
 
+  // Temporary debug marker: when HUD is visible, draw a green outline so it's
+  // obvious that the current page image was replaced.
+  var dbg = document.getElementById('__frankDebugHud');
+  var debugVisible = !!(dbg && dbg.style && dbg.style.display !== 'none');
+  if (debugVisible) {
+    target.style.outline = '3px solid rgba(76,175,80,0.95)';
+    target.style.outlineOffset = '-3px';
+  } else {
+    target.style.outline = '';
+    target.style.outlineOffset = '';
+  }
+
   // Sync detection tracker so page-turn detector doesn't re-fire
   if (typeof window.__frankLastBlob !== 'undefined') {
     window.__frankLastBlob = blobUrl;
@@ -145,9 +186,15 @@ class OverlayController {
       if (target.dataset.frankTranslated === 'true') {
         target.src = target.dataset.frankOriginalSrc;
         target.dataset.frankTranslated = 'false';
+        target.style.outline = '';
+        target.style.outlineOffset = '';
       } else {
         target.src = target.dataset.frankTranslatedSrc;
         target.dataset.frankTranslated = 'true';
+        if (debugVisible) {
+          target.style.outline = '3px solid rgba(76,175,80,0.95)';
+          target.style.outlineOffset = '-3px';
+        }
       }
       // Keep detection tracker in sync after toggle
       if (typeof window.__frankLastBlob !== 'undefined') {
@@ -158,7 +205,8 @@ class OverlayController {
 
   return true;
 })();
-''');
+''',
+    );
     return result == true;
   }
 
@@ -174,12 +222,14 @@ class OverlayController {
   /// Enable tap-to-toggle inspector mode for highlighting elements.
   Future<void> enableTapMode(AppWebViewController controller) async {
     await controller.evaluateJavascript(
-        source: 'window.__frankInspectorTapMode = true;');
+      source: 'window.__frankInspectorTapMode = true;',
+    );
   }
 
   /// Disable tap-to-toggle inspector mode.
   Future<void> disableTapMode(AppWebViewController controller) async {
     await controller.evaluateJavascript(
-        source: 'window.__frankInspectorTapMode = false;');
+      source: 'window.__frankInspectorTapMode = false;',
+    );
   }
 }

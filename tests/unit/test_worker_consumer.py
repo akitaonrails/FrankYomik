@@ -43,6 +43,7 @@ class TestConsumerInit:
         assert c._running is False
         assert c._rdb is None
         assert c._last_heartbeat == 0.0
+        assert c._high_streak == 0
 
     def test_custom_params(self):
         c = Consumer(
@@ -438,6 +439,37 @@ class TestTick:
         c._process_message.assert_called_once_with(
             STREAM_LOW, b"2-0", {b"job_id": b"j-2"}
         )
+
+    def test_checks_low_first_after_high_burst(self):
+        c = _make_consumer()
+        c._high_streak = c.HIGH_BURST_BEFORE_LOW
+        call_order = []
+
+        def mock_read(stream, block_ms):
+            call_order.append(stream)
+            return None
+
+        c._read_one = mock_read
+        c._last_heartbeat = time.monotonic()
+        c._tick()
+
+        assert call_order == [STREAM_LOW, STREAM_HIGH]
+
+    def test_resets_high_streak_when_low_processed(self):
+        c = _make_consumer()
+        c._high_streak = c.HIGH_BURST_BEFORE_LOW
+
+        def mock_read(stream, block_ms):
+            if stream == STREAM_LOW:
+                return (STREAM_LOW, b"2-0", {b"job_id": b"j-2"})
+            return None
+
+        c._read_one = mock_read
+        c._process_message = MagicMock()
+        c._last_heartbeat = time.monotonic()
+        c._tick()
+
+        assert c._high_streak == 0
 
     def test_heartbeat_when_interval_elapsed(self):
         c = _make_consumer(heartbeat_interval=0)  # trigger immediately

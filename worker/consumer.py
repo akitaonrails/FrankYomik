@@ -44,6 +44,11 @@ def _slugify(s: str) -> str:
 class Consumer:
     """Redis stream consumer with two-stream priority."""
 
+    # Process at most this many high-priority jobs consecutively before giving
+    # low-priority prefetch jobs a chance. Keeps "current page first" behavior
+    # while preventing low queue starvation during continuous reading.
+    HIGH_BURST_BEFORE_LOW = 3
+
     def __init__(self, redis_url: str, consumer_group: str = "workers",
                  consumer_name: str | None = None,
                  heartbeat_interval: int = 30,
@@ -58,6 +63,7 @@ class Consumer:
         self._running = False
         self._rdb: redis.Redis | None = None
         self._last_heartbeat = 0.0
+        self._high_streak = 0
 
     def connect(self) -> None:
         """Connect to Redis and ensure consumer groups exist."""
@@ -103,16 +109,27 @@ class Consumer:
         log.info("Worker %s shutting down", self.consumer_name)
 
     def _tick(self) -> None:
-        """One iteration: check high queue, then low queue, then heartbeat."""
-        # Check high-priority stream (short block)
-        msg = self._read_one(STREAM_HIGH, block_ms=100)
-        if msg is None:
-            # Nothing in high — check low-priority (longer block)
-            msg = self._read_one(STREAM_LOW, block_ms=1000)
+        """One iteration with weighted high/low scheduling + heartbeat."""
+        msg = None
+
+        # After a burst of high jobs, probe low first to avoid starvation.
+        if self._high_streak >= self.HIGH_BURST_BEFORE_LOW:
+            msg = self._read_one(STREAM_LOW, block_ms=100)
+            if msg is None:
+                msg = self._read_one(STREAM_HIGH, block_ms=100)
+        else:
+            # Normal path: prefer current-page responsiveness.
+            msg = self._read_one(STREAM_HIGH, block_ms=100)
+            if msg is None:
+                msg = self._read_one(STREAM_LOW, block_ms=1000)
 
         if msg is not None:
             stream, msg_id, fields = msg
             self._process_message(stream, msg_id, fields)
+            if stream == STREAM_HIGH:
+                self._high_streak += 1
+            else:
+                self._high_streak = 0
 
         # Periodic heartbeat
         now = time.monotonic()

@@ -31,8 +31,7 @@ class JsBridge {
   }
 
   /// Detect which strategy matches the URL and inject its detection script.
-  Future<void> onUrlChanged(
-      AppWebViewController controller, String url) async {
+  Future<void> onUrlChanged(AppWebViewController controller, String url) async {
     SiteStrategy? matched;
     for (final s in _strategies) {
       if (s.matches(url)) {
