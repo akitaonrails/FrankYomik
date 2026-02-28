@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,6 +27,9 @@ final jobsProvider = StateNotifierProvider<JobsNotifier, Map<String, PageJob>>((
 class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   final Ref _ref;
   Timer? _pollTimer;
+
+  /// Tracks background metadata-backfill jobs: jobId → {hash, pipeline}.
+  final Map<String, ({String hash, String pipeline})> _backfillJobs = {};
 
   JobsNotifier(this._ref) : super({}) {
     // Listen for WebSocket messages
@@ -70,6 +74,17 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           sourceHash: hash,
         ),
       };
+      // Backfill metadata for pages cached before metadata storage existed.
+      unawaited(_backfillMetadataIfMissing(
+        hash: hash,
+        pipeline: effectivePipeline,
+        imageBytes: imageBytes,
+        title: title,
+        chapter: chapter,
+        pageNumber: pageNumber,
+        sourceUrl: sourceUrl,
+        priority: 'low',
+      ));
       return;
     }
 
@@ -97,6 +112,17 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             sourceHash: hash,
           ),
         };
+        // Backfill metadata for pages cached before metadata storage existed.
+        unawaited(_backfillMetadataIfMissing(
+          hash: hash,
+          pipeline: effectivePipeline,
+          imageBytes: imageBytes,
+          title: title,
+          chapter: chapter,
+          pageNumber: pageNumber,
+          sourceUrl: sourceUrl,
+          priority: 'low',
+        ));
         return;
       }
     }
@@ -164,6 +190,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             chapter: chapter,
             pageNumber: pageNumber,
           );
+          unawaited(_fetchAndCacheMetadata(hash, effectivePipeline));
         }
       } else {
         // Subscribe for updates
@@ -183,6 +210,16 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     final type = msg['type'] as String?;
     final jobId = msg['job_id'] as String?;
     if (type == null || jobId == null) return;
+
+    // Check if this is a metadata-backfill job (no matching PageJob expected)
+    final backfill = _backfillJobs.remove(jobId);
+    if (backfill != null && type == 'job_complete') {
+      final status = msg['status'] as String?;
+      if (status == 'completed') {
+        unawaited(_fetchAndCacheMetadata(backfill.hash, backfill.pipeline));
+      }
+      return;
+    }
 
     // Find the PageJob with this jobId
     final entry = state.entries
@@ -232,19 +269,100 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       // Save to local cache
       if (job.originalImage != null) {
         final hash = await _cache.hashImage(job.originalImage!);
+        final effectivePipeline = job.pipeline ?? _settings.pipeline;
         await _cache.store(
           hash: hash,
-          pipeline: job.pipeline ?? _settings.pipeline,
+          pipeline: effectivePipeline,
           imageBytes: img,
           title: job.title,
           chapter: job.chapter,
           pageNumber: job.pageNumber,
         );
+        unawaited(_fetchAndCacheMetadata(hash, effectivePipeline));
       }
     } catch (e) {
       job.status = PageJobStatus.failed;
       job.error = 'Download failed: $e';
       state = {...state};
+    }
+  }
+
+  /// Check if metadata exists locally; if not, resubmit to server in background
+  /// so the worker produces metadata. Called for local cache hits on pages that
+  /// were cached before metadata storage was introduced.
+  Future<void> _backfillMetadataIfMissing({
+    required String hash,
+    required String pipeline,
+    required Uint8List imageBytes,
+    String? title,
+    String? chapter,
+    String? pageNumber,
+    String? sourceUrl,
+    String priority = 'low',
+  }) async {
+    // First try the fast path: metadata already in SQLite
+    final localJson = await _cache.lookupMetadataByHash(hash, pipeline);
+    if (localJson != null) return;
+
+    // Try fetching from server (covers pages processed after Redis bridge fix)
+    try {
+      final resp = await _api.getCacheMetadataByHash(
+        settings: _settings,
+        pipeline: pipeline,
+        sourceHash: hash,
+      );
+      final metadataJson = jsonEncode(resp);
+      await _cache.updateMetadata(hash, pipeline, metadataJson);
+      debugPrint('[Jobs] Backfilled metadata from server for ${hash.substring(0, 12)}');
+      return;
+    } catch (_) {
+      // Server doesn't have it either — need to reprocess
+    }
+
+    // Resubmit to server so the worker produces fresh metadata.
+    debugPrint('[Jobs] Resubmitting ${hash.substring(0, 12)} for metadata backfill');
+    try {
+      final response = await _api.submitJob(
+        settings: _settings,
+        imageBytes: imageBytes,
+        pipeline: pipeline,
+        title: title,
+        chapter: chapter,
+        pageNumber: pageNumber,
+        sourceUrl: sourceUrl,
+        priority: priority,
+      );
+      final jobId = response['job_id'] as String;
+      final isCached = response['cached'] == true;
+
+      if (isCached) {
+        // Server had it cached (dedup hit) — metadata should be available now
+        unawaited(_fetchAndCacheMetadata(hash, pipeline));
+      } else {
+        // Track for WS/polling completion
+        _backfillJobs[jobId] = (hash: hash, pipeline: pipeline);
+        _ws.subscribeToJobs([jobId]);
+        _startPollingFallback();
+      }
+    } catch (e) {
+      debugPrint('[Jobs] Metadata backfill resubmit failed for ${hash.substring(0, 12)}: $e');
+    }
+  }
+
+  /// Fetch metadata from server and persist in local SQLite cache.
+  /// Non-fatal: logs and returns on failure.
+  Future<void> _fetchAndCacheMetadata(String hash, String pipeline) async {
+    try {
+      final resp = await _api.getCacheMetadataByHash(
+        settings: _settings,
+        pipeline: pipeline,
+        sourceHash: hash,
+      );
+      final metadataJson = jsonEncode(resp);
+      await _cache.updateMetadata(hash, pipeline, metadataJson);
+      debugPrint('[Jobs] Cached metadata for ${hash.substring(0, 12)}');
+    } catch (e) {
+      debugPrint('[Jobs] Failed to fetch/cache metadata for ${hash.substring(0, 12)}: $e');
     }
   }
 
@@ -256,7 +374,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       final activeJobs = state.values
           .where((j) => j.isActive && j.jobId != null)
           .toList();
-      if (activeJobs.isEmpty) {
+      if (activeJobs.isEmpty && _backfillJobs.isEmpty) {
         _pollTimer?.cancel();
         _pollTimer = null;
         return;
@@ -283,6 +401,26 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             job.status = PageJobStatus.failed;
             job.error = status['error'] as String? ?? 'Failed';
             state = {...state};
+          }
+        } catch (_) {}
+      }
+
+      // Poll backfill jobs for metadata completion
+      for (final entry in _backfillJobs.entries.toList()) {
+        try {
+          final status = await _api.getJobStatus(
+            settings: _settings,
+            jobId: entry.key,
+          );
+          final jobStatus = status['status'] as String?;
+          if (jobStatus == 'completed') {
+            final bf = _backfillJobs.remove(entry.key);
+            if (bf != null) {
+              unawaited(_fetchAndCacheMetadata(bf.hash, bf.pipeline));
+            }
+          } else if (jobStatus == 'failed') {
+            _backfillJobs.remove(entry.key);
+            debugPrint('[Jobs] Backfill job ${entry.key} failed');
           }
         } catch (_) {}
       }

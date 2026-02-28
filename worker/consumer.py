@@ -24,6 +24,7 @@ RESULT_IMG_PREFIX = "frank:results:img:"
 NOTIFY_PREFIX = "frank:notify:"
 HEARTBEAT_PREFIX = "frank:worker:"
 PROGRESS_PREFIX = "frank:progress:"
+META_BY_HASH_PREFIX = "frank:meta:"
 
 # TTLs
 RESULT_TTL = 3600  # 1 hour
@@ -64,6 +65,7 @@ class Consumer:
         self.cache_dir = cache_dir
         self._page_cache = PageCache(cache_dir)
         self._running = False
+        log.info("Cache v2 directory: %s", os.path.abspath(cache_dir))
         self._rdb: redis.Redis | None = None
         self._last_heartbeat = 0.0
         self._high_streak = 0
@@ -232,7 +234,14 @@ class Consumer:
             result.source_hash = source_hash
 
         # Save to robust filesystem cache v2 when image + metadata are available.
-        if result.image_bytes and result.metadata_payload:
+        has_image = bool(result.image_bytes)
+        has_metadata = bool(result.metadata_payload)
+        log.info(
+            "cache-v2 check: job=%s has_image=%s has_metadata=%s source_hash=%s",
+            job_id, has_image, has_metadata,
+            (result.source_hash or source_hash or "")[:12],
+        )
+        if has_image and has_metadata:
             self._cache_to_v2(
                 pipeline=pipeline,
                 source_hash=result.source_hash or source_hash,
@@ -243,6 +252,11 @@ class Consumer:
                 chapter=chapter,
                 page_number=page_number,
                 result=result,
+            )
+        else:
+            log.warning(
+                "cache-v2 skipped for job %s: image=%s metadata=%s",
+                job_id, has_image, has_metadata,
             )
 
         # Store result and notify
@@ -272,6 +286,20 @@ class Consumer:
         if result.image_bytes:
             img_key = f"{RESULT_IMG_PREFIX}{result.job_id}"
             self._rdb.set(img_key, result.image_bytes, ex=RESULT_TTL)
+
+        # Store metadata payload in Redis keyed by pipeline:source_hash so the
+        # server can serve it even when the v2 disk cache path doesn't match.
+        if result.metadata_payload and result.source_hash and result.pipeline:
+            meta_hash_key = (
+                f"{META_BY_HASH_PREFIX}{result.pipeline}:{result.source_hash}"
+            )
+            meta_hash_val = json.dumps({
+                "source_hash": result.source_hash,
+                "content_hash": result.content_hash,
+                "render_hash": result.render_hash,
+                "metadata": result.metadata_payload,
+            })
+            self._rdb.set(meta_hash_key, meta_hash_val, ex=RESULT_TTL)
 
         # Publish notification for WebSocket subscribers
         notify_channel = f"{NOTIFY_PREFIX}{result.job_id}"

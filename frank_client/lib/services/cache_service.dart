@@ -45,7 +45,7 @@ class CacheService {
     final dbPath = p.join(appDir.path, 'frank_cache.db');
     _db = await openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE pages (
@@ -57,11 +57,17 @@ class CacheService {
             page_number TEXT,
             file_path TEXT NOT NULL,
             created_at INTEGER NOT NULL,
+            metadata_json TEXT,
             UNIQUE(image_hash, pipeline)
           )
         ''');
         await db.execute(
             'CREATE INDEX idx_pages_meta ON pages(pipeline, title, chapter, page_number)');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE pages ADD COLUMN metadata_json TEXT');
+        }
       },
     );
 
@@ -139,6 +145,32 @@ class CacheService {
     return file.readAsBytes();
   }
 
+  /// Look up cached metadata JSON by image hash and pipeline.
+  Future<String?> lookupMetadataByHash(String hash, String pipeline) async {
+    await ready;
+    final rows = await _db?.query(
+      'pages',
+      columns: ['metadata_json'],
+      where: 'image_hash = ? AND pipeline = ?',
+      whereArgs: [hash, pipeline],
+      limit: 1,
+    );
+    if (rows == null || rows.isEmpty) return null;
+    return rows.first['metadata_json'] as String?;
+  }
+
+  /// Update metadata JSON for an existing cache entry.
+  Future<void> updateMetadata(String hash, String pipeline, String metadataJson) async {
+    await ready;
+    await _db?.update(
+      'pages',
+      {'metadata_json': metadataJson},
+      where: 'image_hash = ? AND pipeline = ?',
+      whereArgs: [hash, pipeline],
+    );
+    debugPrint('[Cache] Updated metadata for ${hash.substring(0, 12)}');
+  }
+
   /// Store a translated image in the local cache.
   Future<void> store({
     required String hash,
@@ -147,6 +179,7 @@ class CacheService {
     String? title,
     String? chapter,
     String? pageNumber,
+    String? metadataJson,
   }) async {
     // Always populate memory cache immediately
     _memoryCache['$hash:$pipeline'] = imageBytes;
@@ -167,6 +200,7 @@ class CacheService {
         'page_number': pageNumber,
         'file_path': filePath,
         'created_at': DateTime.now().millisecondsSinceEpoch,
+        'metadata_json': metadataJson,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );

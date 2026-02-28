@@ -353,7 +353,7 @@ func (s *Server) handleCacheMeta(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "cached metadata not found", http.StatusNotFound)
 		return
 	}
-	s.serveMetadataByHash(w, pipeline, sourceHash)
+	s.serveMetadataByHash(w, r, pipeline, sourceHash)
 }
 
 // handleCacheImageByHash handles GET /api/v1/cache/by-hash/{pipeline}/{source_hash}/image
@@ -382,7 +382,7 @@ func (s *Server) handleCacheMetaByHash(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "missing path parameters", http.StatusBadRequest)
 		return
 	}
-	s.serveMetadataByHash(w, pipeline, sourceHash)
+	s.serveMetadataByHash(w, r, pipeline, sourceHash)
 }
 
 // handlePatchCacheMetaByHash handles PATCH /api/v1/cache/by-hash/{pipeline}/{source_hash}/meta
@@ -462,29 +462,39 @@ func (s *Server) handlePatchCacheMetaByHash(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-func (s *Server) serveMetadataByHash(w http.ResponseWriter, pipeline, sourceHash string) {
+func (s *Server) serveMetadataByHash(w http.ResponseWriter, r *http.Request, pipeline, sourceHash string) {
 	metaBytes, m, ok := s.cache.LookupMetadataBySourceHash(pipeline, sourceHash)
-	if !ok {
-		jsonError(w, "cached metadata not found", http.StatusNotFound)
+	if ok {
+		var payload interface{}
+		if err := json.Unmarshal(metaBytes, &payload); err != nil {
+			log.Printf("ERROR parsing cached metadata payload: %v", err)
+			jsonError(w, "cached metadata corrupted", http.StatusInternalServerError)
+			return
+		}
+		resp := map[string]interface{}{
+			"source_hash":  sourceHash,
+			"pipeline":     pipeline,
+			"content_hash": m.ContentHash,
+			"render_hash":  m.RenderHash,
+			"image_stale":  m.ImageStale,
+			"metadata":     payload,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
 
-	var payload interface{}
-	if err := json.Unmarshal(metaBytes, &payload); err != nil {
-		log.Printf("ERROR parsing cached metadata payload: %v", err)
-		jsonError(w, "cached metadata corrupted", http.StatusInternalServerError)
+	// Fallback: check Redis for metadata stored by the worker (handles
+	// cache path mismatch between worker and server working directories).
+	redisKey := fmt.Sprintf("frank:meta:%s:%s", pipeline, sourceHash)
+	val, err := s.rdb.Get(r.Context(), redisKey).Bytes()
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(val)
 		return
 	}
-	resp := map[string]interface{}{
-		"source_hash":  sourceHash,
-		"pipeline":     pipeline,
-		"content_hash": m.ContentHash,
-		"render_hash":  m.RenderHash,
-		"image_stale":  m.ImageStale,
-		"metadata":     payload,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+
+	jsonError(w, "cached metadata not found", http.StatusNotFound)
 }
 
 // handleDeleteJob handles DELETE /api/v1/jobs/{id}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -40,7 +41,8 @@ func main() {
 
 	// Server
 	server := NewServer(rdb, cacheDir)
-	log.Printf("Cache directory: %s", cacheDir)
+	absCacheDir, _ := filepath.Abs(cacheDir)
+	log.Printf("Cache directory: %s (absolute: %s)", cacheDir, absCacheDir)
 
 	// Start Redis Pub/Sub subscriber for WebSocket notifications
 	go server.StartRedisSubscriber(ctx)

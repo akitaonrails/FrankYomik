@@ -2169,6 +2169,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         return aMarked.compareTo(bMarked);
       });
     }
+    debugPrint(
+      '[Feedback] syncMarksOverlay: editMode=$_overlayEditMode, '
+      'marks=${rawMarks.length}, '
+      'metadataPages=${_metadataByPageId.keys.toList()}, '
+      'currentPage=$_currentKindlePageId',
+    );
     final payload = <String, Object?>{
       'enabled': _overlayEditMode,
       'marks': rawMarks,
@@ -2269,7 +2275,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
-  Future<void> _loadMetadataForPage(String pageId, {bool force = false}) async {
+  Future<void> _loadMetadataForPage(
+    String pageId, {
+    bool force = false,
+    int retryCount = 0,
+  }) async {
     if (!force &&
         (_metadataByPageId.containsKey(pageId) ||
             _metadataLoadingPageIds.contains(pageId))) {
@@ -2279,6 +2289,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final job = ref.read(jobsProvider)[pageId];
     if (job == null) {
       debugPrint('[Feedback] No job for $pageId — cannot load metadata');
+      return;
+    }
+    if (!job.isComplete) {
+      debugPrint('[Feedback] Job $pageId not complete (${job.status.name}) — skipping metadata fetch');
       return;
     }
     final sourceHash = job.sourceHash;
@@ -2292,6 +2306,37 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     _metadataLoadingPageIds.add(pageId);
     try {
+      // Try local SQLite cache first (works offline / when server cache is empty)
+      if (!force) {
+        final cache = ref.read(cacheServiceProvider);
+        final localJson = await cache.lookupMetadataByHash(sourceHash, pipeline);
+        if (localJson != null) {
+          try {
+            final resp = jsonDecode(localJson) as Map<String, dynamic>;
+            final metadata = resp['metadata'];
+            if (metadata is Map) {
+              final regions = metadata['regions'];
+              debugPrint(
+                '[Feedback] Local cache metadata for $pageId: '
+                '${regions is List ? regions.length : 0} regions',
+              );
+              _metadataByPageId[pageId] = {
+                'pipeline': pipeline,
+                'sourceHash': sourceHash,
+                'contentHash': resp['content_hash'],
+                'renderHash': resp['render_hash'],
+                'metadata': Map<String, dynamic>.from(metadata),
+              };
+              _syncFeedbackMarksOverlay();
+              return;
+            }
+          } catch (e) {
+            debugPrint('[Feedback] Local metadata parse failed for $pageId: $e');
+            // Fall through to server fetch
+          }
+        }
+      }
+
       final api = ref.read(apiServiceProvider);
       final settings = ref.read(settingsProvider);
       final resp = await api.getCacheMetadataByHash(
@@ -2322,8 +2367,24 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         _syncFeedbackActionButtons();
       }
       _syncFeedbackMarksOverlay();
+
+      // Persist to local cache for future sessions
+      try {
+        final cache = ref.read(cacheServiceProvider);
+        await cache.updateMetadata(sourceHash, pipeline, jsonEncode(resp));
+      } catch (e) {
+        debugPrint('[Feedback] Failed to persist metadata locally: $e');
+      }
     } catch (e) {
-      debugPrint('[Feedback] Failed to load metadata for $pageId: $e');
+      debugPrint('[Feedback] Failed to load metadata for $pageId (attempt ${retryCount + 1}): $e');
+      // Retry once after a delay — server cache may still be flushing after
+      // the worker stored the result (race between Redis notify and disk I/O).
+      if (retryCount < 1 && mounted) {
+        Future.delayed(const Duration(seconds: 2), () {
+          if (!mounted) return;
+          _loadMetadataForPage(pageId, force: force, retryCount: retryCount + 1);
+        });
+      }
     } finally {
       _metadataLoadingPageIds.remove(pageId);
     }
