@@ -64,6 +64,19 @@ class OverlayController {
   img.dataset.frankTranslated = 'true';
   if ('${pageId ?? ''}') img.dataset.frankPageId = '${pageId ?? ''}';
 
+  // Fire-and-forget: decode the new image, then nudge the compositor.
+  // Can't use await (WebKitGTK doesn't resolve Promise return values).
+  if (typeof img.decode === 'function') {
+    img.decode().then(function() {
+      console.log('[Frank] webtoon decode OK for ' + ('${pageId ?? ''}'));
+      img.style.opacity = '0.999';
+      void img.offsetWidth;
+      img.style.opacity = '';
+    }).catch(function(e) {
+      console.error('[Frank] webtoon decode FAILED: ' + e);
+    });
+  }
+
   // Add toggle on double-click (once) — single clicks pass through
   // to the site's own navigation (Kindle bars, page turns, etc.)
   if (!img.dataset.frankToggle) {
@@ -240,28 +253,67 @@ class OverlayController {
     console.log('[Frank] No visible Kindle blob img found for overlay');
     return false;
   }
-  console.log('[Frank] Replacing Kindle blob img at x=' + target.getBoundingClientRect().x.toFixed(0));
+  var tRect = target.getBoundingClientRect();
+  console.log('[Frank] Replacing Kindle blob img at x=' + tRect.x.toFixed(0) +
+    ' size=' + tRect.width.toFixed(0) + 'x' + tRect.height.toFixed(0) +
+    ' natural=' + target.naturalWidth + 'x' + target.naturalHeight +
+    ' currentSrc=' + target.src.substring(0, 60));
 
   // Always update the original src to the CURRENT blob (Kindle regenerates
   // blob URLs on each page visit, so the old originalSrc would be stale).
   target.dataset.frankOriginalSrc = target.src;
 
   // Convert base64 to blob URL
-  var binary = atob('$base64Data');
+  var b64Len = '$base64Data'.length;
+  console.log('[Frank] base64 length=' + b64Len);
+  var binary;
+  try {
+    binary = atob('$base64Data');
+  } catch(e) {
+    console.error('[Frank] atob() FAILED: ' + e);
+    return JSON.stringify({ok: false, error: 'atob_failed', detail: String(e)});
+  }
   var bytes = new Uint8Array(binary.length);
   for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   var blob = new Blob([bytes], { type: 'image/png' });
   var blobUrl = URL.createObjectURL(blob);
+  console.log('[Frank] Created blob: ' + blobUrl + ' (' + binary.length + ' bytes)');
 
   target.src = blobUrl;
   target.dataset.frankTranslated = 'true';
   if ('${pageId ?? ''}') target.dataset.frankPageId = '${pageId ?? ''}';
-  // Store the translated blob URL so toggle handler can access the latest one.
   target.dataset.frankTranslatedSrc = blobUrl;
   if (overlayToken) target.dataset.frankOverlayToken = overlayToken;
 
-  // Temporary debug marker: when HUD is visible, draw a green outline so it's
-  // obvious that the current page image was replaced.
+  // Fire-and-forget: decode the new image, then nudge the compositor.
+  // Can't use await (WebKitGTK doesn't resolve Promise return values).
+  if (typeof target.decode === 'function') {
+    target.decode().then(function() {
+      var srcAfter = target.src;
+      var srcMatch = (srcAfter === blobUrl);
+      console.log('[Frank] Post-decode: decodeOk=true srcStuck=' + srcMatch +
+        ' natural=' + target.naturalWidth + 'x' + target.naturalHeight +
+        (srcMatch ? '' : ' OVERWRITTEN! now=' + srcAfter.substring(0, 60)));
+      // Nudge compositor: imperceptible opacity change forces layer texture update.
+      target.style.opacity = '0.999';
+      void target.offsetWidth;
+      target.style.opacity = '';
+    }).catch(function(e) {
+      console.error('[Frank] decode() FAILED: ' + e +
+        ' naturalSize=' + target.naturalWidth + 'x' + target.naturalHeight);
+      // Still try the opacity nudge even if decode failed.
+      target.style.opacity = '0.999';
+      void target.offsetWidth;
+      target.style.opacity = '';
+    });
+  }
+
+  // Sync detection tracker so page-turn detector doesn't re-fire
+  if (typeof window.__frankLastBlob !== 'undefined') {
+    window.__frankLastBlob = blobUrl;
+  }
+
+  // Temporary debug marker
   var dbg = document.getElementById('__frankDebugHud');
   var debugVisible = !!(dbg && dbg.style && dbg.style.display !== 'none');
   if (debugVisible) {
@@ -272,15 +324,7 @@ class OverlayController {
     target.style.outlineOffset = '';
   }
 
-  // Sync detection tracker so page-turn detector doesn't re-fire
-  if (typeof window.__frankLastBlob !== 'undefined') {
-    window.__frankLastBlob = blobUrl;
-  }
-
-  // Add toggle on double-click (once) — single clicks pass through
-  // to Kindle's own navigation (show/hide bars, page turns, etc.).
-  // Uses dataset attributes so the handler always uses the latest URLs
-  // even when the overlay is re-applied for a different page.
+  // Add toggle on double-click (once)
   if (!target.dataset.frankToggle) {
     target.dataset.frankToggle = 'true';
     target.addEventListener('dblclick', function(e) {
@@ -297,17 +341,33 @@ class OverlayController {
           target.style.outlineOffset = '-3px';
         }
       }
-      // Keep detection tracker in sync after toggle
       if (typeof window.__frankLastBlob !== 'undefined') {
         window.__frankLastBlob = target.src;
       }
     });
   }
 
-  return true;
+  return JSON.stringify({ok: true, blobBytes: binary.length,
+    blobUrl: blobUrl.substring(0, 40),
+    targetNatural: target.naturalWidth + 'x' + target.naturalHeight});
 })();
 ''',
     );
+    // Parse the JSON diagnostic result from the JS overlay script.
+    if (result is String) {
+      try {
+        final diag = jsonDecode(result) as Map<String, dynamic>;
+        final ok = diag['ok'] == true;
+        debugPrint(
+          '[OverlayJS] page=$pageId ok=$ok blobBytes=${diag['blobBytes']} '
+          'blobUrl=${diag['blobUrl']} natural=${diag['targetNatural']}'
+          '${diag['error'] != null ? ' ERROR=${diag['error']} ${diag['detail']}' : ''}',
+        );
+        return ok;
+      } catch (_) {
+        debugPrint('[OverlayJS] page=$pageId unexpected result: $result');
+      }
+    }
     return result == true;
   }
 

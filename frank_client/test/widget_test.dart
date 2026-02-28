@@ -1,3 +1,4 @@
+import 'dart:io' show File;
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,18 @@ import 'package:frank_client/webview/kindle_prefetch_manager.dart';
 import 'package:frank_client/services/image_capture_service.dart';
 import 'package:frank_client/webview/dom_inspector.dart';
 import 'package:image/image.dart' as img;
+
+/// Read overlay_controller.dart source for pattern verification.
+/// Tests verify the actual source to catch regressions without needing
+/// a WebView mock.
+String _readOverlaySource() {
+  // Find project root (test runs from frank_client/)
+  final file = File('lib/webview/overlay_controller.dart');
+  if (!file.existsSync()) {
+    throw StateError('overlay_controller.dart not found at ${file.absolute.path}');
+  }
+  return file.readAsStringSync();
+}
 
 void main() {
   group('ServerSettings', () {
@@ -399,6 +412,90 @@ void main() {
         1.0,
       );
       expect(result, isNull);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // OverlayController script content regression tests
+  //
+  // Read the actual overlay_controller.dart source and verify key patterns.
+  // The overlay JS runs inside WebKitGTK on Linux. Key constraints:
+  //   - Scripts must be synchronous IIFEs (WebKitGTK can't resolve Promises)
+  //   - After setting img.src, decode()+opacity nudge forces GPU re-composite
+  //   - Diagnostic logging must be present for debugging overlay failures
+  // ---------------------------------------------------------------------------
+
+  group('OverlayController script patterns', () {
+    late String source;
+
+    setUpAll(() {
+      source = _readOverlaySource();
+    });
+
+    test('uses only synchronous IIFEs — no async (WebKitGTK cannot resolve Promises)', () {
+      // The source should contain "(function()" but never "(async function()"
+      // async IIFEs cause PlatformException(JS_ERROR, Unsupported result type)
+      expect(source.contains('(function()'), true);
+      expect(source.contains('(async function()'), false,
+          reason: 'async IIFEs break WebKitGTK evaluate_javascript');
+    });
+
+    test('webtoon overlay uses decode().then() for GPU compositor nudge', () {
+      expect(source.contains('img.decode().then(function()'), true);
+      expect(source.contains("img.style.opacity = '0.999'"), true);
+    });
+
+    test('kindle overlay uses decode().then() for GPU compositor nudge', () {
+      expect(source.contains('target.decode().then(function()'), true);
+      expect(source.contains("target.style.opacity = '0.999'"), true);
+    });
+
+    test('both overlays catch decode errors', () {
+      expect(source.contains('webtoon decode FAILED'), true);
+      expect(source.contains('decode() FAILED'), true);
+    });
+
+    test('kindle overlay logs diagnostic info after decode', () {
+      expect(source.contains('Post-decode:'), true);
+      expect(source.contains('srcStuck='), true);
+      expect(source.contains('OVERWRITTEN!'), true);
+    });
+
+    test('kindle overlay returns diagnostic JSON', () {
+      expect(source.contains("JSON.stringify({ok: true"), true);
+      expect(source.contains('blobBytes'), true);
+    });
+
+    test('kindle overlay handles atob failure gracefully', () {
+      expect(source.contains('atob() FAILED'), true);
+      expect(source.contains('atob_failed'), true);
+    });
+
+    test('kindle overlay logs base64 length and blob creation', () {
+      expect(source.contains('base64 length='), true);
+      expect(source.contains('Created blob:'), true);
+    });
+
+    test('both overlays create blob URLs from base64', () {
+      expect(source.contains('URL.createObjectURL(blob)'), true);
+      expect(source.contains("type: 'image/png'"), true);
+    });
+
+    test('Dart side parses diagnostic JSON from kindle overlay', () {
+      // Verify the Dart parsing logic handles the JSON diagnostic result
+      expect(source.contains("jsonDecode(result)"), true);
+      expect(source.contains("[OverlayJS]"), true);
+    });
+  });
+
+  group('NaverWebtoonStrategy captureScript', () {
+    test('uses JS fetch (not Dart HTTP) for image capture', () {
+      final strategy = NaverWebtoonStrategy();
+      final script = strategy.captureScript('wt-0');
+      // Must use in-browser fetch (has cookies + referer) not external HTTP
+      expect(script.contains('await fetch(src)'), true);
+      expect(script.contains('FileReader'), true);
+      expect(script.contains('readAsDataURL'), true);
     });
   });
 }

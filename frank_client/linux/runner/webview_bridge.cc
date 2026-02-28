@@ -297,11 +297,11 @@ static void handle_create(FlMethodCall* method_call) {
   webkit_settings_set_enable_html5_local_storage(settings, TRUE);
   webkit_settings_set_javascript_can_open_windows_automatically(settings, TRUE);
 
-  // Disable GPU-accelerated compositing — on NVIDIA+Wayland with DMABUF
-  // disabled, GPU compositing causes expensive SHM buffer copies at
-  // full-screen resolution. CPU compositing with Skia is faster here.
+  // Let WebKitGTK use GPU acceleration when available. DMABUF is disabled
+  // globally (main.cc) to avoid NVIDIA crashes, but WebKit's Skia GPU
+  // renderer still works via EGL on the AMD iGPU (forced via Mesa EGL).
   webkit_settings_set_hardware_acceleration_policy(
-      settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
+      settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_ON_DEMAND);
 
   webkit_web_view_load_uri(g_webview, url);
   gtk_widget_show(g_webview_widget);
@@ -561,7 +561,7 @@ static void handle_bg_create(FlMethodCall* method_call) {
   webkit_settings_set_enable_html5_database(bg_settings, TRUE);
   webkit_settings_set_enable_html5_local_storage(bg_settings, TRUE);
   webkit_settings_set_hardware_acceleration_policy(
-      bg_settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
+      bg_settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_ON_DEMAND);
 
   g_signal_connect(g_bg_webview, "load-changed",
                    G_CALLBACK(on_bg_load_changed), nullptr);

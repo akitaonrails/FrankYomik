@@ -807,12 +807,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         originalSrc = _detectedWebtoonPages[index]?['src'] as String?;
       }
       if (originalSrc != null && originalSrc.isNotEmpty) {
-        final ok = await _overlay.replaceImageBySrc(
-          controller,
-          originalSrc,
-          imageBytes,
-          pageId,
-        );
+        var ok = false;
+        try {
+          ok = await _overlay.replaceImageBySrc(
+            controller,
+            originalSrc,
+            imageBytes,
+            pageId,
+          );
+        } catch (e) {
+          debugPrint('[Overlay] replaceImageBySrc threw: $e');
+        }
         debugPrint('[Overlay] $pageId replace=${ok ? 'OK' : 'FAIL'}');
       } else {
         debugPrint(
@@ -852,24 +857,29 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       overlayToken: overlayToken,
     );
 
-    var ok = await _overlay.replaceVisibleKindlePage(
-      controller,
-      imageBytes,
-      pageId: pageId,
-      expectedBlobSrc: expectedBlob,
-      expectedRect: expectedRect,
-      overlayToken: overlayToken,
-    );
+    var ok = false;
     var usedFallback = false;
-    if (!ok && pageId == _currentKindlePageId) {
-      usedFallback = true;
+    try {
       ok = await _overlay.replaceVisibleKindlePage(
         controller,
         imageBytes,
         pageId: pageId,
+        expectedBlobSrc: expectedBlob,
         expectedRect: expectedRect,
         overlayToken: overlayToken,
       );
+      if (!ok && pageId == _currentKindlePageId) {
+        usedFallback = true;
+        ok = await _overlay.replaceVisibleKindlePage(
+          controller,
+          imageBytes,
+          pageId: pageId,
+          expectedRect: expectedRect,
+          overlayToken: overlayToken,
+        );
+      }
+    } catch (e) {
+      debugPrint('[Overlay] replaceVisibleKindlePage threw: $e');
     }
     if (ok) {
       _kindleOverlayOk++;
@@ -879,7 +889,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (usedFallback) _kindleOverlayFallback++;
     _pushKindleDebugHudToPage();
     debugPrint(
-      '[Overlay] ${isSpread ? 'spread ' : ''}$pageId replace=${ok ? 'OK' : 'FAIL'}',
+      '[Overlay] ${isSpread ? 'spread ' : ''}$pageId replace=${ok ? 'OK' : 'FAIL'}'
+      '${usedFallback ? ' (fallback)' : ''} imageBytes=${imageBytes.length}',
     );
     final logData = <String, dynamic>{
       if (isSpread) 'spreadPageId': pageId,
