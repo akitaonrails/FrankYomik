@@ -1519,51 +1519,46 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     });
   }, true);
 
-  // Double tap/click on a mark box: edit translation
-  marksLayer.addEventListener('dblclick', function(e) {
-    if (!editMode) return;
-    var box = e.target.closest('[data-frank-mark-region-id]');
-    if (!box) return;
-    e.preventDefault();
-    e.stopPropagation();
-    var pageId = box.dataset.frankMarkPageId || null;
-    var regionId = box.dataset.frankMarkRegionId || null;
-    var img = findImageByPageId(box.dataset.frankMarkAnchorPageId);
-    if (!img) return;
-    var r = img.getBoundingClientRect();
-    var br = box.getBoundingClientRect();
-    var xNorm = ((br.left + br.width / 2) - r.left) / r.width;
-    var yNorm = ((br.top + br.height / 2) - r.top) / r.height;
-    window.flutter_inappwebview.callHandler('onOverlayEditAction', {
-      action: 'edit_translation',
-      pageId: pageId,
-      regionId: regionId,
-      xNorm: Math.max(0, Math.min(1, xNorm)),
-      yNorm: Math.max(0, Math.min(1, yNorm))
-    });
-  }, true);
-
-  // Right-click in edit mode: mark undetected bubble at click point
+  // Right-click in edit mode:
+  //   on existing mark box → edit translation
+  //   on empty area → mark undetected bubble
   document.addEventListener('contextmenu', function(e) {
     if (!editMode) return;
     e.preventDefault();
     e.stopPropagation();
-    // If click was on an existing mark box, ignore
-    if (e.target.closest && e.target.closest('[data-frank-mark-region-id]')) return;
     if (isUiTarget(e.target)) return;
-    var img = findImageAtPoint(e.clientX, e.clientY);
-    if (!img) return;
-    var r = img.getBoundingClientRect();
-    var xNorm = (e.clientX - r.left) / r.width;
-    var yNorm = (e.clientY - r.top) / r.height;
-    var pageId = (img.dataset && img.dataset.frankPageId) ? img.dataset.frankPageId : null;
-    window.flutter_inappwebview.callHandler('onOverlayEditAction', {
-      action: 'undetected',
-      pageId: pageId,
-      regionId: null,
-      xNorm: Math.max(0, Math.min(1, xNorm)),
-      yNorm: Math.max(0, Math.min(1, yNorm))
-    });
+    var box = e.target.closest ? e.target.closest('[data-frank-mark-region-id]') : null;
+    if (box) {
+      var pageId = box.dataset.frankMarkPageId || null;
+      var regionId = box.dataset.frankMarkRegionId || null;
+      var img = findImageByPageId(box.dataset.frankMarkAnchorPageId);
+      if (!img) return;
+      var r = img.getBoundingClientRect();
+      var br = box.getBoundingClientRect();
+      var xNorm = ((br.left + br.width / 2) - r.left) / r.width;
+      var yNorm = ((br.top + br.height / 2) - r.top) / r.height;
+      window.flutter_inappwebview.callHandler('onOverlayEditAction', {
+        action: 'edit_translation',
+        pageId: pageId,
+        regionId: regionId,
+        xNorm: Math.max(0, Math.min(1, xNorm)),
+        yNorm: Math.max(0, Math.min(1, yNorm))
+      });
+    } else {
+      var img = findImageAtPoint(e.clientX, e.clientY);
+      if (!img) return;
+      var r = img.getBoundingClientRect();
+      var xNorm = (e.clientX - r.left) / r.width;
+      var yNorm = (e.clientY - r.top) / r.height;
+      var pageId = (img.dataset && img.dataset.frankPageId) ? img.dataset.frankPageId : null;
+      window.flutter_inappwebview.callHandler('onOverlayEditAction', {
+        action: 'undetected',
+        pageId: pageId,
+        regionId: null,
+        xNorm: Math.max(0, Math.min(1, xNorm)),
+        yNorm: Math.max(0, Math.min(1, yNorm))
+      });
+    }
   }, true);
   window.addEventListener('resize', scheduleFeedbackMarksRender);
   document.addEventListener('scroll', scheduleFeedbackMarksRender, true);
