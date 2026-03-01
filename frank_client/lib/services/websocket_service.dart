@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/server_settings.dart';
 
@@ -60,7 +61,7 @@ class WebSocketService {
     try {
       final msg = jsonDecode(data as String) as Map<String, dynamic>;
       onMessage?.call(msg);
-    } catch (_) {}
+    } catch (_) {} // Malformed WS frame, ignore
   }
 
   void _onError(Object error) {
@@ -99,7 +100,9 @@ class WebSocketService {
     if (_channel == null) return;
     try {
       _channel!.sink.add(jsonEncode(message));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[WS] Send failed: $e');
+    }
   }
 
   void _cleanup() {
@@ -107,7 +110,7 @@ class WebSocketService {
     _subscription = null;
     try {
       _channel?.sink.close();
-    } catch (_) {}
+    } catch (_) {} // Expected: socket may already be closed
     _channel = null;
   }
 
@@ -123,5 +126,3 @@ class WebSocketService {
     disconnect();
   }
 }
-
-typedef VoidCallback = void Function();

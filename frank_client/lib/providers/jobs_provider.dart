@@ -316,8 +316,8 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       final metadataJson = jsonEncode(resp);
       await _cache.updateMetadata(hash, pipeline, metadataJson);
       return;
-    } catch (_) {
-      // Server doesn't have it either — need to reprocess
+    } catch (e) {
+      debugPrint('[Jobs] Server metadata fetch failed for $hash: $e');
     }
 
     // Resubmit to server so the worker produces fresh metadata.
@@ -344,7 +344,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         _ws.subscribeToJobs([jobId]);
         _startPollingFallback();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Jobs] Metadata backfill resubmit failed for $hash: $e');
+    }
   }
 
   /// Fetch metadata from server and persist in local SQLite cache.
@@ -358,7 +360,8 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       );
       final metadataJson = jsonEncode(resp);
       await _cache.updateMetadata(hash, pipeline, metadataJson);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Jobs] Fetch/cache metadata failed for $hash: $e');
     }
   }
 
@@ -398,7 +401,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             job.error = status['error'] as String? ?? 'Failed';
             state = {...state};
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[Jobs] Poll status failed for ${job.jobId}: $e');
+        }
       }
 
       // Poll backfill jobs for metadata completion
@@ -417,7 +422,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           } else if (jobStatus == 'failed') {
             _backfillJobs.remove(entry.key);
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[Jobs] Poll backfill status failed for ${entry.key}: $e');
+        }
       }
     });
   }

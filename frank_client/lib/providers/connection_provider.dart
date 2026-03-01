@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
@@ -36,7 +37,8 @@ class ConnectionNotifier extends StateNotifier<ConnectionStatus> {
     try {
       final api = _ref.read(apiServiceProvider);
       await api.getHealth(settings);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Connection] Health check failed: $e');
       state = ConnectionStatus.error;
       return;
     }
