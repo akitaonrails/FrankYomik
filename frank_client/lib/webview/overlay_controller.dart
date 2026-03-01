@@ -13,13 +13,13 @@ class OverlayController {
     String? pageId,
   ) async {
     final base64Data = await compute(base64Encode, imageBytes);
-    // Escape single quotes in the URL
-    final escapedSrc = originalSrc.replaceAll("'", "\\'");
+    // jsonEncode properly escapes all special chars (quotes, newlines, backticks, etc.)
+    final safeSrc = jsonEncode(originalSrc);
     final result = await controller.evaluateJavascript(
       source:
           '''
 (function() {
-  var targetSrc = '$escapedSrc';
+  var targetSrc = $safeSrc;
 
   // Find the img by matching src or data-frank-original-src
   var allImgs = document.querySelectorAll('img');
@@ -53,7 +53,7 @@ class OverlayController {
     img.dataset.frankOriginalSrc = img.src;
   }
 
-  // Convert base64 to blob URL
+  // Convert base64 to blob URL (base64 is safe: A-Za-z0-9+/= only)
   var binary = atob('$base64Data');
   var bytes = new Uint8Array(binary.length);
   for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -110,18 +110,19 @@ class OverlayController {
     String? overlayToken,
   }) async {
     final base64Data = await compute(base64Encode, imageBytes);
-    final escapedExpected = expectedBlobSrc?.replaceAll("'", "\\'");
+    // jsonEncode properly escapes all special chars; produces "quoted" strings
+    final safeExpected = expectedBlobSrc != null ? jsonEncode(expectedBlobSrc) : 'null';
     final expectedRectJson = expectedRect != null
         ? jsonEncode(expectedRect)
         : 'null';
-    final escapedToken = overlayToken?.replaceAll("'", "\\'");
+    final safeToken = overlayToken != null ? jsonEncode(overlayToken) : 'null';
     final result = await controller.evaluateJavascript(
       source:
           '''
 (function() {
-  var expected = ${escapedExpected != null ? "'$escapedExpected'" : 'null'};
+  var expected = $safeExpected;
   var expectedRect = $expectedRectJson;
-  var overlayToken = ${escapedToken != null ? "'$escapedToken'" : 'null'};
+  var overlayToken = $safeToken;
   function findReaderRoot() {
     return document.querySelector(
       '#kr-renderer, #kindle-reader-content, .reader-content, ' +
@@ -263,7 +264,7 @@ class OverlayController {
   // blob URLs on each page visit, so the old originalSrc would be stale).
   target.dataset.frankOriginalSrc = target.src;
 
-  // Convert base64 to blob URL
+  // Convert base64 to blob URL (base64 is safe: A-Za-z0-9+/= only)
   var b64Len = '$base64Data'.length;
   console.log('[Frank] base64 length=' + b64Len);
   var binary;
@@ -378,11 +379,12 @@ class OverlayController {
     Map<String, num>? expectedRect,
     String? overlayToken,
   }) async {
-    final escapedExpected = expectedBlobSrc?.replaceAll("'", "\\'");
+    // jsonEncode properly escapes all special chars; produces "quoted" strings
+    final safeExpected = expectedBlobSrc != null ? jsonEncode(expectedBlobSrc) : 'null';
     final expectedRectJson = expectedRect != null
         ? jsonEncode(expectedRect)
         : 'null';
-    final escapedToken = overlayToken?.replaceAll("'", "\\'");
+    final safeToken = overlayToken != null ? jsonEncode(overlayToken) : 'null';
 
     final raw = await controller.evaluateJavascript(
       source:
@@ -463,9 +465,9 @@ class OverlayController {
     };
   }
 
-  var expected = ${escapedExpected != null ? "'$escapedExpected'" : 'null'};
+  var expected = $safeExpected;
   var expectedRect = $expectedRectJson;
-  var token = ${escapedToken != null ? "'$escapedToken'" : 'null'};
+  var token = $safeToken;
   var root = findReaderRoot();
   var rootRect = root.getBoundingClientRect ? root.getBoundingClientRect() : null;
   var imgs = root.querySelectorAll('img');
