@@ -984,6 +984,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _cancelKindleReappliesFor(pageId);
 
     // One short post-apply pass handles most Kindle repaint churn.
+    // 260ms sits just after Kindle's typical compositor flush (~200-250ms)
+    // while staying under the threshold where users notice a flicker.
     final delays = <int>[260];
     final timers = <Timer>[];
     _kindleOverlayTimers[pageId] = timers;
@@ -1031,6 +1033,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     String? baseToken,
   }) {
     _cancelKindleReappliesFor(pageId);
+    // Exponential-ish backoff tuned to Kindle's page-load lifecycle:
+    //   180ms — catch fast repaint after initial blob swap
+    //   420ms — after Kindle's JS page-turn animation settles
+    //   820ms — after lazy image decode on slower devices
+    //  1400ms — final attempt covering network-loaded page assets
     final delays = <int>[180, 420, 820, 1400];
     final timers = <Timer>[];
     _kindleOverlayTimers[pageId] = timers;

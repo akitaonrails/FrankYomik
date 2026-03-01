@@ -13,10 +13,14 @@ class CacheService {
   String? _cacheDir;
   final Completer<void> _initCompleter = Completer<void>();
 
-  /// Max age for cached entries (30 days).
+  /// Max age for cached entries before eviction. 30 days balances disk usage
+  /// against the cost of re-translating pages. Could be made configurable via
+  /// SharedPreferences if users want longer retention.
   static const maxAgeDays = 30;
 
-  /// Max total cache size in bytes (500 MB).
+  /// Max total cache size before oldest entries are evicted. 500 MB is
+  /// roughly ~2500 translated manga pages (avg ~200 KB each). Could be made
+  /// configurable for devices with limited storage.
   static const maxCacheBytes = 500 * 1024 * 1024;
 
   /// In-memory hash → translated image cache for instant re-visit lookups.
