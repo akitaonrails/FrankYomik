@@ -328,6 +328,13 @@ def _detect_bubbles_single(img_cv: np.ndarray) -> list[dict]:
             # each individual check by narrow margins.
             if solidity < 0.63 and circularity < 0.20:
                 continue
+            # Very small contours near MIN_BUBBLE_AREA with low
+            # circularity are almost always false positives (face
+            # fragments, SFX debris).  Data from 12 user-marked pages:
+            # all small FPs had circ < 0.55 while small OKs > 0.73.
+            # Conservative area cap avoids rejecting legitimate bubbles.
+            if area < 2100 and circularity < 0.25:
+                continue
 
         # 5. Border darkness
         border_mask = np.zeros(gray.shape, dtype=np.uint8)
