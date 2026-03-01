@@ -7,6 +7,9 @@ __pycache__/
 # Output (generated images)
 output/
 
+# Server cache (bind-mounted from docker-compose)
+cache/
+
 # Webtoon downloaded images
 webtoon_data/
 

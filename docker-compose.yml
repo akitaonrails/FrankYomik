@@ -48,7 +48,7 @@ services:
   init-perms:
     image: busybox
     volumes:
-      - shared-cache:/data/cache
+      - ./cache:/data/cache
     command: ["sh", "-c", "chown -R 65532:65532 /data/cache"]
     restart: "no"
 
@@ -63,7 +63,7 @@ services:
       AUTH_TOKEN: ${AUTH_TOKEN:?Set AUTH_TOKEN in .env or environment}
       CACHE_DIR: /data/cache
     volumes:
-      - shared-cache:/data/cache
+      - ./cache:/data/cache
     depends_on:
       redis:
         condition: service_healthy
@@ -79,7 +79,7 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
     volumes:
-      - shared-cache:/app/cache
+      - ./cache:/app/cache
       - mangaocr-cache:/home/worker/.cache/manga_ocr
       - huggingface-cache:/home/worker/.cache/huggingface
       - easyocr-cache:/home/worker/.EasyOCR
@@ -104,7 +104,6 @@ services:
 volumes:
   redis-data:
   ollama-models:
-  shared-cache:
   mangaocr-cache:
   huggingface-cache:
   easyocr-cache:

@@ -11,13 +11,11 @@ for pattern in "frank:results:*" "frank:images:*" "frank:meta:*" "frank:notify:*
   docker compose exec -T redis redis-cli --no-auth-warning --scan --pattern "$pattern" \
     | xargs -r docker compose exec -T redis redis-cli --no-auth-warning DEL
 done
-# Dedup is a single hash key
 docker compose exec -T redis redis-cli --no-auth-warning DEL frank:dedup
 echo "    Done."
 
-echo "==> Clearing v2 filesystem cache..."
-docker compose exec api rm -rf /data/cache/v2
-docker compose exec worker rm -rf /app/cache/v2
+echo "==> Clearing filesystem cache..."
+rm -rf ./cache/v2
 echo "    Done."
 
 echo ""
