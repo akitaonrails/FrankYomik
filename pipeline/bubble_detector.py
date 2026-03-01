@@ -409,6 +409,83 @@ def _detect_bubbles_single(img_cv: np.ndarray) -> list[dict]:
             "contour": cnt,
         })
 
+    # ── Supplementary edge-based detection ──
+    # Standard thresholding can miss bubbles whose white interior merges
+    # with the page background.  Edge-based segmentation uses ink borders
+    # as barriers to isolate such regions.  Only novel candidates (no
+    # significant overlap with existing detections) are kept, and each
+    # must pass the same quality filters as the main pass.
+    existing_bboxes = [c["bbox"] for c in candidates]
+    edge_kernel_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    edges_thick = cv2.dilate(edges, edge_kernel_3, iterations=2)
+    interior = cv2.bitwise_not(edges_thick)
+    _, bright_180 = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+    edge_segmented = cv2.bitwise_and(interior, bright_180)
+    seg_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edge_segmented = cv2.morphologyEx(
+        edge_segmented, cv2.MORPH_CLOSE, seg_kernel, iterations=2)
+    edge_segmented = cv2.morphologyEx(
+        edge_segmented, cv2.MORPH_OPEN, seg_kernel, iterations=1)
+    edge_contours, _ = cv2.findContours(
+        edge_segmented, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    for cnt in edge_contours:
+        area = cv2.contourArea(cnt)
+        if area < MIN_BUBBLE_AREA or area > page_area * 0.05:
+            continue
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        aspect = max(bw, bh) / max(min(bw, bh), 1)
+        if aspect > 4:
+            continue
+        hull = cv2.convexHull(cnt)
+        hull_area = cv2.contourArea(hull)
+        solidity = area / hull_area if hull_area > 0 else 0
+        if solidity < 0.75:
+            continue
+        perimeter = cv2.arcLength(cnt, True)
+        circ = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
+        if circ < 0.30:
+            continue
+        # Skip if overlaps any existing detection
+        bbox = (x, y, x + bw, y + bh)
+        if any(_overlap_ratio(bbox, eb) > 0.3 or _overlap_ratio(eb, bbox) > 0.3
+               for eb in existing_bboxes):
+            continue
+        # Apply same interior filters: brightness, edge density, border darkness
+        mask = np.zeros(gray.shape, dtype=np.uint8)
+        cv2.drawContours(mask, [cnt], -1, 255, -1)
+        bright_px = cv2.countNonZero(cv2.bitwise_and(bright_thresh, mask))
+        b_ratio = bright_px / area
+        if b_ratio < min_bright_ratio:
+            continue
+        # Edge-based contours sit closer to text strokes, so edge density
+        # is naturally ~0.02 higher.  Relax threshold slightly (the strict
+        # solidity + circularity requirements compensate).
+        edge_px = cv2.countNonZero(cv2.bitwise_and(edges, edges, mask=mask))
+        if edge_px / area > max_edge_density + 0.02:
+            continue
+        # Skip border darkness check: edge-segmented contours trace the
+        # inside of ink borders, so the 3px outer ring hits white page
+        # background (bright) rather than the dark ink outline.  The
+        # strict solidity + circularity + dark-text checks compensate.
+
+        # Must contain dark text strokes
+        erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        inner_mask = cv2.erode(mask, erode_k, iterations=1)
+        inner_area = cv2.countNonZero(inner_mask)
+        if inner_area > 100:
+            very_dark = np.sum((inner_mask > 0) & (gray < 60))
+            if very_dark == 0:
+                continue
+        log.info("Edge-based supplementary detection at (%d,%d,%d,%d)",
+                 x, y, x + bw, y + bh)
+        candidates.append({
+            "bbox": bbox,
+            "type": "speech_bubble",
+            "area": area,
+            "contour": cnt,
+        })
+
     # Try to split merged bubbles (two overlapping bubbles detected as one)
     split_candidates = []
     for c in candidates:
