@@ -85,6 +85,45 @@ def detect_page_bubbles(page: PageResult) -> None:
     log.info("Found %d bubbles in %s", len(page.bubbles_raw), page.name)
 
 
+def _ocr_char_overlap(text1: str, text2: str) -> float:
+    """Fraction of content chars in text1 that also appear in text2."""
+    chars1 = set(ch for ch in text1
+                 if not (0x3000 <= ord(ch) <= 0x303F or
+                         0xFF01 <= ord(ch) <= 0xFF60 or
+                         ch.isspace()))
+    chars2 = set(ch for ch in text2
+                 if not (0x3000 <= ord(ch) <= 0x303F or
+                         0xFF01 <= ord(ch) <= 0xFF60 or
+                         ch.isspace()))
+    if not chars1:
+        return 1.0
+    return len(chars1 & chars2) / len(chars1)
+
+
+def _verify_ocr_consistency(img_pil: Image.Image, bbox: tuple,
+                            text: str) -> bool:
+    """Detect manga-ocr hallucinations by comparing full vs center crop.
+
+    Real text produces overlapping OCR across different crops; hallucinated
+    text (e.g. on faces) produces unrelated strings each time.  Only called
+    for short texts (< 15 chars) where hallucination risk is highest.
+    """
+    x1, y1, x2, y2 = bbox
+    w, h = x2 - x1, y2 - y1
+    if w < 20 or h < 20:
+        return True
+    # Shrink bbox by 15% on each side → center 70%
+    dx, dy = max(3, w * 15 // 100), max(3, h * 15 // 100)
+    center_bbox = (x1 + dx, y1 + dy, x2 - dx, y2 - dy)
+    center_text = extract_text_from_region(img_pil, center_bbox)
+    overlap = _ocr_char_overlap(text, center_text)
+    if overlap < 0.35:
+        log.info("  OCR hallucination rejected (overlap=%.2f): %s vs %s",
+                 overlap, text, center_text)
+        return False
+    return True
+
+
 def ocr_bubble(img_pil: Image.Image, bubble: dict) -> BubbleResult:
     """Stage 3: OCR + validation for a single bubble."""
     bbox = bubble["bbox"]
@@ -92,6 +131,12 @@ def ocr_bubble(img_pil: Image.Image, bubble: dict) -> BubbleResult:
     is_artwork = bubble.get("is_artwork", False)
     text = extract_text_from_region(img_pil, bbox)
     valid = bool(text.strip()) and is_valid_japanese(text)
+    # Detect manga-ocr hallucinations on non-text regions (faces, artwork).
+    # Short texts are most prone to hallucination — verify by checking OCR
+    # consistency across a center crop.
+    if valid and len(text.strip()) < 15:
+        if not _verify_ocr_consistency(img_pil, bbox, text):
+            valid = False
     if text.strip() and not valid:
         log.info("  OCR noise (not Japanese): %s, skipping", text)
     elif valid:
