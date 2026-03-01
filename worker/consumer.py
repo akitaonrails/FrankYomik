@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import re
 import signal
 import time
 import hashlib
@@ -27,10 +26,11 @@ HEARTBEAT_PREFIX = "frank:worker:"
 PROGRESS_PREFIX = "frank:progress:"
 META_BY_HASH_PREFIX = "frank:meta:"
 
-# TTLs
-RESULT_TTL = 3600  # 1 hour
-HEARTBEAT_TTL = 60  # seconds
-PROGRESS_TTL = 60  # seconds
+# Default TTLs (overridden by config.yaml worker: section)
+DEFAULT_RESULT_TTL = 3600  # 1 hour
+DEFAULT_HEARTBEAT_TTL = 60  # seconds
+DEFAULT_PROGRESS_TTL = 60  # seconds
+DEFAULT_HIGH_BURST_BEFORE_LOW = 3
 
 
 def _redact_url(url_str: str) -> str:
@@ -48,37 +48,30 @@ def _redact_url(url_str: str) -> str:
     return url_str
 
 
-_SLUG_RE = re.compile(r"[^a-z0-9\-]")
-
-
-def _slugify(s: str) -> str:
-    """Convert a string to a lowercase, hyphen-separated slug."""
-    s = s.lower().strip().replace(" ", "-")
-    s = _SLUG_RE.sub("", s)
-    while "--" in s:
-        s = s.replace("--", "-")
-    return s.strip("-")
-
-
 class Consumer:
     """Redis stream consumer with two-stream priority."""
-
-    # Process at most this many high-priority jobs consecutively before giving
-    # low-priority prefetch jobs a chance. Keeps "current page first" behavior
-    # while preventing low queue starvation during continuous reading.
-    HIGH_BURST_BEFORE_LOW = 3
 
     def __init__(self, redis_url: str, consumer_group: str = "workers",
                  consumer_name: str | None = None,
                  heartbeat_interval: int = 30,
                  job_timeout: int = 300,
-                 cache_dir: str = "./cache"):
+                 cache_dir: str = "./cache",
+                 result_ttl: int = DEFAULT_RESULT_TTL,
+                 heartbeat_ttl: int = DEFAULT_HEARTBEAT_TTL,
+                 progress_ttl: int = DEFAULT_PROGRESS_TTL,
+                 high_burst_before_low: int = DEFAULT_HIGH_BURST_BEFORE_LOW):
         self.redis_url = redis_url
         self.consumer_group = consumer_group
         self.consumer_name = consumer_name or f"worker-{os.getpid()}"
         self.heartbeat_interval = heartbeat_interval
         self.job_timeout = job_timeout
         self.cache_dir = cache_dir
+        self.result_ttl = result_ttl
+        self.heartbeat_ttl = heartbeat_ttl
+        self.progress_ttl = progress_ttl
+        # Process at most this many high-priority jobs consecutively before
+        # giving low-priority prefetch jobs a chance.
+        self.high_burst_before_low = high_burst_before_low
         self._page_cache = PageCache(cache_dir)
         self._running = False
         log.info("Cache v2 directory: %s", os.path.abspath(cache_dir))
@@ -150,7 +143,7 @@ class Consumer:
         msg = None
 
         # After a burst of high jobs, probe low first to avoid starvation.
-        if self._high_streak >= self.HIGH_BURST_BEFORE_LOW:
+        if self._high_streak >= self.high_burst_before_low:
             msg = self._read_one(STREAM_LOW, block_ms=100)
             if msg is None:
                 msg = self._read_one(STREAM_HIGH, block_ms=100)
@@ -326,11 +319,11 @@ class Consumer:
             "render_hash": result.render_hash,
         }
         meta_key = f"{RESULT_KEY_PREFIX}{result.job_id}"
-        self._rdb.set(meta_key, json.dumps(meta), ex=RESULT_TTL)
+        self._rdb.set(meta_key, json.dumps(meta), ex=self.result_ttl)
 
         if result.image_bytes:
             img_key = f"{RESULT_IMG_PREFIX}{result.job_id}"
-            self._rdb.set(img_key, result.image_bytes, ex=RESULT_TTL)
+            self._rdb.set(img_key, result.image_bytes, ex=self.result_ttl)
 
         # Store metadata payload in Redis keyed by pipeline:source_hash so the
         # server can serve it even when the v2 disk cache path doesn't match.
@@ -344,7 +337,7 @@ class Consumer:
                 "render_hash": result.render_hash,
                 "metadata": result.metadata_payload,
             })
-            self._rdb.set(meta_hash_key, meta_hash_val, ex=RESULT_TTL)
+            self._rdb.set(meta_hash_key, meta_hash_val, ex=self.result_ttl)
 
         # Publish notification for WebSocket subscribers
         notify_channel = f"{NOTIFY_PREFIX}{result.job_id}"
@@ -363,7 +356,7 @@ class Consumer:
         progress_json = json.dumps(progress)
         # Store current progress (for polling)
         progress_key = f"{PROGRESS_PREFIX}{job_id}"
-        self._rdb.set(progress_key, progress_json, ex=PROGRESS_TTL)
+        self._rdb.set(progress_key, progress_json, ex=self.progress_ttl)
         # Publish for WebSocket subscribers
         notify_channel = f"{NOTIFY_PREFIX}{job_id}"
         self._rdb.publish(notify_channel, progress_json)
@@ -399,24 +392,10 @@ class Consumer:
             log.error("Failed to cache v2 result for %s/%s: %s",
                       pipeline, source_hash[:12], e)
 
-    def _cache_to_filesystem(self, pipeline: str, title: str, chapter: str,
-                             page_number: str, image_bytes: bytes) -> None:
-        """Legacy image-only cache write kept for backward compatibility."""
-        slug = _slugify(title)
-        cache_path = os.path.join(self.cache_dir, pipeline, slug, chapter,
-                                  f"{page_number}.png")
-        try:
-            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            with open(cache_path, "wb") as f:
-                f.write(image_bytes)
-            log.info("Cached legacy result to %s", cache_path)
-        except OSError as e:
-            log.warning("Failed to cache legacy result: %s", e)
-
     def _heartbeat(self) -> None:
         """Update worker heartbeat key in Redis."""
         key = f"{HEARTBEAT_PREFIX}{self.consumer_name}:heartbeat"
-        self._rdb.set(key, str(int(time.time())), ex=HEARTBEAT_TTL)
+        self._rdb.set(key, str(int(time.time())), ex=self.heartbeat_ttl)
         self._last_heartbeat = time.monotonic()
 
     def _handle_signal(self, signum, frame) -> None:

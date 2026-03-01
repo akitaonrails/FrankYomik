@@ -104,3 +104,7 @@ worker:
   heartbeat_interval: 30
   job_timeout: 300
   cache_dir: "./cache"
+  result_ttl: 3600          # Redis result expiry (seconds)
+  heartbeat_ttl: 60         # Redis heartbeat key expiry (seconds)
+  progress_ttl: 60          # Redis progress key expiry (seconds)
+  high_burst_before_low: 3  # Max consecutive high-priority jobs before probing low

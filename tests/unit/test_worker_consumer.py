@@ -10,15 +10,19 @@ from worker.consumer import (
     IMAGE_KEY_PREFIX,
     NOTIFY_PREFIX,
     PROGRESS_PREFIX,
-    PROGRESS_TTL,
+    DEFAULT_PROGRESS_TTL,
     RESULT_IMG_PREFIX,
     RESULT_KEY_PREFIX,
-    RESULT_TTL,
-    HEARTBEAT_TTL,
+    DEFAULT_RESULT_TTL,
+    DEFAULT_HEARTBEAT_TTL,
     STREAM_HIGH,
     STREAM_LOW,
-    _slugify,
 )
+
+# Aliases for backward-compat with test assertions
+RESULT_TTL = DEFAULT_RESULT_TTL
+HEARTBEAT_TTL = DEFAULT_HEARTBEAT_TTL
+PROGRESS_TTL = DEFAULT_PROGRESS_TTL
 from worker.job import ProcessingResult
 
 
@@ -442,7 +446,7 @@ class TestTick:
 
     def test_checks_low_first_after_high_burst(self):
         c = _make_consumer()
-        c._high_streak = c.HIGH_BURST_BEFORE_LOW
+        c._high_streak = c.high_burst_before_low
         call_order = []
 
         def mock_read(stream, block_ms):
@@ -457,7 +461,7 @@ class TestTick:
 
     def test_resets_high_streak_when_low_processed(self):
         c = _make_consumer()
-        c._high_streak = c.HIGH_BURST_BEFORE_LOW
+        c._high_streak = c.high_burst_before_low
 
         def mock_read(stream, block_ms):
             if stream == STREAM_LOW:
@@ -514,26 +518,6 @@ class TestStreamConstants:
         assert PROGRESS_TTL == 60
 
 
-# --- _slugify ---
-
-
-class TestSlugify:
-    def test_basic(self):
-        assert _slugify("One Piece") == "one-piece"
-
-    def test_already_slugified(self):
-        assert _slugify("tower-of-god") == "tower-of-god"
-
-    def test_strips_special_chars(self):
-        assert _slugify("Test Manga!@#") == "test-manga"
-
-    def test_strips_whitespace(self):
-        assert _slugify("  spaces  ") == "spaces"
-
-    def test_collapses_hyphens(self):
-        assert _slugify("a---b") == "a-b"
-
-
 # --- _publish_progress ---
 
 
@@ -565,34 +549,6 @@ class TestPublishProgress:
         assert payload["job_id"] == "j-2"
         assert payload["stage"] == "detecting_bubbles"
         assert payload["percent"] == 10
-
-
-# --- _cache_to_filesystem ---
-
-
-class TestCacheToFilesystem:
-    def test_creates_file(self, tmp_path):
-        c = _make_consumer(cache_dir=str(tmp_path))
-        c._cache_to_filesystem("manga_translate", "One Piece", "1", "003",
-                               b"fake-png")
-
-        cached_file = tmp_path / "manga_translate" / "one-piece" / "1" / "003.png"
-        assert cached_file.exists()
-        assert cached_file.read_bytes() == b"fake-png"
-
-    def test_handles_special_chars_in_title(self, tmp_path):
-        c = _make_consumer(cache_dir=str(tmp_path))
-        c._cache_to_filesystem("webtoon", "Tower of God!", "297", "038",
-                               b"img-data")
-
-        cached_file = tmp_path / "webtoon" / "tower-of-god" / "297" / "038.png"
-        assert cached_file.exists()
-
-    def test_no_error_on_bad_path(self, tmp_path):
-        """Should log warning but not raise on write failure."""
-        c = _make_consumer(cache_dir="/nonexistent/readonly/path")
-        # This should not raise
-        c._cache_to_filesystem("manga_translate", "test", "1", "1", b"data")
 
 
 # --- _process_message with metadata ---

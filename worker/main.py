@@ -39,6 +39,10 @@ def main() -> None:
     consumer_group = worker_cfg.get("consumer_group", "workers")
     heartbeat_interval = worker_cfg.get("heartbeat_interval", 30)
     job_timeout = worker_cfg.get("job_timeout", 300)
+    result_ttl = worker_cfg.get("result_ttl", 3600)
+    heartbeat_ttl = worker_cfg.get("heartbeat_ttl", 60)
+    progress_ttl = worker_cfg.get("progress_ttl", 60)
+    high_burst_before_low = worker_cfg.get("high_burst_before_low", 3)
 
     log.info("Starting worker (pipeline=%s, redis=%s)", args.pipeline, redis_url)
 
@@ -53,6 +57,10 @@ def main() -> None:
         heartbeat_interval=heartbeat_interval,
         job_timeout=job_timeout,
         cache_dir=cache_dir,
+        result_ttl=result_ttl,
+        heartbeat_ttl=heartbeat_ttl,
+        progress_ttl=progress_ttl,
+        high_burst_before_low=high_burst_before_low,
     )
     consumer.connect()
     consumer.run()
