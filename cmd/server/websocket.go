@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -13,7 +15,20 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Auth is handled by middleware
+		// If CORS_ORIGINS is set, only allow those origins (defense-in-depth).
+		// Default: accept all (auth middleware already validates the token).
+		allowed := os.Getenv("CORS_ORIGINS")
+		if allowed == "" {
+			return true
+		}
+		origin := r.Header.Get("Origin")
+		for _, o := range strings.Split(allowed, ",") {
+			if strings.TrimSpace(o) == origin {
+				return true
+			}
+		}
+		log.Printf("WARN: WS origin %q rejected (allowed: %s)", origin, allowed)
+		return false
 	},
 }
 
@@ -94,7 +109,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case "subscribe":
 			for _, jobID := range msg.JobIDs {
 				s.subscribe(jobID, notifCh)
-				log.Printf("WS subscribed to job %s", jobID)
 			}
 		case "unsubscribe":
 			// Unsubscribe specific jobs
