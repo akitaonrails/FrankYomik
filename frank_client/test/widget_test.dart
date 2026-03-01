@@ -533,7 +533,7 @@ void main() {
 
     test('metadata loading logs region count on success', () {
       expect(readerSource.contains('regions'), true);
-      expect(readerSource.contains('Loaded metadata for'), true);
+      expect(readerSource.contains('Server metadata for'), true);
     });
 
     test('feedback save applies overlay directly (not re-capture)', () {

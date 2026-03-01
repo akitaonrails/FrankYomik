@@ -152,7 +152,7 @@ class CacheService {
   }
 
   /// Update metadata JSON for an existing cache entry.
-  Future<void> updateMetadata(String hash, String pipeline, String metadataJson) async {
+  Future<void> updateMetadata(String hash, String pipeline, String? metadataJson) async {
     await ready;
     await _db?.update(
       'pages',

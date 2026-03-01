@@ -72,7 +72,10 @@ class ApiService {
     );
     final response = await _client.get(uri, headers: _headers(settings));
     if (response.statusCode != 200) {
-      throw ApiException('Meta fetch failed (${response.statusCode})');
+      throw ApiException(
+        'Meta fetch failed (${response.statusCode})',
+        statusCode: response.statusCode,
+      );
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }

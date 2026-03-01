@@ -2248,73 +2248,61 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     _metadataLoadingPageIds.add(pageId);
     try {
-      // Try local SQLite cache first (works offline / when server cache is empty)
-      if (!force) {
-        final cache = ref.read(cacheServiceProvider);
-        final localJson = await cache.lookupMetadataByHash(sourceHash, pipeline);
-        if (localJson != null) {
-          try {
-            final resp = jsonDecode(localJson) as Map<String, dynamic>;
-            final metadata = resp['metadata'];
-            if (metadata is Map) {
-              final regions = metadata['regions'];
-              debugPrint(
-                '[Feedback] Local cache metadata for $pageId: '
-                '${regions is List ? regions.length : 0} regions',
-              );
-              _metadataByPageId[pageId] = {
-                'pipeline': pipeline,
-                'sourceHash': sourceHash,
-                'contentHash': resp['content_hash'],
-                'renderHash': resp['render_hash'],
-                'metadata': Map<String, dynamic>.from(metadata),
-              };
-              _syncFeedbackMarksOverlay();
-              return;
-            }
-          } catch (e) {
-            debugPrint('[Feedback] Local metadata parse failed for $pageId: $e');
-            // Fall through to server fetch
-          }
+      // Server is ground truth — always fetch from server first.
+      // Local SQLite cache is only a fallback for network errors.
+      final api = ref.read(apiServiceProvider);
+      final settings = ref.read(settingsProvider);
+      final cache = ref.read(cacheServiceProvider);
+      bool serverOk = false;
+      try {
+        final resp = await api.getCacheMetadataByHash(
+          settings: settings,
+          pipeline: pipeline,
+          sourceHash: sourceHash,
+        );
+        final metadata = resp['metadata'];
+        if (metadata is! Map) {
+          // Server returned response but no usable metadata — expire local
+          await cache.updateMetadata(sourceHash, pipeline, null);
+          return;
+        }
+        final regions = metadata['regions'];
+        debugPrint(
+          '[Feedback] Server metadata for $pageId: '
+          '${regions is List ? regions.length : 0} regions',
+        );
+        _metadataByPageId[pageId] = {
+          'pipeline': pipeline,
+          'sourceHash': sourceHash,
+          'contentHash': resp['content_hash'],
+          'renderHash': resp['render_hash'],
+          'metadata': Map<String, dynamic>.from(metadata),
+        };
+        if (force) {
+          _metadataOriginalByPageId.remove(pageId);
+          _dirtyMetadataPageIds.remove(pageId);
+          _syncFeedbackActionButtons();
+        }
+        _syncFeedbackMarksOverlay();
+        serverOk = true;
+
+        // Persist to local cache for future sessions
+        try {
+          await cache.updateMetadata(sourceHash, pipeline, jsonEncode(resp));
+        } catch (_) {}
+      } on ApiException catch (e) {
+        if (e.statusCode == 404) {
+          // Server doesn't have this page — expire stale local metadata
+          debugPrint(
+            '[Feedback] Server 404 for $pageId — expiring stale local metadata',
+          );
+          await cache.updateMetadata(sourceHash, pipeline, null);
+        } else {
+          rethrow;
         }
       }
 
-      final api = ref.read(apiServiceProvider);
-      final settings = ref.read(settingsProvider);
-      final resp = await api.getCacheMetadataByHash(
-        settings: settings,
-        pipeline: pipeline,
-        sourceHash: sourceHash,
-      );
-      final metadata = resp['metadata'];
-      if (metadata is! Map) {
-        return;
-      }
-      final regions = metadata['regions'];
-      debugPrint(
-        '[Feedback] Loaded metadata for $pageId: '
-        '${regions is List ? regions.length : 0} regions',
-      );
-      _metadataByPageId[pageId] = {
-        'pipeline': pipeline,
-        'sourceHash': sourceHash,
-        'contentHash': resp['content_hash'],
-        'renderHash': resp['render_hash'],
-        'metadata': Map<String, dynamic>.from(metadata),
-      };
-      if (force) {
-        _metadataOriginalByPageId.remove(pageId);
-        _dirtyMetadataPageIds.remove(pageId);
-        _syncFeedbackActionButtons();
-      }
-      _syncFeedbackMarksOverlay();
-
-      // Persist to local cache for future sessions
-      try {
-        final cache = ref.read(cacheServiceProvider);
-        await cache.updateMetadata(sourceHash, pipeline, jsonEncode(resp));
-      } catch (e) {
-      }
+      if (!serverOk) return;
     } catch (e) {
       debugPrint('[Feedback] Failed to load metadata for $pageId (attempt ${retryCount + 1}): $e');
       // Retry once after a delay — server cache may still be flushing after
