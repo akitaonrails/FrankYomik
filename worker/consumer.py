@@ -107,6 +107,17 @@ class Consumer:
                     self.connect()
                 except Exception:
                     log.exception("Reconnection failed")
+            except redis.ResponseError as e:
+                if "NOGROUP" in str(e):
+                    log.warning("Consumer group gone, re-creating...")
+                    try:
+                        self.connect()
+                    except Exception:
+                        log.exception("Re-create consumer group failed")
+                    time.sleep(1)
+                else:
+                    log.exception("Redis error in consumer loop")
+                    time.sleep(1)
             except Exception:
                 log.exception("Unexpected error in consumer loop")
                 time.sleep(1)
