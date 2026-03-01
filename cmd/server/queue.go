@@ -37,6 +37,7 @@ type JobMetadata struct {
 	PageNumber           string
 	SourceURL            string
 	RerenderFromMetadata bool
+	ForceReprocess       bool
 }
 
 // SubmitJob stores the image, deduplicates, and enqueues a job.
@@ -44,7 +45,7 @@ type JobMetadata struct {
 func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, priority string, meta *JobMetadata) (string, bool, error) {
 	// Compute SHA256 for dedup
 	hash := fmt.Sprintf("%x", sha256.Sum256(imageBytes))
-	forceNew := meta != nil && meta.RerenderFromMetadata
+	forceNew := meta != nil && (meta.RerenderFromMetadata || meta.ForceReprocess)
 
 	// Check dedup (keyed by hash + pipeline to avoid cross-pipeline collisions)
 	dedupField := hash + ":" + pipeline

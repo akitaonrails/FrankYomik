@@ -43,6 +43,8 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   CacheService get _cache => _ref.read(cacheServiceProvider);
 
   /// Submit a page for translation.
+  /// When [force] is true, bypass all local and server caches and reprocess
+  /// from scratch.
   Future<void> submitPage({
     required String pageId,
     required Uint8List imageBytes,
@@ -52,49 +54,14 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     String? pageNumber,
     String? sourceUrl,
     String priority = 'high',
+    bool force = false,
   }) async {
     // Check local cache first (hash-based — works for re-visits)
     final effectivePipeline = pipeline ?? _settings.pipeline;
     final hash = await _cache.hashImage(imageBytes);
-    final cached = await _cache.lookupByHash(hash, effectivePipeline);
-    if (cached != null) {
-      state = {
-        ...state,
-        pageId: PageJob(
-          pageId: pageId,
-          title: title,
-          chapter: chapter,
-          pageNumber: pageNumber,
-          pipeline: effectivePipeline,
-          status: PageJobStatus.completed,
-          translatedImage: cached,
-          cached: true,
-          sourceHash: hash,
-        ),
-      };
-      // Backfill metadata for pages cached before metadata storage existed.
-      unawaited(_backfillMetadataIfMissing(
-        hash: hash,
-        pipeline: effectivePipeline,
-        imageBytes: imageBytes,
-        title: title,
-        chapter: chapter,
-        pageNumber: pageNumber,
-        sourceUrl: sourceUrl,
-        priority: 'low',
-      ));
-      return;
-    }
-
-    // Also check by metadata (title/chapter/page)
-    if (title != null && chapter != null && pageNumber != null) {
-      final metaCached = await _cache.lookupByMetadata(
-        effectivePipeline,
-        title,
-        chapter,
-        pageNumber,
-      );
-      if (metaCached != null) {
+    if (!force) {
+      final cached = await _cache.lookupByHash(hash, effectivePipeline);
+      if (cached != null) {
         state = {
           ...state,
           pageId: PageJob(
@@ -104,7 +71,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             pageNumber: pageNumber,
             pipeline: effectivePipeline,
             status: PageJobStatus.completed,
-            translatedImage: metaCached,
+            translatedImage: cached,
             cached: true,
             sourceHash: hash,
           ),
@@ -121,6 +88,44 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           priority: 'low',
         ));
         return;
+      }
+
+      // Also check by metadata (title/chapter/page)
+      if (title != null && chapter != null && pageNumber != null) {
+        final metaCached = await _cache.lookupByMetadata(
+          effectivePipeline,
+          title,
+          chapter,
+          pageNumber,
+        );
+        if (metaCached != null) {
+          state = {
+            ...state,
+            pageId: PageJob(
+              pageId: pageId,
+              title: title,
+              chapter: chapter,
+              pageNumber: pageNumber,
+              pipeline: effectivePipeline,
+              status: PageJobStatus.completed,
+              translatedImage: metaCached,
+              cached: true,
+              sourceHash: hash,
+            ),
+          };
+          // Backfill metadata for pages cached before metadata storage existed.
+          unawaited(_backfillMetadataIfMissing(
+            hash: hash,
+            pipeline: effectivePipeline,
+            imageBytes: imageBytes,
+            title: title,
+            chapter: chapter,
+            pageNumber: pageNumber,
+            sourceUrl: sourceUrl,
+            priority: 'low',
+          ));
+          return;
+        }
       }
     }
 
@@ -148,6 +153,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         pageNumber: pageNumber,
         sourceUrl: sourceUrl,
         priority: priority,
+        force: force,
       );
 
       final jobId = response['job_id'] as String;

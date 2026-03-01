@@ -21,6 +21,7 @@ class ApiService {
     String? pageNumber,
     String? sourceUrl,
     String priority = 'high',
+    bool force = false,
   }) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/jobs');
     final request = http.MultipartRequest('POST', uri)
@@ -35,6 +36,7 @@ class ApiService {
     if (chapter != null) request.fields['chapter'] = chapter;
     if (pageNumber != null) request.fields['page_number'] = pageNumber;
     if (sourceUrl != null) request.fields['source_url'] = sourceUrl;
+    if (force) request.fields['force'] = 'true';
 
     final response = await _client.send(request);
     final body = await response.stream.bytesToString();
@@ -98,9 +100,15 @@ class ApiService {
       headers: {..._headers(settings), 'Content-Type': 'application/json'},
       body: jsonEncode(payload),
     );
+    if (response.statusCode == 409) {
+      throw ApiConflictException(
+        'Content hash mismatch — metadata was modified concurrently',
+      );
+    }
     if (response.statusCode != 202) {
       throw ApiException(
         'Meta patch failed (${response.statusCode}): ${response.body}',
+        statusCode: response.statusCode,
       );
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
@@ -157,7 +165,13 @@ class ApiService {
 
 class ApiException implements Exception {
   final String message;
-  ApiException(this.message);
+  final int? statusCode;
+  ApiException(this.message, {this.statusCode});
   @override
   String toString() => 'ApiException: $message';
+}
+
+/// Thrown when a PATCH request hits a 409 Conflict (stale content hash).
+class ApiConflictException extends ApiException {
+  ApiConflictException(super.message) : super(statusCode: 409);
 }

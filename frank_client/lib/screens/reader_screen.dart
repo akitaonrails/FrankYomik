@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../providers/jobs_provider.dart';
 import '../providers/connection_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/api_service.dart';
 import '../services/image_capture_service.dart';
 import '../webview/dom_inspector.dart';
 import '../webview/js_bridge.dart';
@@ -468,8 +469,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   Future<void> _capturePageImage(
     String pageId,
-    Map<String, dynamic> pageInfo,
-  ) async {
+    Map<String, dynamic> pageInfo, {
+    bool force = false,
+  }) async {
     final controller = _webController;
     if (controller == null) return;
 
@@ -532,6 +534,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               title: meta?.title,
               chapter: meta?.chapter,
               sourceUrl: _currentUrl,
+              force: force,
             );
         await ref
             .read(jobsProvider.notifier)
@@ -542,6 +545,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               title: meta?.title,
               chapter: meta?.chapter,
               sourceUrl: _currentUrl,
+              force: force,
             );
 
         _watchForSpreadCompletion(pageId, leftId, rightId);
@@ -617,6 +621,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           chapter: meta?.chapter,
           pageNumber: pageNumber,
           sourceUrl: _currentUrl,
+          force: force,
         );
 
     _updateInPageStatus('Queued $pageId');
@@ -627,7 +632,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// Submit the next batch of webtoon pages (up to _batchSize).
   /// Downloads and submits pages in parallel for faster throughput.
-  Future<void> _submitNextBatch() async {
+  Future<void> _submitNextBatch({bool force = false}) async {
     if (_batchInProgress) return;
     _batchInProgress = true;
 
@@ -659,7 +664,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           final pageInfo = _detectedWebtoonPages[idx]!;
           final pageId = pageInfo['pageId'] as String;
           try {
-            await _capturePageImage(pageId, pageInfo);
+            await _capturePageImage(pageId, pageInfo, force: force);
             // Only mark as submitted if capture+submit succeeded
             _submittedWebtoonIndices.add(idx);
           } catch (e) {
@@ -682,7 +687,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       );
       if (hasMore) {
         Future.delayed(const Duration(milliseconds: 100), () {
-          if (mounted) _submitNextBatch();
+          if (mounted) _submitNextBatch(force: force);
         });
       }
     }
@@ -1096,7 +1101,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 
-  Future<void> _captureAndTranslate() async {
+  Future<void> _captureAndTranslate({bool force = false}) async {
     final controller = _webController;
     if (controller == null) return;
 
@@ -1128,6 +1133,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           chapter: meta?.chapter,
           pageNumber: meta?.pageNumber,
           sourceUrl: _currentUrl,
+          force: force,
         );
 
     _updateInPageStatus('Queued $pageId');
@@ -1750,7 +1756,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             _toggleKindlePipeline();
             break;
           case 'translate':
-            _translateVisiblePages();
+            _translateVisiblePages(force: true);
             break;
           case 'toggle_feedback_mode':
             _toggleOverlayEditMode();
@@ -2579,7 +2585,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       }
       final pipeline = entry['pipeline'] as String?;
       final sourceHash = entry['sourceHash'] as String?;
-      final contentHash = entry['contentHash'] as String?;
+      var contentHash = entry['contentHash'] as String?;
       final metadata = entry['metadata'] as Map<String, dynamic>?;
       if (pipeline == null ||
           sourceHash == null ||
@@ -2589,23 +2595,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         continue;
       }
       try {
-        final patchResp = await api.patchCacheMetadataByHash(
+        final freshImage = await _patchAndRerender(
+          api: api,
           settings: settings,
-          pipeline: pipeline,
-          sourceHash: sourceHash,
-          metadata: metadata,
-          baseContentHash: contentHash,
-        );
-        final rerenderJobId = patchResp['job_id'] as String?;
-        if (rerenderJobId == null || rerenderJobId.isEmpty) {
-          failed++;
-          continue;
-        }
-        await _waitForJobCompletion(rerenderJobId);
-        final freshImage = await _refreshLocalEditedCache(
           pageId: pageId,
           pipeline: pipeline,
           sourceHash: sourceHash,
+          metadata: metadata,
+          contentHash: contentHash,
         );
         if (freshImage != null) {
           savedImages[pageId] = freshImage;
@@ -2657,6 +2654,154 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       }
       _applyOverlay(pid, entry.value);
     }
+  }
+
+  /// PATCH metadata, wait for rerender, fetch fresh image.
+  /// Handles 409 Conflict (stale content hash) by reloading metadata from
+  /// server, re-applying user edits, and retrying once.
+  /// Handles rerender failure by attempting to re-fetch image (covers the
+  /// case where v2 cache completed but Redis notification was lost).
+  Future<Uint8List?> _patchAndRerender({
+    required ApiService api,
+    required dynamic settings,
+    required String pageId,
+    required String pipeline,
+    required String sourceHash,
+    required Map<String, dynamic> metadata,
+    required String? contentHash,
+    int attempt = 0,
+  }) async {
+    Map<String, dynamic> patchResp;
+    try {
+      patchResp = await api.patchCacheMetadataByHash(
+        settings: settings,
+        pipeline: pipeline,
+        sourceHash: sourceHash,
+        metadata: metadata,
+        baseContentHash: contentHash,
+      );
+    } on ApiConflictException {
+      if (attempt > 0) rethrow; // Only retry once
+
+      debugPrint(
+        '[Feedback] 409 Conflict for $pageId — '
+        'reloading metadata and retrying',
+      );
+
+      // Reload fresh metadata from server to get current content hash
+      final freshResp = await api.getCacheMetadataByHash(
+        settings: settings,
+        pipeline: pipeline,
+        sourceHash: sourceHash,
+      );
+      final freshMeta = freshResp['metadata'] as Map<String, dynamic>?;
+      final freshContentHash = freshResp['content_hash'] as String?;
+      if (freshMeta == null) {
+        throw Exception('Could not reload metadata for retry');
+      }
+
+      // Re-apply user edits on top of the fresh server metadata
+      final mergedMeta = _mergeUserEdits(freshMeta, metadata);
+
+      // Update local state with merged metadata
+      _metadataByPageId[pageId] = {
+        'pipeline': pipeline,
+        'sourceHash': sourceHash,
+        'contentHash': freshContentHash,
+        'metadata': mergedMeta,
+      };
+
+      return _patchAndRerender(
+        api: api,
+        settings: settings,
+        pageId: pageId,
+        pipeline: pipeline,
+        sourceHash: sourceHash,
+        metadata: mergedMeta,
+        contentHash: freshContentHash,
+        attempt: 1,
+      );
+    }
+
+    final rerenderJobId = patchResp['job_id'] as String?;
+    if (rerenderJobId == null || rerenderJobId.isEmpty) {
+      throw Exception('No rerender job_id in PATCH response');
+    }
+
+    try {
+      await _waitForJobCompletion(rerenderJobId);
+    } catch (e) {
+      // Rerender failed or timed out — try fetching the image anyway.
+      // The v2 cache may have completed even if Redis notification was lost,
+      // or a previous render might still be usable.
+      debugPrint(
+        '[Feedback] Rerender $rerenderJobId failed ($e) — '
+        'attempting image recovery',
+      );
+      try {
+        final recovered = await _refreshLocalEditedCache(
+          pageId: pageId,
+          pipeline: pipeline,
+          sourceHash: sourceHash,
+        );
+        if (recovered != null) {
+          debugPrint('[Feedback] Recovered image for $pageId after failure');
+          return recovered;
+        }
+      } catch (_) {}
+      rethrow; // Surface the original error
+    }
+
+    return _refreshLocalEditedCache(
+      pageId: pageId,
+      pipeline: pipeline,
+      sourceHash: sourceHash,
+    );
+  }
+
+  /// Merge user edits from the local metadata onto fresh server metadata.
+  /// Preserves user overrides (false_positive, manual_translation) while
+  /// picking up any server-side changes (new regions, updated transforms).
+  Map<String, dynamic> _mergeUserEdits(
+    Map<String, dynamic> serverMeta,
+    Map<String, dynamic> localMeta,
+  ) {
+    final merged = Map<String, dynamic>.from(serverMeta);
+    final serverRegions = serverMeta['regions'];
+    final localRegions = localMeta['regions'];
+    if (serverRegions is! List || localRegions is! List) return merged;
+
+    // Index local regions by id for quick lookup
+    final localById = <String, Map<String, dynamic>>{};
+    for (final r in localRegions) {
+      if (r is Map<String, dynamic>) {
+        final id = r['id'] as String?;
+        if (id != null) localById[id] = r;
+      }
+    }
+
+    final mergedRegions = <Map<String, dynamic>>[];
+    for (final sr in serverRegions) {
+      if (sr is! Map<String, dynamic>) {
+        mergedRegions.add(Map<String, dynamic>.from(sr));
+        continue;
+      }
+      final id = sr['id'] as String?;
+      final local = id != null ? localById[id] : null;
+      if (local != null) {
+        // Overlay user section from local edits onto server region
+        final mergedRegion = Map<String, dynamic>.from(sr);
+        final localUser = local['user'];
+        if (localUser is Map) {
+          mergedRegion['user'] = Map<String, dynamic>.from(localUser);
+        }
+        mergedRegions.add(mergedRegion);
+      } else {
+        mergedRegions.add(Map<String, dynamic>.from(sr));
+      }
+    }
+    merged['regions'] = mergedRegions;
+    return merged;
   }
 
   Future<Uint8List?> _refreshLocalEditedCache({
@@ -2826,14 +2971,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   /// Manual translate: submit the next batch of detected pages.
-  Future<void> _translateVisiblePages() async {
+  /// When [force] is true, bypass all caches and reprocess from scratch.
+  Future<void> _translateVisiblePages({bool force = false}) async {
     if (_detectedWebtoonPages.isEmpty) {
       // Non-webtoon: fall back to screenshot capture
-      _captureAndTranslate();
+      _captureAndTranslate(force: force);
       return;
     }
     // Force-submit the next batch of webtoon pages
-    _submitNextBatch();
+    _submitNextBatch(force: force);
   }
 
   /// Push a status message into the in-page toolbar.

@@ -7,10 +7,14 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from pipeline.bubble_detector import detect_bubbles
 from pipeline.furigana import annotate as furigana_annotate
+from pipeline.config import EN_BASE_FONT_DIVISOR, EN_BASE_FONT_MAX, EN_BASE_FONT_MIN
 from pipeline.image_utils import (
+    clear_text_in_contour,
     clear_text_in_region,
     clear_text_strokes,
+    contour_inner_bbox,
     decode_image_bytes,
     encode_image_pil,
 )
@@ -79,7 +83,7 @@ def process_job(job: ProcessingJob,
                 source_hash=job.source_hash,
             )
 
-        if job.rerender_from_metadata and job.metadata_payload:
+        if job.rerender_from_metadata:
             result = _rerender_from_metadata(job, progress_cb)
         elif job.pipeline.startswith("manga_"):
             result = _process_manga(job, progress_cb)
@@ -185,23 +189,97 @@ def _region_skipped(region: dict[str, Any]) -> bool:
     return False
 
 
+def _bbox_iou(a: tuple[int, int, int, int],
+              b: tuple[int, int, int, int]) -> float:
+    """Intersection-over-union between two (x1,y1,x2,y2) bboxes."""
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _match_contours(
+    regions: list[dict[str, Any]],
+    detected: list[dict],
+    img_w: int,
+    img_h: int,
+) -> dict[int, Any]:
+    """Match metadata regions to detected bubble contours by bbox IoU.
+
+    Returns {region_index: contour_ndarray} for regions that matched.
+    """
+    import numpy as np
+    matched: dict[int, np.ndarray] = {}
+    used: set[int] = set()
+    for ri, region in enumerate(regions):
+        bbox = _bbox_from_region(region, img_w, img_h)
+        if not bbox:
+            continue
+        best_iou = 0.0
+        best_di = -1
+        for di, det in enumerate(detected):
+            if di in used:
+                continue
+            det_bbox = det.get("bbox")
+            if not det_bbox:
+                continue
+            iou = _bbox_iou(bbox, det_bbox)
+            if iou > best_iou:
+                best_iou = iou
+                best_di = di
+        if best_iou > 0.3 and best_di >= 0:
+            contour = detected[best_di].get("contour")
+            if contour is not None:
+                matched[ri] = contour
+                used.add(best_di)
+    return matched
+
+
 def _rerender_from_metadata(job: ProcessingJob,
                             progress_cb: ProgressCallback | None = None,
                             ) -> ProcessingResult:
-    """Re-render using metadata only (skip detection/OCR/translation)."""
-    _report(progress_cb, "rerender", "loading metadata", 15)
-    payload = job.metadata_payload or {}
-    regions = payload.get("regions")
-    if not isinstance(regions, list):
-        regions = []
+    """Re-render using metadata only (skip detection/OCR/translation).
 
-    _report(progress_cb, "rerender", "drawing edits", 50)
-    _, img_pil = decode_image_bytes(job.image_bytes)
+    Re-runs bubble detection to recover contour shapes so the clearing
+    and layout logic is identical to the fresh pipeline.
+    """
+    _report(progress_cb, "rerender", "loading metadata", 15)
+    payload = job.metadata_payload
+    if not payload or not isinstance(payload.get("regions"), list):
+        return ProcessingResult(
+            job_id=job.job_id,
+            status="failed",
+            error="Rerender requires metadata with regions",
+            pipeline=job.pipeline,
+            source_hash=job.source_hash,
+        )
+    regions = payload["regions"]
+
+    _report(progress_cb, "rerender", "detecting bubbles", 25)
+    img_cv, img_pil = decode_image_bytes(job.image_bytes)
     img_out = img_pil.copy()
     img_w, img_h = img_out.width, img_out.height
 
+    # Re-run bubble detection on the original image to recover contours.
+    # This is pure OpenCV (~50-100ms), no GPU needed.
+    detected = detect_bubbles(img_cv)
+    contour_map = _match_contours(regions, detected, img_w, img_h)
+
+    _report(progress_cb, "rerender", "drawing edits", 50)
+
+    # Calculate base font size the same way the fresh pipeline does.
+    base_font_size = None
+    if job.pipeline != "manga_furigana":
+        base_font_size = max(EN_BASE_FONT_MIN,
+                             min(EN_BASE_FONT_MAX, img_h // EN_BASE_FONT_DIVISOR))
+
     applied = 0
-    for region in regions:
+    for ri, region in enumerate(regions):
         if not isinstance(region, dict):
             continue
         if _region_skipped(region):
@@ -213,15 +291,21 @@ def _rerender_from_metadata(job: ProcessingJob,
         manual = _region_manual_text(region)
         transformed_val = _region_transformed_value(region)
         kind = str(region.get("kind") or "bubble")
+        contour = contour_map.get(ri)
 
         if job.pipeline == "manga_furigana":
-            # Keep furigana pages in JP style. Manual text is re-annotated.
             if manual:
                 transformed_val = furigana_annotate(manual)
             if not isinstance(transformed_val, list):
                 continue
-            clear_text_strokes(img_out, bbox)
-            render_furigana_vertical(img_out, bbox, transformed_val)
+            # Use contour-based clearing when available (same as fresh)
+            layout_bbox = bbox
+            if contour is not None:
+                layout_bbox = contour_inner_bbox(contour) or bbox
+                clear_text_in_contour(img_out, contour)
+            else:
+                clear_text_strokes(img_out, bbox)
+            render_furigana_vertical(img_out, layout_bbox, transformed_val)
             applied += 1
             continue
 
@@ -237,11 +321,17 @@ def _rerender_from_metadata(job: ProcessingJob,
         if not text:
             continue
 
+        # Clear text using the same logic as the fresh pipeline:
+        # contour shape when available, stroke-only fallback otherwise.
+        layout_bbox = bbox
         if kind == "artwork_text":
             clear_text_in_region(img_out, bbox)
+        elif contour is not None:
+            layout_bbox = contour_inner_bbox(contour) or bbox
+            clear_text_in_contour(img_out, contour)
         else:
             clear_text_strokes(img_out, bbox)
-        render_english(img_out, bbox, text)
+        render_english(img_out, layout_bbox, text, base_font_size=base_font_size)
         applied += 1
 
     _report(progress_cb, "rerender", "encoding", 95)

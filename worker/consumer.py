@@ -213,8 +213,21 @@ class Consumer:
             metadata_payload = self._page_cache.load_metadata_by_hash(
                 pipeline, source_hash)
             if metadata_payload is None:
-                log.warning("Metadata not found for rerender job %s (%s/%s)",
-                            job_id, pipeline, source_hash)
+                log.error(
+                    "Metadata not found for rerender job %s (%s/%s) — "
+                    "cannot rerender without metadata",
+                    job_id, pipeline, source_hash,
+                )
+                self._store_result(ProcessingResult(
+                    job_id=job_id,
+                    status="failed",
+                    error="Metadata not found for rerender — "
+                          "source may have been evicted from cache",
+                    pipeline=pipeline,
+                    source_hash=source_hash,
+                ))
+                self._rdb.xack(stream, self.consumer_group, msg_id)
+                return
 
         # Process
         job = ProcessingJob(

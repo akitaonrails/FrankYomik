@@ -1062,6 +1062,89 @@ func TestPatchCacheMetaByHashQueuesRerender(t *testing.T) {
 	}
 }
 
+func TestPatchCacheMetaByHashConflict409(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	src := makePNGBytes()
+	sourceHash := hashHex(src)
+	initialMeta := []byte(`{"schema_version":1,"regions":[{"id":"r1"}]}`)
+	_, err := srv.cache.StoreBySourceHash(
+		"manga_translate",
+		sourceHash,
+		src,
+		src,
+		initialMeta,
+		"test-title",
+		"1",
+		"001",
+	)
+	if err != nil {
+		t.Fatalf("store by hash: %v", err)
+	}
+
+	// Send PATCH with a wrong base_content_hash to trigger 409
+	patchBody := map[string]any{
+		"base_content_hash": "stale-hash-that-does-not-match",
+		"metadata": map[string]any{
+			"schema_version": 1,
+			"regions": []any{
+				map[string]any{
+					"id":   "r1",
+					"user": map[string]any{"false_positive": true},
+				},
+			},
+		},
+	}
+	raw, _ := json.Marshal(patchBody)
+	req := httptest.NewRequest(
+		"PATCH",
+		fmt.Sprintf("/api/v1/cache/by-hash/manga_translate/%s/meta", sourceHash),
+		bytes.NewReader(raw),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("got %d, want 409 body=%s", w.Code, w.Body.String())
+	}
+
+	// Verify error message
+	var errResp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if errResp["error"] != "content hash mismatch" {
+		t.Fatalf("unexpected error: %s", errResp["error"])
+	}
+}
+
+func TestPatchCacheMetaByHashNotFound(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	// PATCH a non-existent source hash
+	patchBody := map[string]any{
+		"metadata": map[string]any{"regions": []any{}},
+	}
+	raw, _ := json.Marshal(patchBody)
+	req := httptest.NewRequest(
+		"PATCH",
+		"/api/v1/cache/by-hash/manga_translate/nonexistent-hash/meta",
+		bytes.NewReader(raw),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404 body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestCacheImageNotFound(t *testing.T) {
 	srv, _ := newTestServer(t)
 	mux := http.NewServeMux()
@@ -1179,6 +1262,70 @@ func TestSlugify(t *testing.T) {
 // ==================================
 // JSON error helper
 // ==================================
+
+func TestCreateJobForceBypassesCache(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	// Pre-populate v2 cache so a normal submit would return cached
+	imgData := makePNGBytes()
+	sourceHash := hashHex(imgData)
+	metaJSON := []byte(`{"regions":[]}`)
+	if _, err := srv.cache.StoreBySourceHash("manga_translate", sourceHash, imgData, imgData,
+		metaJSON, "Test", "1", "1"); err != nil {
+		t.Fatalf("cache store: %v", err)
+	}
+
+	// Verify cache is hit without force
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("pipeline", "manga_translate")
+	part, _ := writer.CreateFormFile("image", "test.png")
+	part.Write(imgData)
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/jobs", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	var normalResp JobResponse
+	json.NewDecoder(w.Body).Decode(&normalResp)
+	if !normalResp.Cached {
+		t.Fatal("expected cache hit without force")
+	}
+
+	// Now submit with force=true — should bypass cache and queue a new job
+	body2 := &bytes.Buffer{}
+	writer2 := multipart.NewWriter(body2)
+	writer2.WriteField("pipeline", "manga_translate")
+	writer2.WriteField("force", "true")
+	part2, _ := writer2.CreateFormFile("image", "test.png")
+	part2.Write(imgData)
+	writer2.Close()
+
+	req2 := httptest.NewRequest("POST", "/api/v1/jobs", body2)
+	req2.Header.Set("Content-Type", writer2.FormDataContentType())
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201: %s", w2.Code, w2.Body.String())
+	}
+
+	var forceResp JobResponse
+	json.NewDecoder(w2.Body).Decode(&forceResp)
+	if forceResp.Cached {
+		t.Error("expected cached=false with force=true")
+	}
+	if forceResp.Status != "queued" {
+		t.Errorf("got status %q, want 'queued'", forceResp.Status)
+	}
+	if !strings.HasPrefix(forceResp.JobID, "job-") {
+		t.Errorf("expected job- prefix (new job), got %s", forceResp.JobID)
+	}
+}
 
 func assertJSONError(t *testing.T, body *bytes.Buffer, contains string) {
 	t.Helper()

@@ -336,3 +336,198 @@ class TestProcessJobError:
             result = process_job(job)
             assert result.status == "failed"
             assert "CUDA" in result.error
+
+
+# --- Rerender from metadata ---
+
+
+class TestRerenderFromMetadata:
+    def test_rerender_missing_metadata_fails(self):
+        """Rerender with no metadata_payload should fail explicitly."""
+        job = ProcessingJob(
+            job_id="rr-1",
+            pipeline="manga_translate",
+            image_bytes=_make_test_image_bytes(),
+            rerender_from_metadata=True,
+            metadata_payload=None,
+        )
+        result = process_job(job)
+        assert result.status == "failed"
+        assert "metadata" in result.error.lower()
+
+    def test_rerender_empty_payload_fails(self):
+        """Rerender with empty dict (no regions key) should fail."""
+        job = ProcessingJob(
+            job_id="rr-2",
+            pipeline="manga_translate",
+            image_bytes=_make_test_image_bytes(),
+            rerender_from_metadata=True,
+            metadata_payload={},
+        )
+        result = process_job(job)
+        assert result.status == "failed"
+        assert "metadata" in result.error.lower()
+
+    def test_rerender_regions_not_list_fails(self):
+        """Rerender with regions that isn't a list should fail."""
+        job = ProcessingJob(
+            job_id="rr-3",
+            pipeline="manga_translate",
+            image_bytes=_make_test_image_bytes(),
+            rerender_from_metadata=True,
+            metadata_payload={"regions": "not-a-list"},
+        )
+        result = process_job(job)
+        assert result.status == "failed"
+        assert "metadata" in result.error.lower()
+
+    def test_rerender_valid_metadata_succeeds(self):
+        """Rerender with valid metadata should produce completed result."""
+        img_bytes = _make_test_image_bytes(200, 300)
+        job = ProcessingJob(
+            job_id="rr-ok",
+            pipeline="manga_translate",
+            image_bytes=img_bytes,
+            rerender_from_metadata=True,
+            metadata_payload={
+                "regions": [
+                    {
+                        "id": "r1",
+                        "kind": "bubble",
+                        "bbox": [10, 10, 90, 70],
+                        "transformed": {"kind": "text", "value": "Hello"},
+                        "user": {
+                            "false_positive": False,
+                            "manual_translation": "",
+                        },
+                    },
+                ],
+            },
+        )
+        result = process_job(job)
+        assert result.status == "completed"
+        assert result.bubble_count == 1
+        assert result.image_bytes is not None
+
+    def test_rerender_skips_false_positives(self):
+        """Rerender should skip regions marked as false_positive."""
+        img_bytes = _make_test_image_bytes(200, 300)
+        job = ProcessingJob(
+            job_id="rr-fp",
+            pipeline="manga_translate",
+            image_bytes=img_bytes,
+            rerender_from_metadata=True,
+            metadata_payload={
+                "regions": [
+                    {
+                        "id": "r1",
+                        "kind": "bubble",
+                        "bbox": [10, 10, 90, 70],
+                        "transformed": {"kind": "text", "value": "Hello"},
+                        "user": {
+                            "false_positive": True,
+                            "manual_translation": "",
+                        },
+                    },
+                    {
+                        "id": "r2",
+                        "kind": "bubble",
+                        "bbox": [10, 80, 90, 150],
+                        "transformed": {"kind": "text", "value": "World"},
+                        "user": {
+                            "false_positive": False,
+                            "manual_translation": "",
+                        },
+                    },
+                ],
+            },
+        )
+        result = process_job(job)
+        assert result.status == "completed"
+        # Only r2 should be rendered (r1 is FP)
+        assert result.bubble_count == 1
+
+    def test_rerender_uses_manual_translation(self):
+        """Rerender should prefer user.manual_translation over transformed."""
+        img_bytes = _make_test_image_bytes(200, 300)
+        job = ProcessingJob(
+            job_id="rr-manual",
+            pipeline="manga_translate",
+            image_bytes=img_bytes,
+            rerender_from_metadata=True,
+            metadata_payload={
+                "regions": [
+                    {
+                        "id": "r1",
+                        "kind": "bubble",
+                        "bbox": [10, 10, 90, 70],
+                        "transformed": {"kind": "text", "value": "Original"},
+                        "user": {
+                            "false_positive": False,
+                            "manual_translation": "Corrected text",
+                        },
+                    },
+                ],
+            },
+        )
+        result = process_job(job)
+        assert result.status == "completed"
+        assert result.bubble_count == 1
+
+    def test_rerender_base_font_size_calculated(self):
+        """Rerender should cap font size via base_font_size, not use MAX_FONT_SIZE."""
+        # Create a tall image — base_font_size = max(14, min(24, 800//55)) = 14
+        img_bytes = _make_test_image_bytes(600, 800)
+        job = ProcessingJob(
+            job_id="rr-font",
+            pipeline="manga_translate",
+            image_bytes=img_bytes,
+            rerender_from_metadata=True,
+            metadata_payload={
+                "regions": [
+                    {
+                        "id": "r1",
+                        "kind": "bubble",
+                        "bbox": [10, 10, 590, 790],
+                        "transformed": {"kind": "text", "value": "A"},
+                        "user": {
+                            "false_positive": False,
+                            "manual_translation": "",
+                        },
+                    },
+                ],
+            },
+        )
+        result = process_job(job)
+        assert result.status == "completed"
+        # If font was uncapped (MAX=60), the render would still succeed
+        # but we verify the result exists (no crash from giant text)
+        assert result.image_bytes is not None
+        assert result.bubble_count == 1
+
+    def test_rerender_preserves_metadata_payload(self):
+        """Rerender should pass through the metadata payload in the result."""
+        img_bytes = _make_test_image_bytes(200, 300)
+        payload = {
+            "regions": [
+                {
+                    "id": "r1",
+                    "kind": "bubble",
+                    "bbox": [10, 10, 90, 70],
+                    "transformed": {"kind": "text", "value": "Test"},
+                    "user": {
+                        "false_positive": False,
+                        "manual_translation": "",
+                    },
+                },
+            ],
+        }
+        job = ProcessingJob(
+            job_id="rr-meta",
+            pipeline="manga_translate",
+            image_bytes=img_bytes,
+            rerender_from_metadata=True,
+            metadata_payload=payload,
+        )
+        result = process_job(job)
+        assert result.metadata_payload is payload

@@ -586,5 +586,100 @@ void main() {
       // Default detection style for bubbles
       expect(readerSource.contains("label: 'B'"), true);
     });
+
+    test('_patchAndRerender handles 409 conflict with retry', () {
+      // Verify the reader_screen contains ApiConflictException handling
+      expect(readerSource.contains('on ApiConflictException'), true);
+      // Should reload fresh metadata on conflict
+      expect(readerSource.contains('getCacheMetadataByHash'), true);
+      // Should merge user edits onto fresh metadata
+      expect(readerSource.contains('_mergeUserEdits'), true);
+      // Should retry with incremented attempt
+      expect(readerSource.contains('attempt: 1'), true);
+      // Should only retry once (not infinite loop)
+      expect(readerSource.contains('if (attempt > 0) rethrow'), true);
+    });
+
+    test('_patchAndRerender recovers from rerender failure', () {
+      // When _waitForJobCompletion fails, should try image recovery
+      expect(readerSource.contains('attempting image recovery'), true);
+      expect(readerSource.contains('Recovered image for'), true);
+      // Should rethrow if recovery also fails
+      expect(readerSource.contains('rethrow; // Surface the original error'), true);
+    });
+
+    test('_mergeUserEdits preserves user section from local edits', () {
+      // Merge function indexes by region id
+      expect(readerSource.contains("localById[id]"), true);
+      // Overlays local user section onto server regions
+      expect(readerSource.contains("mergedRegion['user']"), true);
+    });
+  });
+
+  group('ApiService error types', () {
+    late String apiSource;
+
+    setUpAll(() {
+      apiSource = File('lib/services/api_service.dart').readAsStringSync();
+    });
+
+    test('ApiException carries statusCode', () {
+      expect(apiSource.contains('final int? statusCode;'), true);
+    });
+
+    test('ApiConflictException extends ApiException with 409', () {
+      expect(apiSource.contains('class ApiConflictException extends ApiException'), true);
+      expect(apiSource.contains('statusCode: 409'), true);
+    });
+
+    test('patchCacheMetadataByHash throws ApiConflictException on 409', () {
+      expect(apiSource.contains('response.statusCode == 409'), true);
+      expect(apiSource.contains('throw ApiConflictException'), true);
+    });
+
+    test('submitJob accepts force parameter and sends force field', () {
+      // Verify the method signature includes force
+      expect(apiSource.contains("bool force = false"), true);
+      // Verify it sends force=true to the server
+      expect(apiSource.contains("if (force) request.fields['force'] = 'true'"), true);
+    });
+  });
+
+  group('Force-reprocess flow', () {
+    late String jobsSource;
+    late String readerSource;
+
+    setUpAll(() {
+      jobsSource = File('lib/providers/jobs_provider.dart').readAsStringSync();
+      readerSource = File('lib/screens/reader_screen.dart').readAsStringSync();
+    });
+
+    test('submitPage accepts force parameter', () {
+      expect(jobsSource.contains('bool force = false'), true);
+    });
+
+    test('submitPage skips local cache when force=true', () {
+      // The cache checks should be wrapped in if (!force)
+      expect(jobsSource.contains('if (!force) {'), true);
+    });
+
+    test('submitPage passes force to API', () {
+      expect(jobsSource.contains('force: force,'), true);
+    });
+
+    test('translate button triggers force reprocess', () {
+      // The toolbar translate action should pass force: true
+      expect(readerSource.contains("_translateVisiblePages(force: true)"), true);
+    });
+
+    test('_capturePageImage accepts and passes force parameter', () {
+      expect(readerSource.contains("bool force = false,"), true);
+      // Verify force is passed through to submitPage
+      final captureSection = readerSource.substring(
+        readerSource.indexOf('Future<void> _capturePageImage'),
+        readerSource.indexOf('/// Submit the next batch'),
+      );
+      expect(captureSection.contains('force: force,'), true);
+    });
   });
 }

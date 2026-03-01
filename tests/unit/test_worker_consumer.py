@@ -645,11 +645,14 @@ class TestProcessMessageMetadata:
         assert callable(kwargs["progress_cb"])
 
     @patch("worker.consumer.process_job")
-    def test_caches_to_filesystem_on_success(self, mock_process, tmp_path):
+    def test_caches_to_v2_on_success(self, mock_process, tmp_path):
+        import hashlib
         c = _make_consumer(cache_dir=str(tmp_path))
-        c._rdb.get.return_value = b"fake-png"
+        source_bytes = b"fake-png"
+        c._rdb.get.return_value = source_bytes
         mock_process.return_value = ProcessingResult(
             job_id="j-cache", status="completed", image_bytes=b"png-result",
+            metadata_payload={"regions": []},
         )
 
         fields = {
@@ -662,9 +665,15 @@ class TestProcessMessageMetadata:
         }
         c._process_message(STREAM_HIGH, b"3-0", fields)
 
-        cached = tmp_path / "manga_translate" / "test-manga" / "1" / "001.png"
-        assert cached.exists()
-        assert cached.read_bytes() == b"png-result"
+        source_hash = hashlib.sha256(source_bytes).hexdigest()
+        manifest_path = (tmp_path / "v2" / "pages" / "by-hash" /
+                         "manga_translate" / source_hash / "manifest.json")
+        assert manifest_path.exists()
+        import json
+        manifest = json.loads(manifest_path.read_bytes())
+        assert manifest["pipeline"] == "manga_translate"
+        assert manifest["source_hash"] == source_hash
+        assert manifest["image_stale"] is False
 
     @patch("worker.consumer.process_job")
     def test_no_cache_without_metadata(self, mock_process, tmp_path):
@@ -682,5 +691,83 @@ class TestProcessMessageMetadata:
         }
         c._process_message(STREAM_HIGH, b"4-0", fields)
 
-        # No files should be created in cache
-        assert list(tmp_path.iterdir()) == []
+        # No v2 manifests should exist (no metadata_payload → skip)
+        manifest_dir = tmp_path / "v2" / "pages" / "by-hash"
+        assert not manifest_dir.exists()
+
+    @patch("worker.consumer.process_job")
+    def test_rerender_missing_metadata_fails_job(self, mock_process, tmp_path):
+        """When rerender_from_metadata=1 but metadata can't be found,
+        the consumer should fail the job explicitly instead of proceeding."""
+        c = _make_consumer(cache_dir=str(tmp_path))
+        c._rdb.get.return_value = b"fake-png"
+        # process_job should NOT be called — consumer fails early
+        mock_process.return_value = ProcessingResult(
+            job_id="j-rerender", status="completed",
+        )
+
+        fields = {
+            b"job_id": b"j-rerender",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:abc",
+            b"source_hash": b"abc123" * 11,  # 66-char fake hash
+            b"rerender_from_metadata": b"1",
+        }
+        c._process_message(STREAM_HIGH, b"5-0", fields)
+
+        # process_job should NOT have been called — consumer failed early
+        mock_process.assert_not_called()
+
+        # _store_result should have been called with "failed" status
+        import json
+        result_key = "frank:results:j-rerender"
+        set_calls = c._rdb.set.call_args_list
+        result_call = [
+            call for call in set_calls
+            if call[0][0] == result_key
+        ]
+        assert len(result_call) == 1
+        stored_meta = json.loads(result_call[0][0][1])
+        assert stored_meta["status"] == "failed"
+        assert "Metadata not found" in stored_meta["error"]
+
+    @patch("worker.consumer.process_job")
+    def test_rerender_with_metadata_proceeds(self, mock_process, tmp_path):
+        """When rerender_from_metadata=1 and metadata IS found,
+        the consumer should proceed normally."""
+        import hashlib
+        c = _make_consumer(cache_dir=str(tmp_path))
+        source_bytes = b"fake-source-image"
+        source_hash = hashlib.sha256(source_bytes).hexdigest()
+        c._rdb.get.return_value = source_bytes
+
+        # Seed the v2 cache with metadata so the consumer can find it
+        c._page_cache.store_page(
+            pipeline="manga_translate",
+            source_hash=source_hash,
+            source_image_bytes=source_bytes,
+            rendered_image_bytes=b"rendered-png",
+            metadata_payload={"regions": [{"id": "r1"}]},
+        )
+
+        mock_process.return_value = ProcessingResult(
+            job_id="j-rerender-ok", status="completed",
+            image_bytes=b"rerendered-png",
+            metadata_payload={"regions": [{"id": "r1"}]},
+        )
+
+        fields = {
+            b"job_id": b"j-rerender-ok",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:abc",
+            b"source_hash": source_hash.encode(),
+            b"rerender_from_metadata": b"1",
+        }
+        c._process_message(STREAM_HIGH, b"6-0", fields)
+
+        # process_job should have been called with metadata_payload populated
+        mock_process.assert_called_once()
+        job = mock_process.call_args[0][0]
+        assert job.rerender_from_metadata is True
+        assert job.metadata_payload is not None
+        assert job.metadata_payload["regions"][0]["id"] == "r1"

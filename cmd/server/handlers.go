@@ -93,11 +93,13 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse optional metadata
+	forceReprocess := r.FormValue("force") == "true"
 	meta := &JobMetadata{
-		Title:      r.FormValue("title"),
-		Chapter:    r.FormValue("chapter"),
-		PageNumber: r.FormValue("page_number"),
-		SourceURL:  r.FormValue("source_url"),
+		Title:          r.FormValue("title"),
+		Chapter:        r.FormValue("chapter"),
+		PageNumber:     r.FormValue("page_number"),
+		SourceURL:      r.FormValue("source_url"),
+		ForceReprocess: forceReprocess,
 	}
 
 	file, _, err := r.FormFile("image")
@@ -125,25 +127,28 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hash-first filesystem cache check (works for Kindle where page number is unstable).
-	if _, m, ok := s.cache.LookupBySourceHash(pipeline, sourceHash); ok {
-		// Keep by-ref link warm when metadata is provided.
-		if meta.Title != "" && meta.Chapter != "" && meta.PageNumber != "" {
-			_ = s.cache.LinkRef(pipeline, meta.Title, meta.Chapter, meta.PageNumber, sourceHash)
+	// Skip when force=true so the image is fully reprocessed.
+	if !forceReprocess {
+		if _, m, ok := s.cache.LookupBySourceHash(pipeline, sourceHash); ok {
+			// Keep by-ref link warm when metadata is provided.
+			if meta.Title != "" && meta.Chapter != "" && meta.PageNumber != "" {
+				_ = s.cache.LinkRef(pipeline, meta.Title, meta.Chapter, meta.PageNumber, sourceHash)
+			}
+			cacheJobID := fmt.Sprintf("cached-v2-%s-%s", pipeline, sourceHash)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(JobResponse{
+				JobID:       cacheJobID,
+				Status:      "completed",
+				Cached:      true,
+				ImageURL:    fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", pipeline, sourceHash),
+				MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, sourceHash),
+				SourceHash:  sourceHash,
+				ContentHash: m.ContentHash,
+				RenderHash:  m.RenderHash,
+			})
+			return
 		}
-		cacheJobID := fmt.Sprintf("cached-v2-%s-%s", pipeline, sourceHash)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(JobResponse{
-			JobID:       cacheJobID,
-			Status:      "completed",
-			Cached:      true,
-			ImageURL:    fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", pipeline, sourceHash),
-			MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, sourceHash),
-			SourceHash:  sourceHash,
-			ContentHash: m.ContentHash,
-			RenderHash:  m.RenderHash,
-		})
-		return
 	}
 
 	jobID, dedupHit, err := s.queue.SubmitJob(r.Context(), imageBytes, pipeline, priority, meta)
