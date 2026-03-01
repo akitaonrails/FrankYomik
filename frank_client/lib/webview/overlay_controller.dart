@@ -12,9 +12,12 @@ class OverlayController {
     Uint8List imageBytes,
     String? pageId,
   ) async {
+    final encodeSw = Stopwatch()..start();
     final base64Data = await compute(base64Encode, imageBytes);
+    encodeSw.stop();
     // jsonEncode properly escapes all special chars (quotes, newlines, backticks, etc.)
     final safeSrc = jsonEncode(originalSrc);
+    final evalSw = Stopwatch()..start();
     final result = await controller.evaluateJavascript(
       source:
           '''
@@ -96,6 +99,12 @@ class OverlayController {
 })();
 ''',
     );
+    evalSw.stop();
+    debugPrint(
+      '[OverlayPerf] webtoon page=$pageId bytes=${imageBytes.length} '
+      'b64=${base64Data.length} encodeMs=${encodeSw.elapsedMilliseconds} '
+      'evalMs=${evalSw.elapsedMilliseconds}',
+    );
     return result == true;
   }
 
@@ -109,13 +118,18 @@ class OverlayController {
     Map<String, num>? expectedRect,
     String? overlayToken,
   }) async {
+    final encodeSw = Stopwatch()..start();
     final base64Data = await compute(base64Encode, imageBytes);
+    encodeSw.stop();
     // jsonEncode properly escapes all special chars; produces "quoted" strings
-    final safeExpected = expectedBlobSrc != null ? jsonEncode(expectedBlobSrc) : 'null';
+    final safeExpected = expectedBlobSrc != null
+        ? jsonEncode(expectedBlobSrc)
+        : 'null';
     final expectedRectJson = expectedRect != null
         ? jsonEncode(expectedRect)
         : 'null';
     final safeToken = overlayToken != null ? jsonEncode(overlayToken) : 'null';
+    final evalSw = Stopwatch()..start();
     final result = await controller.evaluateJavascript(
       source:
           '''
@@ -284,6 +298,10 @@ class OverlayController {
   target.dataset.frankTranslated = 'true';
   if ('${pageId ?? ''}') target.dataset.frankPageId = '${pageId ?? ''}';
   target.dataset.frankTranslatedSrc = blobUrl;
+  window.__frankTranslatedBlobByPage = window.__frankTranslatedBlobByPage || {};
+  if ('${pageId ?? ''}') {
+    window.__frankTranslatedBlobByPage['${pageId ?? ''}'] = blobUrl;
+  }
   if (overlayToken) target.dataset.frankOverlayToken = overlayToken;
 
   // Fire-and-forget: decode the new image, then nudge the compositor.
@@ -354,6 +372,12 @@ class OverlayController {
 })();
 ''',
     );
+    evalSw.stop();
+    debugPrint(
+      '[OverlayPerf] kindle page=$pageId bytes=${imageBytes.length} '
+      'b64=${base64Data.length} encodeMs=${encodeSw.elapsedMilliseconds} '
+      'evalMs=${evalSw.elapsedMilliseconds}',
+    );
     // Parse the JSON diagnostic result from the JS overlay script.
     if (result is String) {
       try {
@@ -372,6 +396,164 @@ class OverlayController {
     return result == true;
   }
 
+  /// Reapply an already generated Kindle translated blob without re-sending
+  /// image bytes over the Flutter<->JS bridge.
+  Future<bool> reapplyVisibleKindlePage(
+    AppWebViewController controller, {
+    String? pageId,
+    String? expectedBlobSrc,
+    Map<String, num>? expectedRect,
+    String? overlayToken,
+  }) async {
+    final safeExpected = expectedBlobSrc != null
+        ? jsonEncode(expectedBlobSrc)
+        : 'null';
+    final expectedRectJson = expectedRect != null
+        ? jsonEncode(expectedRect)
+        : 'null';
+    final safeToken = overlayToken != null ? jsonEncode(overlayToken) : 'null';
+    final safePageId = pageId != null ? jsonEncode(pageId) : 'null';
+    final sw = Stopwatch()..start();
+    final result = await controller.evaluateJavascript(
+      source:
+          '''
+(function() {
+  var expected = $safeExpected;
+  var expectedRect = $expectedRectJson;
+  var overlayToken = $safeToken;
+  var pageId = $safePageId;
+
+  function findReaderRoot() {
+    return document.querySelector(
+      '#kr-renderer, #kindle-reader-content, .reader-content, ' +
+      '[id*="kindle-reader"], [id*="kr-renderer"], [class*="reader-content"]'
+    ) || document.body;
+  }
+  function isActuallyVisible(el) {
+    if (!el) return false;
+    var st = window.getComputedStyle(el);
+    if (!st) return false;
+    if (st.display === 'none' || st.visibility === 'hidden') return false;
+    var opacity = parseFloat(st.opacity || '1');
+    if (!isFinite(opacity) || opacity <= 0.05) return false;
+    return true;
+  }
+  function topLayerHits(el) {
+    if (!el) return 0;
+    var r = el.getBoundingClientRect();
+    var pts = [
+      [r.left + r.width / 2, r.top + r.height / 2],
+      [r.left + r.width * 0.25, r.top + r.height * 0.5],
+      [r.left + r.width * 0.75, r.top + r.height * 0.5]
+    ];
+    var hits = 0;
+    for (var i = 0; i < pts.length; i++) {
+      var x = Math.max(0, Math.min(window.innerWidth - 1, pts[i][0]));
+      var y = Math.max(0, Math.min(window.innerHeight - 1, pts[i][1]));
+      var top = document.elementFromPoint(x, y);
+      if (!top) continue;
+      if (top === el || el.contains(top) || top.contains(el)) hits++;
+    }
+    return hits;
+  }
+  function rectBiasScore(r) {
+    if (!expectedRect) return 0;
+    var ex = Number(expectedRect.x || 0);
+    var ey = Number(expectedRect.y || 0);
+    var ew = Math.max(1, Number(expectedRect.width || 1));
+    var eh = Math.max(1, Number(expectedRect.height || 1));
+    var cx = r.left + (r.width / 2);
+    var cy = r.top + (r.height / 2);
+    var ecx = ex + (ew / 2);
+    var ecy = ey + (eh / 2);
+    var centerDist = Math.hypot(cx - ecx, cy - ecy);
+    var sizeErr =
+      (Math.abs(r.width - ew) / ew) +
+      (Math.abs(r.height - eh) / eh);
+    return -((centerDist * 800) + (sizeErr * 500000));
+  }
+  function overlapAreaInViewport(r, vw, vh) {
+    var ox = Math.min(r.right, vw) - Math.max(r.left, 0);
+    var oy = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+    if (ox <= 0 || oy <= 0) return 0;
+    return ox * oy;
+  }
+  function overlapAreaWithRect(r, rr) {
+    var ox = Math.min(r.right, rr.right) - Math.max(r.left, rr.left);
+    var oy = Math.min(r.bottom, rr.bottom) - Math.max(r.top, rr.top);
+    if (ox <= 0 || oy <= 0) return 0;
+    return ox * oy;
+  }
+
+  var readerRoot = findReaderRoot();
+  var imgs = readerRoot.querySelectorAll('img');
+  if (!imgs || imgs.length === 0) imgs = document.querySelectorAll('img');
+  var target = null;
+  var bestScore = -Infinity;
+  var vw = window.innerWidth;
+  var vh = window.innerHeight;
+  var rootRect = readerRoot.getBoundingClientRect ? readerRoot.getBoundingClientRect() : null;
+
+  for (var i = 0; i < imgs.length; i++) {
+    if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
+    var r = imgs[i].getBoundingClientRect();
+    if (r.width < 100 || r.height < 100) continue;
+    var overlap = overlapAreaInViewport(r, vw, vh);
+    if (overlap < 2000) continue;
+    if (rootRect && readerRoot !== document.body) {
+      var rootOverlap = overlapAreaWithRect(r, rootRect);
+      if (rootOverlap < 2000) continue;
+      overlap = Math.min(overlap, rootOverlap);
+    }
+    if (!isActuallyVisible(imgs[i])) continue;
+    if (expected &&
+        imgs[i].src !== expected &&
+        imgs[i].dataset.frankOriginalSrc !== expected) {
+      continue;
+    }
+    var score = (topLayerHits(imgs[i]) * 1000000000) + overlap + rectBiasScore(r);
+    if (score > bestScore) {
+      bestScore = score;
+      target = imgs[i];
+    }
+  }
+
+  if (!target) return false;
+
+  var translatedMap = window.__frankTranslatedBlobByPage || {};
+  var translatedSrc = target.dataset.frankTranslatedSrc ||
+      (pageId ? translatedMap[pageId] : null);
+  if (!translatedSrc) return false;
+
+  target.dataset.frankTranslated = 'true';
+  target.dataset.frankTranslatedSrc = translatedSrc;
+  if (pageId) target.dataset.frankPageId = pageId;
+  if (overlayToken) target.dataset.frankOverlayToken = overlayToken;
+  target.src = translatedSrc;
+
+  if (typeof target.decode === 'function') {
+    target.decode().then(function() {
+      target.style.opacity = '0.999';
+      void target.offsetWidth;
+      target.style.opacity = '';
+    }).catch(function() {
+      target.style.opacity = '0.999';
+      void target.offsetWidth;
+      target.style.opacity = '';
+    });
+  }
+  return true;
+})();
+''',
+    );
+    sw.stop();
+    debugPrint(
+      '[OverlayPerf] kindle-reapply page=$pageId '
+      'ms=${sw.elapsedMilliseconds} ok=${result == true}',
+    );
+    return result == true;
+  }
+
   /// Probe Kindle DOM to understand why replacement may not be visible.
   Future<Map<String, dynamic>?> probeKindleOverlay(
     AppWebViewController controller, {
@@ -380,7 +562,9 @@ class OverlayController {
     String? overlayToken,
   }) async {
     // jsonEncode properly escapes all special chars; produces "quoted" strings
-    final safeExpected = expectedBlobSrc != null ? jsonEncode(expectedBlobSrc) : 'null';
+    final safeExpected = expectedBlobSrc != null
+        ? jsonEncode(expectedBlobSrc)
+        : 'null';
     final expectedRectJson = expectedRect != null
         ? jsonEncode(expectedRect)
         : 'null';

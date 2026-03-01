@@ -21,6 +21,14 @@ typedef PrefetchStateChangedCallback =
 /// Batched: fetches [_batchSize] pages at a time, only triggers the next batch
 /// when the user approaches the end of what's already prefetched.
 class KindlePrefetchManager {
+  KindlePrefetchManager({
+    int batchSize = 3,
+    int triggerThreshold = 2,
+    int maxPagesAhead = 6,
+  }) : _batchSize = max(1, batchSize),
+       _triggerThreshold = max(0, triggerThreshold),
+       _maxPagesAhead = max(0, maxPagesAhead);
+
   BackgroundWebViewController? _bgController;
   bool _prefetching = false;
   bool _initializing = false;
@@ -35,9 +43,9 @@ class KindlePrefetchManager {
   bool disposed = false;
 
   /// Pages per prefetch batch.
-  static const _batchSize = 3;
-  static const _triggerThreshold = 2;
-  static const _maxPagesAhead = 6;
+  final int _batchSize;
+  final int _triggerThreshold;
+  final int _maxPagesAhead;
 
   /// How many pages ahead have been captured since init/resync.
   int _prefetchedCount = 0;
@@ -63,10 +71,7 @@ class KindlePrefetchManager {
     _emitState('init_start');
     try {
       _bgController = BackgroundWebViewController();
-      _bgController!.startListening(
-        onLoadStop: (url) {
-        },
-      );
+      _bgController!.startListening(onLoadStop: (url) {});
 
       await _bgController!.create(url: kindleUrl);
       initialized = true;

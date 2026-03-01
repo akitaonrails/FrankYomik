@@ -92,7 +92,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   String? _currentAsin;
 
   /// Background webview prefetch manager (Linux-only).
-  var _kindlePrefetch = KindlePrefetchManager();
+  late KindlePrefetchManager _kindlePrefetch;
+  int _kindlePrefetchWindow = -1;
+  bool _kindleOverlayPending = false;
+  int _currentKindleIndex = 0;
 
   // --- Webtoon batching state ---
   static const _batchSize = 5;
@@ -113,6 +116,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   int _statusMessageVersion = 0;
 
   @override
+  void initState() {
+    super.initState();
+    _recreateKindlePrefetchForSettings();
+  }
+
+  @override
   void dispose() {
     _statusClearTimer?.cancel();
     _cancelKindleReapplies();
@@ -122,6 +131,56 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     _completionListeners.clear();
     super.dispose();
+  }
+
+  int _effectivePrefetchWindow() {
+    final raw = ref.read(settingsProvider).prefetchPages;
+    if (raw <= 0) return 0;
+    if (raw > 6) return 6;
+    return raw;
+  }
+
+  void _recreateKindlePrefetchForSettings() {
+    final window = _effectivePrefetchWindow();
+    _kindlePrefetchWindow = window;
+    _kindlePrefetch = KindlePrefetchManager(
+      maxPagesAhead: window,
+      batchSize: window >= 3 ? 3 : window,
+      triggerThreshold: window <= 1 ? 0 : (window <= 3 ? 1 : 2),
+    );
+  }
+
+  void _syncKindlePrefetchConfig() {
+    final window = _effectivePrefetchWindow();
+    if (window == _kindlePrefetchWindow) return;
+    _kindlePrefetch.dispose();
+    _recreateKindlePrefetchForSettings();
+  }
+
+  bool _setKindleOverlayPending(bool pending, {String reason = ''}) {
+    if (_kindleOverlayPending == pending) return false;
+    _kindleOverlayPending = pending;
+    if (kDebugMode) {
+      debugPrint(
+        '[KindleOverlay] pending=$pending'
+        '${reason.isNotEmpty ? ' reason=$reason' : ''}',
+      );
+    }
+    return true;
+  }
+
+  void _pauseKindlePrefetch(String reason) {
+    if (_kindlePrefetch.disposed) return;
+    _kindlePrefetch.dispose();
+    _recreateKindlePrefetchForSettings();
+    if (kDebugMode) {
+      debugPrint('[BgPrefetch] paused reason=$reason');
+    }
+  }
+
+  void _resumeKindlePrefetchIfReady() {
+    if (_kindleOverlayPending) return;
+    _triggerKindlePrefetch(_currentKindleIndex, _kindleNavIntent);
   }
 
   @override
@@ -156,7 +215,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 _batchInProgress = false;
                 // Reset JS detection state so re-injection can re-detect pages
                 controller.evaluateJavascript(
-                  source: 'window.__frankDetectorActive = false; '
+                  source:
+                      'window.__frankDetectorActive = false; '
                       'if(window.__frankDetectedPages) window.__frankDetectedPages.clear();',
                 );
                 _currentKindlePageId = null;
@@ -346,9 +406,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       }
       // Trigger bg webview prefetch on Kindle page change
       final kindleIndex = (pageInfo['index'] as num?)?.toInt() ?? 0;
+      _currentKindleIndex = kindleIndex;
       final navIntent = pageInfo['navIntent'] as String?;
       final newIntent = navIntent == 'backward' ? 'backward' : 'forward';
       _kindleNavIntent = newIntent;
+      if (kDebugMode) {
+        final rr = _kindleRectByPageId[pageId];
+        final rw = rr != null ? (rr['width']?.toStringAsFixed(0) ?? '-') : '-';
+        final rh = rr != null ? (rr['height']?.toStringAsFixed(0) ?? '-') : '-';
+        final dpr =
+            (pageInfo['devicePixelRatio'] as num?)?.toStringAsFixed(2) ?? '-';
+        debugPrint(
+          '[KindleDetect] page=$pageId index=$kindleIndex nav=$newIntent '
+          'rect=${rw}x$rh dpr=$dpr',
+        );
+      }
       // Load per-title pipeline preference from ASIN
       final meta = _jsBridge.parseCurrentUrl(_currentUrl);
       final asin = meta?.title;
@@ -357,12 +429,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         SharedPreferences.getInstance().then((prefs) {
           final saved = prefs.getString('kindle_pipeline_$asin');
           if (saved != null && saved.isNotEmpty && saved != _kindlePipeline) {
-            setState(() { _kindlePipeline = saved; });
+            setState(() {
+              _kindlePipeline = saved;
+            });
             _syncPipelineButtonState();
           }
         });
       }
-      _triggerKindlePrefetch(kindleIndex, newIntent);
       _pushKindleDebugHudToPage();
       _syncFeedbackMarksOverlay();
     }
@@ -377,6 +450,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
 
     final settings = ref.read(settingsProvider);
+    final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
+    if (isKindle) {
+      if (!settings.autoTranslate) {
+        _setKindleOverlayPending(false, reason: 'auto_off');
+      } else {
+        final changed = _setKindleOverlayPending(true, reason: 'page_detected');
+        if (changed) {
+          _pauseKindlePrefetch('page_detected');
+        }
+      }
+    }
 
     // For spread pages (Kindle), check both left and right sub-page jobs
     final pageMode = pageInfo['pageMode'] as String?;
@@ -403,10 +487,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       // Or page not yet submitted and close to frontier → submit next batch
       if (_submittedWebtoonIndices.isEmpty ||
           (!_submittedWebtoonIndices.contains(index) &&
-              index >= (_submittedWebtoonIndices.isEmpty
-                  ? 0
-                  : _submittedWebtoonIndices.reduce((a, b) => a > b ? a : b)) -
-                  _prefetchThreshold)) {
+              index >=
+                  (_submittedWebtoonIndices.isEmpty
+                          ? 0
+                          : _submittedWebtoonIndices.reduce(
+                              (a, b) => a > b ? a : b,
+                            )) -
+                      _prefetchThreshold)) {
         _submitNextBatch();
       }
       return;
@@ -453,6 +540,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         rightJob.isComplete &&
         rightJob.translatedImage != null &&
         _showOverlay) {
+      _setKindleOverlayPending(false, reason: 'spread_already_complete');
+      _resumeKindlePrefetchIfReady();
       _applySpreadOverlay(
         spreadPageId,
         leftJob.translatedImage!,
@@ -475,10 +564,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final controller = _webController;
     if (controller == null) return;
 
+    final captureSw = Stopwatch()..start();
     Uint8List? imageBytes;
+    String captureMode = 'unknown';
 
     final type = pageInfo['type'] as String?;
     if (type == 'dom') {
+      captureMode = 'kindle_dom';
       // Kindle DOM: extract visible blob img as base64 PNG via canvas
       final dataUrl = await controller.evaluateJavascript(
         source: KindleStrategy.captureCurrentPageScript,
@@ -489,6 +581,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         imageBytes = await compute(base64Decode, b64);
       } else {
         // Fallback to screenshot if DOM extraction fails
+        captureMode = 'kindle_dom_fallback_screenshot';
         imageBytes = await _capture.takeScreenshot(controller);
       }
 
@@ -552,9 +645,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         return;
       }
     } else if (type == 'screenshot') {
+      captureMode = 'screenshot';
       // Legacy screenshot fallback
       imageBytes = await _capture.takeScreenshot(controller);
     } else {
+      captureMode = 'webtoon_js_or_http';
       // Webtoon: use JS fetch in the WebView context (has cookies + correct referer)
       final script = _jsBridge.getCaptureScript(pageId);
       if (script != null) {
@@ -592,8 +687,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
     if (imageBytes == null || imageBytes.isEmpty) {
       debugPrint('[Reader] No image captured for $pageId');
+      if (pageId.startsWith('kindle-')) {
+        _setKindleOverlayPending(false, reason: 'capture_empty');
+        _resumeKindlePrefetchIfReady();
+      }
       return;
     }
+
+    captureSw.stop();
+    debugPrint(
+      '[Perf] capture page=$pageId mode=$captureMode '
+      'bytes=${imageBytes.length} ms=${captureSw.elapsedMilliseconds}',
+    );
 
     // Use site-specific pipeline: Kindle uses _kindlePipeline toggle,
     // webtoon uses its own default, others fall through to user setting.
@@ -611,6 +716,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final pageNumber = isKindle
         ? null
         : (pageInfo['index']?.toString() ?? meta?.pageNumber);
+    final submitSw = Stopwatch()..start();
     await ref
         .read(jobsProvider.notifier)
         .submitPage(
@@ -623,6 +729,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           sourceUrl: _currentUrl,
           force: force,
         );
+    submitSw.stop();
+    debugPrint(
+      '[Perf] submit page=$pageId pipeline=${pipeline ?? 'default'} '
+      'ms=${submitSw.elapsedMilliseconds}',
+    );
 
     _updateInPageStatus('Queued $pageId');
 
@@ -740,6 +851,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         _updateInPageStatus('$pageId failed');
         _completionListeners[pageId]?.close();
         _completionListeners.remove(pageId);
+        if (_jsBridge.activeStrategy?.siteName == 'kindle' &&
+            pageId == _currentKindlePageId) {
+          _setKindleOverlayPending(false, reason: 'job_failed');
+          _resumeKindlePrefetchIfReady();
+        }
       }
     });
     _completionListeners[pageId] = sub;
@@ -860,6 +976,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       overlayToken: overlayToken,
     );
 
+    final overlaySw = Stopwatch()..start();
     var ok = false;
     var usedFallback = false;
     try {
@@ -891,9 +1008,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     if (usedFallback) _kindleOverlayFallback++;
     _pushKindleDebugHudToPage();
+    overlaySw.stop();
     debugPrint(
       '[Overlay] ${isSpread ? 'spread ' : ''}$pageId replace=${ok ? 'OK' : 'FAIL'}'
-      '${usedFallback ? ' (fallback)' : ''} imageBytes=${imageBytes.length}',
+      '${usedFallback ? ' (fallback)' : ''} imageBytes=${imageBytes.length} '
+      'ms=${overlaySw.elapsedMilliseconds}',
     );
     final logData = <String, dynamic>{
       if (isSpread) 'spreadPageId': pageId,
@@ -950,6 +1069,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         baseToken: overlayToken,
       );
     }
+    if (pageId == _currentKindlePageId) {
+      final changed = _setKindleOverlayPending(
+        false,
+        reason: ok ? 'overlay_applied' : 'overlay_failed',
+      );
+      if (changed) {
+        _resumeKindlePrefetchIfReady();
+      }
+    }
   }
 
   /// Apply overlay for a 2-page spread: stitch halves and DOM-replace.
@@ -999,9 +1127,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         if (!_showOverlay) return;
         final controller = _webController;
         if (controller == null) return;
-        final ok = await _overlay.replaceVisibleKindlePage(
+        final ok = await _overlay.reapplyVisibleKindlePage(
           controller,
-          imageBytes,
           pageId: pageId,
           expectedBlobSrc: expectedBlob,
           expectedRect: expectedRect,
@@ -2158,8 +2285,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// Cancel all active Kindle jobs, prefetch, and their completion listeners.
   void _cancelKindleJobs() {
+    _setKindleOverlayPending(false, reason: 'cancel_jobs');
     _kindlePrefetch.dispose();
-    _kindlePrefetch = KindlePrefetchManager();
+    _recreateKindlePrefetchForSettings();
     _kindleBlobByPageId.clear();
     _kindleRectByPageId.clear();
     _cancelKindleReapplies();
@@ -2173,8 +2301,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _completionListeners.remove(pageId);
       notifier.removeJob(pageId);
     }
-    if (kindlePageIds.isNotEmpty) {
-    }
   }
 
   /// Trigger Kindle prefetch via background webview (Linux-only).
@@ -2183,6 +2309,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (!Platform.isLinux) return;
     if (_jsBridge.activeStrategy?.siteName != 'kindle') return;
     if (!ref.read(settingsProvider).autoTranslate) return;
+    if (_kindleOverlayPending) {
+      _pauseKindlePrefetch('overlay_pending');
+      return;
+    }
+    _syncKindlePrefetchConfig();
+    if (_kindlePrefetchWindow <= 0) {
+      if (!_kindlePrefetch.disposed) {
+        _kindlePrefetch.dispose();
+      }
+      return;
+    }
     final direction = navIntent == 'backward' ? 'backward' : 'forward';
 
     // Lazy-init the bg webview prefetch manager.
@@ -2311,13 +2448,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
       if (!serverOk) return;
     } catch (e) {
-      debugPrint('[Feedback] Failed to load metadata for $pageId (attempt ${retryCount + 1}): $e');
+      debugPrint(
+        '[Feedback] Failed to load metadata for $pageId (attempt ${retryCount + 1}): $e',
+      );
       // Retry once after a delay — server cache may still be flushing after
       // the worker stored the result (race between Redis notify and disk I/O).
       if (retryCount < 1 && mounted) {
         Future.delayed(const Duration(seconds: 2), () {
           if (!mounted) return;
-          _loadMetadataForPage(pageId, force: force, retryCount: retryCount + 1);
+          _loadMetadataForPage(
+            pageId,
+            force: force,
+            retryCount: retryCount + 1,
+          );
         });
       }
     } finally {
@@ -2920,6 +3063,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     Uint8List imageBytes,
     String pageMode,
   ) async {
+    final sw = Stopwatch()..start();
     // Use a prefetch-specific pageId based on timestamp to avoid clashes.
     final ts = DateTime.now().millisecondsSinceEpoch;
     final prefetchId = 'kindle-pre-$ts';
@@ -2932,6 +3076,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final hash = await cache.hashImage(imageBytes);
     final cached = await cache.lookupByHash(hash, _kindlePipeline);
     if (cached != null) {
+      sw.stop();
+      debugPrint(
+        '[Perf] bg-prefetch cached hash=$hash ms=${sw.elapsedMilliseconds}',
+      );
       return;
     }
 
@@ -2975,6 +3123,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             priority: 'low',
           );
     }
+    sw.stop();
+    debugPrint(
+      '[Perf] bg-prefetch submitted id=$prefetchId mode=$pageMode '
+      'bytes=${imageBytes.length} ms=${sw.elapsedMilliseconds}',
+    );
   }
 
   /// Manual translate: submit the next batch of detected pages.

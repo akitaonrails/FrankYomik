@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'app_webview_controller.dart';
@@ -13,8 +14,11 @@ class LinuxWebViewWidget extends StatefulWidget {
   final void Function(AppWebViewController controller)? onWebViewCreated;
   final void Function(AppWebViewController controller, String? url)? onLoadStop;
   final void Function(
-          AppWebViewController controller, String? url, bool? isReload)?
-      onUpdateVisitedHistory;
+    AppWebViewController controller,
+    String? url,
+    bool? isReload,
+  )?
+  onUpdateVisitedHistory;
 
   const LinuxWebViewWidget({
     super.key,
@@ -33,6 +37,7 @@ class _LinuxWebViewWidgetState extends State<LinuxWebViewWidget> {
   static const _eventChannel = EventChannel('frank_client/webview_events');
 
   late final LinuxWebViewController _controller;
+  StreamSubscription<dynamic>? _eventSub;
   bool _created = false;
 
   @override
@@ -41,7 +46,7 @@ class _LinuxWebViewWidgetState extends State<LinuxWebViewWidget> {
     _controller = LinuxWebViewController();
 
     // Listen for events from native WebKitGTK.
-    _eventChannel.receiveBroadcastStream().listen(_onEvent);
+    _eventSub = _eventChannel.receiveBroadcastStream().listen(_onEvent);
 
     // Create the native WebView after the first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) => _createWebView());
@@ -82,6 +87,7 @@ class _LinuxWebViewWidgetState extends State<LinuxWebViewWidget> {
 
   @override
   void dispose() {
+    _eventSub?.cancel();
     if (_created) {
       _controller.destroy();
     }

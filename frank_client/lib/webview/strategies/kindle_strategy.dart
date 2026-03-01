@@ -238,6 +238,10 @@ $_findVisibleBlobFn
 
   /// JS that extracts the visible blob img as a base64 PNG data URL.
   /// Synchronous — draws the img onto a canvas and calls toDataURL().
+  ///
+  /// Important: capture at the rendered viewport size (not natural pixel size)
+  /// so server-side text rendering stays proportionate to what the user sees,
+  /// and to avoid huge base64 payloads on maximized windows.
   static String get captureCurrentPageScript =>
       '''
 (function() {
@@ -245,10 +249,23 @@ $_findVisibleBlobFn
   var target = __frankFindVisibleBlob();
   if (!target) return null;
 
+  var rect = target.getBoundingClientRect();
+  var dpr = window.devicePixelRatio || 1;
+  var renderW = Math.max(1, Math.round(rect.width * dpr));
+  var renderH = Math.max(1, Math.round(rect.height * dpr));
+  // Bound capture size to keep JS bridge payloads predictable on ultrawide/maximized windows.
+  var maxSide = 2200;
+  var side = Math.max(renderW, renderH);
+  var scale = side > maxSide ? (maxSide / side) : 1;
+  var outW = Math.max(1, Math.round(renderW * scale));
+  var outH = Math.max(1, Math.round(renderH * scale));
+
   var c = document.createElement('canvas');
-  c.width = target.naturalWidth;
-  c.height = target.naturalHeight;
-  c.getContext('2d').drawImage(target, 0, 0);
+  c.width = outW;
+  c.height = outH;
+  var ctx = c.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(target, 0, 0, outW, outH);
   try {
     return c.toDataURL('image/png');
   } catch(e) {

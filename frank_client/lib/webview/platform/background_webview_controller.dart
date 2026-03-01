@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/services.dart';
 
@@ -8,11 +9,11 @@ import 'package:flutter/services.dart';
 /// meaning it inherits cookies/session — enabling authenticated prefetch.
 class BackgroundWebViewController {
   static const _channel = MethodChannel('frank_client/bg_webview');
-  static const _eventChannel =
-      EventChannel('frank_client/bg_webview_events');
+  static const _eventChannel = EventChannel('frank_client/bg_webview_events');
 
   final Map<String, Function(List<dynamic>)> _handlers = {};
   bool _listening = false;
+  StreamSubscription<dynamic>? _eventSub;
 
   // GDK keyvals for arrow keys (from gdk/gdkkeysyms.h).
   static const int gdkKeyLeft = 0xff51;
@@ -53,7 +54,7 @@ class BackgroundWebViewController {
     if (_listening) return;
     _listening = true;
 
-    _eventChannel.receiveBroadcastStream().listen((event) {
+    _eventSub = _eventChannel.receiveBroadcastStream().listen((event) {
       if (event is! Map) return;
       final type = event['type'] as String?;
       final data = event['data'];
@@ -87,6 +88,9 @@ class BackgroundWebViewController {
 
   /// Destroy the background webview.
   Future<void> destroy() async {
+    await _eventSub?.cancel();
+    _eventSub = null;
+    _listening = false;
     await _channel.invokeMethod('destroy');
     _handlers.clear();
   }
