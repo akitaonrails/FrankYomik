@@ -17,18 +17,18 @@ const (
 	dedupKey       = "frank:dedup"
 	imageTTL       = 0 // no expiry — v2 cache is authoritative, Redis is fallback
 	dedupTTL       = 1 * time.Hour
-	maxLenHigh     = 500
-	maxLenLow      = 1000
 )
 
 // Queue handles Redis stream operations for job submission.
 type Queue struct {
-	rdb *redis.Client
+	rdb        *redis.Client
+	maxLenHigh int64
+	maxLenLow  int64
 }
 
 // NewQueue creates a new Queue connected to Redis.
 func NewQueue(rdb *redis.Client) *Queue {
-	return &Queue{rdb: rdb}
+	return &Queue{rdb: rdb, maxLenHigh: 500, maxLenLow: 1000}
 }
 
 // JobMetadata holds optional metadata for a job submission.
@@ -68,10 +68,10 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 
 	// Choose stream and max length
 	stream := streamHigh
-	maxLen := int64(maxLenHigh)
+	maxLen := q.maxLenHigh
 	if priority == "low" {
 		stream = streamLow
-		maxLen = int64(maxLenLow)
+		maxLen = q.maxLenLow
 	}
 
 	// Enqueue

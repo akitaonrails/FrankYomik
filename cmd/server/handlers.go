@@ -16,8 +16,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const maxImageSize = 20 << 20 // 20 MB
-
 var cachedV2JobIDRe = regexp.MustCompile(`^cached-v2-([a-z_]+)-([a-f0-9]{64})$`)
 
 type metadataPatchRequest struct {
@@ -32,6 +30,11 @@ type Server struct {
 	results *Results
 	cache   *Cache
 	rdb     *redis.Client
+
+	// Configurable limits (set from env vars in main.go)
+	maxImageSize     int64 // max upload size in bytes (default: 20 << 20)
+	streamMaxLenHigh int64 // XADD MAXLEN for high-priority stream
+	streamMaxLenLow  int64 // XADD MAXLEN for low-priority stream
 
 	// WebSocket subscriptions
 	mu          sync.Mutex
@@ -70,8 +73,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 // handleCreateJob handles POST /api/v1/jobs
 func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxImageSize)
-	if err := r.ParseMultipartForm(maxImageSize); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxImageSize)
+	if err := r.ParseMultipartForm(s.maxImageSize); err != nil {
 		jsonError(w, "invalid multipart form", http.StatusBadRequest)
 		return
 	}

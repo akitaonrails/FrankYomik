@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -40,8 +41,18 @@ func main() {
 	}
 	log.Printf("Connected to Redis: %s", redactURL(redisURL))
 
+	// Configurable limits from environment
+	maxImageSizeMB := getEnvInt("MAX_IMAGE_SIZE_MB", 20)
+	streamMaxLenHigh := getEnvInt("STREAM_MAXLEN_HIGH", 500)
+	streamMaxLenLow := getEnvInt("STREAM_MAXLEN_LOW", 1000)
+
 	// Server
 	server := NewServer(rdb, cacheDir)
+	server.maxImageSize = int64(maxImageSizeMB) << 20
+	server.streamMaxLenHigh = int64(streamMaxLenHigh)
+	server.streamMaxLenLow = int64(streamMaxLenLow)
+	server.queue.maxLenHigh = server.streamMaxLenHigh
+	server.queue.maxLenLow = server.streamMaxLenLow
 	absCacheDir, _ := filepath.Abs(cacheDir)
 	log.Printf("Cache directory: %s (absolute: %s)", cacheDir, absCacheDir)
 
@@ -90,6 +101,16 @@ func main() {
 func getEnv(key, defaultVal string) string {
 	if val := os.Getenv(key); val != "" {
 		return val
+	}
+	return defaultVal
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	if val := os.Getenv(key); val != "" {
+		if n, err := strconv.Atoi(val); err == nil {
+			return n
+		}
+		log.Printf("WARN: invalid %s=%q, using default %d", key, val, defaultVal)
 	}
 	return defaultVal
 }
