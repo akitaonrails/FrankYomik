@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -37,7 +38,7 @@ func main() {
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		log.Fatalf("Cannot connect to Redis: %v", err)
 	}
-	log.Printf("Connected to Redis: %s", redisURL)
+	log.Printf("Connected to Redis: %s", redactURL(redisURL))
 
 	// Server
 	server := NewServer(rdb, cacheDir)
@@ -91,4 +92,18 @@ func getEnv(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+// redactURL masks the password in a URL for safe logging.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid-url>"
+	}
+	if u.User != nil {
+		if _, hasPw := u.User.Password(); hasPw {
+			u.User = url.UserPassword(u.User.Username(), "***")
+		}
+	}
+	return u.String()
 }

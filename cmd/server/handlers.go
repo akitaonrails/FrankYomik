@@ -137,7 +137,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			cacheJobID := fmt.Sprintf("cached-v2-%s-%s", pipeline, sourceHash)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(JobResponse{
+			if err := json.NewEncoder(w).Encode(JobResponse{
 				JobID:       cacheJobID,
 				Status:      "completed",
 				Cached:      true,
@@ -146,7 +146,9 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 				SourceHash:  sourceHash,
 				ContentHash: m.ContentHash,
 				RenderHash:  m.RenderHash,
-			})
+			}); err != nil {
+				log.Printf("WARN: response encode: %v", err)
+			}
 			return
 		}
 	}
@@ -165,7 +167,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		if err == nil && status.Status == "completed" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(JobResponse{
+			if err := json.NewEncoder(w).Encode(JobResponse{
 				JobID:       jobID,
 				Status:      "completed",
 				Cached:      true,
@@ -175,19 +177,23 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 				SourceHash:  status.SourceHash,
 				ContentHash: status.ContentHash,
 				RenderHash:  status.RenderHash,
-			})
+			}); err != nil {
+				log.Printf("WARN: response encode: %v", err)
+			}
 			return
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(JobResponse{
+	if err := json.NewEncoder(w).Encode(JobResponse{
 		JobID:      jobID,
 		Status:     "queued",
 		DedupHit:   dedupHit,
 		SourceHash: sourceHash,
-	})
+	}); err != nil {
+		log.Printf("WARN: response encode: %v", err)
+	}
 }
 
 // handleGetJob handles GET /api/v1/jobs/{id}
@@ -209,7 +215,7 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(JobStatusResponse{
+		if err := json.NewEncoder(w).Encode(JobStatusResponse{
 			JobID:       jobID,
 			Status:      "completed",
 			Pipeline:    pipeline,
@@ -218,7 +224,9 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 			SourceHash:  sourceHash,
 			ContentHash: m.ContentHash,
 			RenderHash:  m.RenderHash,
-		})
+		}); err != nil {
+			log.Printf("WARN: response encode: %v", err)
+		}
 		return
 	}
 
@@ -230,7 +238,9 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		log.Printf("WARN: response encode: %v", err)
+	}
 }
 
 // handleGetJobImage handles GET /api/v1/jobs/{id}/image
@@ -521,7 +531,9 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "deleted"}); err != nil {
+		log.Printf("WARN: response encode: %v", err)
+	}
 }
 
 // handleHealth handles GET /api/v1/health
@@ -539,7 +551,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Redis = "disconnected"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			log.Printf("WARN: response encode: %v", err)
+		}
 		return
 	}
 
@@ -548,12 +562,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp.QueueLow, _ = s.rdb.XLen(ctx, streamLow).Result()
 
 	// Active workers
-	workers, _ := s.results.GetActiveWorkers(ctx)
+	workers, err := s.results.GetActiveWorkers(ctx)
+	if err != nil {
+		log.Printf("WARN: GetActiveWorkers: %v", err)
+	}
 	resp.Workers = workers
 	resp.ActiveWorkers = len(workers)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("WARN: response encode: %v", err)
+	}
 }
 
 // subscribe registers a channel to receive notifications for a job.
@@ -682,5 +701,7 @@ func parseCachedV2JobID(jobID string) (pipeline string, sourceHash string, ok bo
 func jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		log.Printf("WARN: response encode: %v", err)
+	}
 }

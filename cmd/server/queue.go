@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -109,8 +110,12 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 
 	// Store dedup mapping (keyed by hash + pipeline)
 	if !forceNew {
-		q.rdb.HSet(ctx, dedupKey, dedupField, jobID)
-		q.rdb.Expire(ctx, dedupKey, dedupTTL)
+		if err := q.rdb.HSet(ctx, dedupKey, dedupField, jobID).Err(); err != nil {
+			log.Printf("WARN: dedup HSet: %v", err)
+		}
+		if err := q.rdb.Expire(ctx, dedupKey, dedupTTL).Err(); err != nil {
+			log.Printf("WARN: dedup Expire: %v", err)
+		}
 	}
 
 	return jobID, false, nil
