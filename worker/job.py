@@ -113,7 +113,7 @@ def _report(cb: ProgressCallback | None, stage: str, detail: str, percent: int):
         try:
             cb(stage, detail, percent)
         except Exception:
-            pass
+            log.warning("Progress callback failed", exc_info=True)
 
 
 def _norm_bbox(bbox: tuple[int, int, int, int], width: int,
@@ -141,7 +141,7 @@ def _bbox_from_region(region: dict[str, Any], img_w: int,
                 max(0, min(img_w, x2)),
                 max(0, min(img_h, y2)),
             )
-        except Exception:
+        except (ValueError, TypeError, IndexError):
             pass
 
     norm = region.get("bbox_norm")
@@ -157,7 +157,7 @@ def _bbox_from_region(region: dict[str, Any], img_w: int,
                 max(0, min(img_w, x2)),
                 max(0, min(img_h, y2)),
             )
-        except Exception:
+        except (ValueError, TypeError, IndexError):
             pass
     return None
 

@@ -7,6 +7,7 @@ import re
 import signal
 import time
 import hashlib
+from urllib.parse import urlparse, urlunparse
 
 import redis
 
@@ -30,6 +31,21 @@ META_BY_HASH_PREFIX = "frank:meta:"
 RESULT_TTL = 3600  # 1 hour
 HEARTBEAT_TTL = 60  # seconds
 PROGRESS_TTL = 60  # seconds
+
+
+def _redact_url(url_str: str) -> str:
+    """Mask the password in a Redis URL for safe logging."""
+    try:
+        parsed = urlparse(url_str)
+        if parsed.password:
+            replaced = parsed._replace(
+                netloc=f"{parsed.username}:***@{parsed.hostname}"
+                + (f":{parsed.port}" if parsed.port else "")
+            )
+            return urlunparse(replaced)
+    except Exception:
+        return "<invalid-url>"
+    return url_str
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9\-]")
@@ -72,9 +88,14 @@ class Consumer:
 
     def connect(self) -> None:
         """Connect to Redis and ensure consumer groups exist."""
-        self._rdb = redis.from_url(self.redis_url, decode_responses=False)
+        self._rdb = redis.from_url(
+            self.redis_url,
+            decode_responses=False,
+            socket_timeout=30,
+            socket_connect_timeout=10,
+        )
         self._rdb.ping()
-        log.info("Connected to Redis: %s", self.redis_url)
+        log.info("Connected to Redis: %s", _redact_url(self.redis_url))
 
         # Create consumer groups (MKSTREAM creates the stream if needed)
         for stream in (STREAM_HIGH, STREAM_LOW):
