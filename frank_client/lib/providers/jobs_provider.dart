@@ -429,6 +429,17 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     });
   }
 
+  /// Clear all tracked jobs (used when wiping the local cache).
+  void clearAll() {
+    for (final job in state.values) {
+      if (job.jobId != null) {
+        _ws.unsubscribeFromJobs([job.jobId!]);
+      }
+    }
+    _backfillJobs.clear();
+    state = {};
+  }
+
   void removeJob(String pageId) {
     final updated = Map<String, PageJob>.from(state);
     final job = updated.remove(pageId);

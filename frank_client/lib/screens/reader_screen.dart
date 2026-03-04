@@ -1339,6 +1339,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     '<button id="__frankSaveEdits" title="Save feedback edits" style="display:none;">Save</button>' +
     '<button id="__frankCancelEdits" title="Cancel feedback edits" style="display:none;">Cancel</button>' +
     '<button id="__frankReload" title="Reload page">&#x21BB; Reload</button>' +
+    '<button id="__frankClearCache" title="Clear all cached translations">&#x1F5D1; Clear Cache</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
     '<span id="__frankStatus"></span>';
   bar.style.cssText =
@@ -1677,6 +1678,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   var cancelEditsBtn = document.getElementById('__frankCancelEdits');
   var toggleOrigBtn = document.getElementById('__frankToggleOrig');
   var reloadBtn = document.getElementById('__frankReload');
+  var clearCacheBtn = document.getElementById('__frankClearCache');
   var copyDbgBtn = document.getElementById('__frankCopyDbg');
   if (backBtn) backBtn.style.cssText = btnStyle;
   if (autoBtn) autoBtn.style.cssText = btnStyle;
@@ -1687,6 +1689,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   if (saveEditsBtn) saveEditsBtn.style.cssText = btnStyle + 'display:none;';
   if (cancelEditsBtn) cancelEditsBtn.style.cssText = btnStyle + 'display:none;';
   if (reloadBtn) reloadBtn.style.cssText = btnStyle;
+  if (clearCacheBtn) clearCacheBtn.style.cssText = btnStyle;
   if (copyDbgBtn) copyDbgBtn.style.cssText = btnStyle + 'display:none;';
 
   var collapsed = false;
@@ -1738,6 +1741,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   if (reloadBtn) reloadBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'reload');
+  });
+  if (clearCacheBtn) clearCacheBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'clear_cache');
   });
   if (copyDbgBtn) copyDbgBtn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -1885,6 +1892,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           case 'reload':
             _reloadPage();
             break;
+          case 'clear_cache':
+            _clearCache();
+            break;
           case 'copy_debug':
             _copyKindleDebugHudToClipboard();
             break;
@@ -2016,6 +2026,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// Full reload of the WebView page.
   void _reloadPage() {
     _webController?.evaluateJavascript(source: 'location.reload();');
+  }
+
+  Future<void> _clearCache() async {
+    _updateInPageStatus('Clearing cache...');
+    final cache = ref.read(cacheServiceProvider);
+    final count = await cache.clearAll();
+    // Also clear in-memory job state so pages get re-submitted
+    ref.read(jobsProvider.notifier).clearAll();
+    _updateInPageStatus(
+      'Cleared $count cached pages',
+      clearAfter: const Duration(seconds: 3),
+    );
   }
 
   void _toggleOverlayEditMode() {

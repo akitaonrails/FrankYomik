@@ -256,6 +256,21 @@ class CacheService {
     }
   }
 
+  /// Delete all cached entries (SQLite rows, disk files, and memory cache).
+  Future<int> clearAll() async {
+    _memoryCache.clear();
+    if (_db == null) return 0;
+    await ready;
+    final rows = await _db!.query('pages', columns: ['id', 'file_path']);
+    for (final row in rows) {
+      try {
+        await File(row['file_path'] as String).delete();
+      } catch (_) {}
+    }
+    await _db!.delete('pages');
+    return rows.length;
+  }
+
   Future<void> dispose() async {
     await _db?.close();
   }
