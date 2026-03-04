@@ -169,15 +169,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     return true;
   }
 
-  void _pauseKindlePrefetch(String reason) {
-    if (_kindlePrefetch.disposed) return;
-    _kindlePrefetch.dispose();
-    _recreateKindlePrefetchForSettings();
-    if (kDebugMode) {
-      debugPrint('[BgPrefetch] paused reason=$reason');
-    }
-  }
-
   void _resumeKindlePrefetchIfReady() {
     if (_kindleOverlayPending) return;
     _triggerKindlePrefetch(_currentKindleIndex, _kindleNavIntent);
@@ -438,6 +429,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       }
       _pushKindleDebugHudToPage();
       _syncFeedbackMarksOverlay();
+      // Keep the prefetch manager running — it submits low-priority jobs
+      // that won't compete with the current page's high-priority job.
+      // This avoids destroying the bg webview on every page turn (re-init
+      // takes ~10s, during which the user pages ahead and kills it again).
+      _triggerKindlePrefetch(kindleIndex, newIntent);
     }
 
     _logKindle('kindle_detect', {
@@ -455,10 +451,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       if (!settings.autoTranslate) {
         _setKindleOverlayPending(false, reason: 'auto_off');
       } else {
-        final changed = _setKindleOverlayPending(true, reason: 'page_detected');
-        if (changed) {
-          _pauseKindlePrefetch('page_detected');
-        }
+        _setKindleOverlayPending(true, reason: 'page_detected');
       }
     }
 
@@ -2273,10 +2266,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (!Platform.isLinux) return;
     if (_jsBridge.activeStrategy?.siteName != 'kindle') return;
     if (!ref.read(settingsProvider).autoTranslate) return;
-    if (_kindleOverlayPending) {
-      _pauseKindlePrefetch('overlay_pending');
-      return;
-    }
     _syncKindlePrefetchConfig();
     if (_kindlePrefetchWindow <= 0) {
       if (!_kindlePrefetch.disposed) {
