@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -23,8 +24,8 @@ from pipeline.processor import (
     ocr_bubble,
     render_page_to_bytes,
     transform_furigana,
-    transform_translate,
 )
+from pipeline.translator import translate
 from pipeline.text_renderer import render_english, render_furigana_vertical
 
 log = logging.getLogger(__name__)
@@ -337,13 +338,40 @@ def _process_manga(job: ProcessingJob,
         page.bubble_results.append(br)
 
     # Transform
-    _report(progress_cb, "translating", "", 65)
-    transform_fn = (transform_furigana if mode == PipelineMode.FURIGANA
-                    else transform_translate)
     total_br = len(page.bubble_results)
-    for i, br in enumerate(page.bubble_results):
-        _report(progress_cb, "translating", f"{i+1}/{total_br} bubbles", 65 + int(25 * (i+1) / max(total_br, 1)))
-        transform_fn(br)
+    if mode == PipelineMode.FURIGANA:
+        _report(progress_cb, "translating", "", 65)
+        for i, br in enumerate(page.bubble_results):
+            _report(progress_cb, "translating", f"{i+1}/{total_br} bubbles",
+                    65 + int(25 * (i+1) / max(total_br, 1)))
+            transform_furigana(br)
+    else:
+        # Translation calls are independent HTTP POSTs — run in parallel
+        translatable = [(i, br) for i, br in enumerate(page.bubble_results)
+                        if br.is_valid]
+        _report(progress_cb, "translating", f"{len(translatable)} bubbles", 65)
+        if translatable:
+            with ThreadPoolExecutor(
+                max_workers=min(8, len(translatable))
+            ) as pool:
+                futures = {
+                    pool.submit(translate, br.ocr_text): (i, br)
+                    for i, br in translatable
+                }
+                done = 0
+                for future in as_completed(futures):
+                    i, br = futures[future]
+                    done += 1
+                    _report(progress_cb, "translating",
+                            f"{done}/{len(translatable)} bubbles",
+                            65 + int(25 * done / len(translatable)))
+                    try:
+                        english = future.result()
+                        if english.strip():
+                            br.transformed = english
+                    except Exception:
+                        log.warning("Translation failed for bubble %d",
+                                    i, exc_info=True)
 
     # Render to bytes
     _report(progress_cb, "rendering", "", 95)
@@ -403,7 +431,7 @@ def _process_webtoon(job: ProcessingJob,
     detect_bubbles_rtdetr(page)
 
     _report(progress_cb, "translating", "", 50)
-    validate_and_translate(page)
+    validate_and_translate(page, parallel=True)
 
     _report(progress_cb, "rendering", "", 90)
     output_bytes = wt_render_bytes(page)

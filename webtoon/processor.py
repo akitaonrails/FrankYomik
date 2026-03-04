@@ -2,6 +2,7 @@
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -255,13 +256,20 @@ def _detect_subgroups(detections: list[TextDetection],
     return groups
 
 
-def validate_and_translate(page: WebtoonPageResult) -> None:
+def validate_and_translate(page: WebtoonPageResult,
+                           parallel: bool = False) -> None:
     """Stage 4: Validate Korean text and translate to English.
 
     When a bubble contains multiple distinct text groups (separated by a
     significant vertical gap), each group is translated independently and
     gets its own WebtoonTextRegion for separate rendering.
+
+    When parallel=True, translation HTTP calls are batched via
+    ThreadPoolExecutor instead of running sequentially.
     """
+    # Phase 1: validate and create regions, collect pending translations
+    pending: list[tuple[WebtoonTextRegion, str]] = []
+
     for bubble in page.bubbles:
         if _is_title_text(bubble):
             log.info("  Skipping title/logo text: %s", bubble.combined_text)
@@ -278,19 +286,50 @@ def validate_and_translate(page: WebtoonPageResult) -> None:
         groups = _detect_subgroups(bubble.text_regions)
 
         if len(groups) == 1:
-            # Single group — translate all text together
-            _translate_group(page, bubble, bubble.text_regions, None)
+            _validate_group(page, bubble, bubble.text_regions, None, pending,
+                            defer=parallel)
         else:
-            # Multiple groups — translate each separately
             log.info("  Split bubble into %d sub-groups", len(groups))
             for group_dets in groups:
-                _translate_group(page, bubble, group_dets, group_dets)
+                _validate_group(page, bubble, group_dets, group_dets, pending,
+                                defer=parallel)
+
+    # Phase 2: translate (parallel or already done inline)
+    if parallel and pending:
+        with ThreadPoolExecutor(
+            max_workers=min(8, len(pending))
+        ) as pool:
+            futures = {
+                pool.submit(translate, text): (region, text)
+                for region, text in pending
+            }
+            for future in as_completed(futures):
+                region, text = futures[future]
+                try:
+                    english = future.result()
+                    if english.strip():
+                        region.english = english
+                        log.info("  EN: %s", english)
+                    else:
+                        log.info("  Translation empty for '%s'", text)
+                except Exception:
+                    log.warning("Translation failed for '%s'",
+                                text, exc_info=True)
 
 
-def _translate_group(page: WebtoonPageResult, bubble: WebtoonBubble,
-                     detections: list[TextDetection],
-                     group_dets: list[TextDetection] | None) -> None:
-    """Validate and translate a group of detections within a bubble."""
+def _validate_group(
+    page: WebtoonPageResult,
+    bubble: WebtoonBubble,
+    detections: list[TextDetection],
+    group_dets: list[TextDetection] | None,
+    pending: list[tuple[WebtoonTextRegion, str]],
+    defer: bool = False,
+) -> None:
+    """Validate a group of detections and translate or defer translation.
+
+    When defer=True, appends (region, text) to pending for batch translation.
+    When defer=False, translates inline (original sequential behaviour).
+    """
     group_text = " ".join(d.text for d in detections)
 
     if not is_valid_korean(group_text):
@@ -303,15 +342,17 @@ def _translate_group(page: WebtoonPageResult, bubble: WebtoonBubble,
     region = WebtoonTextRegion(
         bubble=bubble, is_valid=True, group_detections=group_dets)
     log.info("  KO: %s", group_text)
-
-    english = translate(group_text)
-    if english.strip():
-        region.english = english
-        log.info("  EN: %s", english)
-    else:
-        log.info("  Translation empty for '%s'", group_text)
-
     page.regions.append(region)
+
+    if defer:
+        pending.append((region, group_text))
+    else:
+        english = translate(group_text)
+        if english.strip():
+            region.english = english
+            log.info("  EN: %s", english)
+        else:
+            log.info("  Translation empty for '%s'", group_text)
 
 
 def render_page(page: WebtoonPageResult, out_dir: str,

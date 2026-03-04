@@ -1,5 +1,6 @@
 """Tests for worker job processing and routing."""
 
+import time
 from unittest.mock import patch, MagicMock, call
 
 from PIL import Image
@@ -113,12 +114,13 @@ class TestValidPipelines:
 
 
 class TestProcessJobManga:
-    @patch("worker.job.transform_translate")
+    @patch("worker.job.translate")
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_translate_pipeline_returns_png(
         self, mock_detect, mock_ocr, mock_translate
     ):
+        mock_translate.return_value = "Test"
         mock_ocr.return_value = BubbleResult(
             bbox=(10, 10, 50, 50),
             ocr_text="テスト", is_valid=True,
@@ -154,13 +156,14 @@ class TestProcessJobManga:
         assert result.status == "completed"
         assert result.image_bytes is not None
 
-    @patch("worker.job.transform_translate")
+    @patch("worker.job.translate")
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_calls_stages_in_order(
         self, mock_detect, mock_ocr, mock_translate
     ):
-        """Verify pipeline stages are called: detect → ocr → transform."""
+        """Verify pipeline stages are called: detect → ocr → translate."""
+        mock_translate.return_value = "Test"
         mock_ocr.return_value = BubbleResult(
             bbox=(0, 0, 10, 10),
         )
@@ -174,13 +177,14 @@ class TestProcessJobManga:
         mock_detect.assert_called_once()
         # OCR is called for each bubble in bubbles_raw (default empty = 0 calls)
 
-    @patch("worker.job.transform_translate")
+    @patch("worker.job.translate")
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
-    def test_translate_uses_transform_translate(
+    def test_translate_uses_translate(
         self, mock_detect, mock_ocr, mock_translate
     ):
-        """manga_translate should call transform_translate, not furigana."""
+        """manga_translate should call translate() directly, not furigana."""
+        mock_translate.return_value = "Test"
         mock_ocr.return_value = BubbleResult(
             bbox=(0, 0, 10, 10), is_valid=True, ocr_text="テスト",
         )
@@ -195,7 +199,7 @@ class TestProcessJobManga:
         )
         process_job(job)
 
-        mock_translate.assert_called_once()
+        mock_translate.assert_called_once_with("テスト")
 
     @patch("worker.job.transform_furigana")
     @patch("worker.job.ocr_bubble")
@@ -219,7 +223,7 @@ class TestProcessJobManga:
 
         mock_furigana.assert_called_once()
 
-    @patch("worker.job.transform_translate")
+    @patch("worker.job.translate")
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_bubble_count_reflects_transformed(
@@ -243,13 +247,14 @@ class TestProcessJobManga:
             )
         mock_ocr.side_effect = mock_ocr_fn
 
-        # Only set transformed on 2 out of 3
-        transform_calls = [0]
-        def mock_transform(br):
-            transform_calls[0] += 1
-            if transform_calls[0] <= 2:
-                br.transformed = "English text"
-        mock_translate.side_effect = mock_transform
+        # Return English for first 2, empty for third
+        translate_calls = [0]
+        def mock_translate_fn(text):
+            translate_calls[0] += 1
+            if translate_calls[0] <= 2:
+                return "English text"
+            return ""
+        mock_translate.side_effect = mock_translate_fn
 
         img_bytes = _make_test_image_bytes()
         job = ProcessingJob(
@@ -259,7 +264,7 @@ class TestProcessJobManga:
 
         assert result.bubble_count == 2
 
-    @patch("worker.job.transform_translate")
+    @patch("worker.job.translate")
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_metadata_payload_structure(
@@ -272,7 +277,7 @@ class TestProcessJobManga:
         mock_ocr.return_value = BubbleResult(
             bbox=(10, 10, 50, 50), ocr_text="テスト", is_valid=True,
         )
-        mock_translate.side_effect = lambda br: setattr(br, "transformed", "Test")
+        mock_translate.return_value = "Test"
 
         img_bytes = _make_test_image_bytes()
         job = ProcessingJob(
@@ -572,3 +577,51 @@ class TestRerenderFromMetadata:
         result = process_job(job)
         assert result.status == "completed"
         assert result.bubble_count == 1
+
+
+# --- Parallel translation ---
+
+
+class TestParallelTranslation:
+    @patch("worker.job.translate")
+    @patch("worker.job.ocr_bubble")
+    @patch("worker.job.detect_page_bubbles")
+    def test_translate_calls_are_parallel(
+        self, mock_detect, mock_ocr, mock_translate
+    ):
+        """Translation of multiple bubbles should run in parallel threads."""
+        NUM_BUBBLES = 5
+        SLEEP_PER_CALL = 0.05  # 50ms each
+
+        def add_bubbles(page):
+            page.bubbles_raw = [
+                {"bbox": (i * 10, 0, i * 10 + 10, 10)}
+                for i in range(NUM_BUBBLES)
+            ]
+        mock_detect.side_effect = add_bubbles
+
+        def mock_ocr_fn(img, bubble):
+            return BubbleResult(
+                bbox=bubble["bbox"], ocr_text="テスト", is_valid=True,
+            )
+        mock_ocr.side_effect = mock_ocr_fn
+
+        def slow_translate(text):
+            time.sleep(SLEEP_PER_CALL)
+            return "English"
+        mock_translate.side_effect = slow_translate
+
+        img_bytes = _make_test_image_bytes()
+        job = ProcessingJob(
+            job_id="par-1", pipeline="manga_translate", image_bytes=img_bytes,
+        )
+
+        start = time.monotonic()
+        result = process_job(job)
+        elapsed = time.monotonic() - start
+
+        assert result.status == "completed"
+        assert result.bubble_count == NUM_BUBBLES
+        assert mock_translate.call_count == NUM_BUBBLES
+        # Sequential would be ~250ms, parallel should be ~50ms + overhead
+        assert elapsed < SLEEP_PER_CALL * NUM_BUBBLES * 0.6
