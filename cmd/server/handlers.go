@@ -48,11 +48,12 @@ func NewServer(rdb *redis.Client, cacheDir string) *Server {
 		log.Printf("WARN: failed to prepare cache v2 directories: %v", err)
 	}
 	return &Server{
-		queue:       NewQueue(rdb),
-		results:     NewResults(rdb),
-		cache:       cache,
-		rdb:         rdb,
-		subscribers: make(map[string]map[chan WSNotification]struct{}),
+		queue:        NewQueue(rdb),
+		results:      NewResults(rdb),
+		cache:        cache,
+		rdb:          rdb,
+		maxImageSize: 20 << 20, // 20 MiB default
+		subscribers:  make(map[string]map[chan WSNotification]struct{}),
 	}
 }
 

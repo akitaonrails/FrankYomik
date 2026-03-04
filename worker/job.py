@@ -175,6 +175,46 @@ def _region_manual_text(region: dict[str, Any]) -> str:
     return ""
 
 
+def _build_region(
+    region_id: str,
+    kind: str,
+    bbox: tuple[int, int, int, int] | list[int],
+    img_w: int,
+    img_h: int,
+    ocr_text: str,
+    is_valid: bool,
+    transformed: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a standardised region dict for metadata payloads."""
+    bbox_tuple = tuple(int(v) for v in bbox)
+    return {
+        "id": region_id,
+        "kind": kind,
+        "bbox": list(bbox_tuple),
+        "bbox_norm": _norm_bbox(bbox_tuple, img_w, img_h),
+        "ocr_text": ocr_text,
+        "is_valid": is_valid,
+        "transformed": transformed,
+        "user": {"manual_translation": ""},
+    }
+
+
+def _build_metadata_payload(
+    job: ProcessingJob,
+    regions: list[dict[str, Any]],
+    img_w: int,
+    img_h: int,
+) -> dict[str, Any]:
+    """Build the top-level metadata payload returned with every result."""
+    return {
+        "schema_version": 1,
+        "pipeline": job.pipeline,
+        "source_hash": job.source_hash,
+        "image": {"width": img_w, "height": img_h},
+        "regions": regions,
+    }
+
+
 def _rerender_from_metadata(job: ProcessingJob,
                             progress_cb: ProgressCallback | None = None,
                             ) -> ProcessingResult:
@@ -325,29 +365,15 @@ def _process_manga(job: ProcessingJob,
                 "kind": "text",
                 "value": br.transformed,
             }
-        regions.append({
-            "id": f"r{idx+1}",
-            "kind": "artwork_text" if br.is_artwork_text else "bubble",
-            "bbox": [int(v) for v in br.bbox],
-            "bbox_norm": _norm_bbox(br.bbox, img_w, img_h),
-            "ocr_text": br.ocr_text,
-            "is_valid": bool(br.is_valid),
-            "transformed": transformed_obj,
-            "user": {
-                "manual_translation": "",
-            },
-        })
-
-    metadata_payload = {
-        "schema_version": 1,
-        "pipeline": job.pipeline,
-        "source_hash": job.source_hash,
-        "image": {
-            "width": img_w,
-            "height": img_h,
-        },
-        "regions": regions,
-    }
+        regions.append(_build_region(
+            region_id=f"r{idx+1}",
+            kind="artwork_text" if br.is_artwork_text else "bubble",
+            bbox=br.bbox,
+            img_w=img_w, img_h=img_h,
+            ocr_text=br.ocr_text,
+            is_valid=bool(br.is_valid),
+            transformed=transformed_obj,
+        ))
 
     return ProcessingResult(
         job_id=job.job_id,
@@ -356,7 +382,7 @@ def _process_manga(job: ProcessingJob,
         bubble_count=bubble_count,
         pipeline=job.pipeline,
         source_hash=job.source_hash,
-        metadata_payload=metadata_payload,
+        metadata_payload=_build_metadata_payload(job, regions, img_w, img_h),
     )
 
 
@@ -391,45 +417,27 @@ def _process_webtoon(job: ProcessingJob,
         transformed_obj = None
         if region.english:
             transformed_obj = {"kind": "text", "value": region.english}
-        regions.append({
-            "id": f"r{idx+1}",
-            "kind": "bubble",
-            "bbox": [int(v) for v in bubble.bbox],
-            "bbox_norm": _norm_bbox(bubble.bbox, img_w, img_h),
-            "ocr_text": bubble.combined_text,
-            "is_valid": bool(region.is_valid),
-            "transformed": transformed_obj,
-            "user": {
-                "manual_translation": "",
-            },
-        })
+        regions.append(_build_region(
+            region_id=f"r{idx+1}",
+            kind="bubble",
+            bbox=bubble.bbox,
+            img_w=img_w, img_h=img_h,
+            ocr_text=bubble.combined_text,
+            is_valid=bool(region.is_valid),
+            transformed=transformed_obj,
+        ))
 
     # Persist SFX as editable regions too.
     for idx, det in enumerate(page.sfx_detections):
-        bbox = det.bbox_rect
-        regions.append({
-            "id": f"sfx{idx+1}",
-            "kind": "sfx",
-            "bbox": [int(v) for v in bbox],
-            "bbox_norm": _norm_bbox(bbox, img_w, img_h),
-            "ocr_text": det.text,
-            "is_valid": True,
-            "transformed": {"kind": "text", "value": ""},
-            "user": {
-                "manual_translation": "",
-            },
-        })
-
-    metadata_payload = {
-        "schema_version": 1,
-        "pipeline": job.pipeline,
-        "source_hash": job.source_hash,
-        "image": {
-            "width": img_w,
-            "height": img_h,
-        },
-        "regions": regions,
-    }
+        regions.append(_build_region(
+            region_id=f"sfx{idx+1}",
+            kind="sfx",
+            bbox=det.bbox_rect,
+            img_w=img_w, img_h=img_h,
+            ocr_text=det.text,
+            is_valid=True,
+            transformed={"kind": "text", "value": ""},
+        ))
 
     return ProcessingResult(
         job_id=job.job_id,
@@ -438,5 +446,5 @@ def _process_webtoon(job: ProcessingJob,
         bubble_count=bubble_count,
         pipeline=job.pipeline,
         source_hash=job.source_hash,
-        metadata_payload=metadata_payload,
+        metadata_payload=_build_metadata_payload(job, regions, img_w, img_h),
     )

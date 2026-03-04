@@ -259,6 +259,49 @@ class TestProcessJobManga:
 
         assert result.bubble_count == 2
 
+    @patch("worker.job.transform_translate")
+    @patch("worker.job.ocr_bubble")
+    @patch("worker.job.detect_page_bubbles")
+    def test_metadata_payload_structure(
+        self, mock_detect, mock_ocr, mock_translate
+    ):
+        """metadata_payload should have correct schema and user dict shape."""
+        def add_bubble(page):
+            page.bubbles_raw = [{"bbox": (10, 10, 50, 50)}]
+        mock_detect.side_effect = add_bubble
+        mock_ocr.return_value = BubbleResult(
+            bbox=(10, 10, 50, 50), ocr_text="テスト", is_valid=True,
+        )
+        mock_translate.side_effect = lambda br: setattr(br, "transformed", "Test")
+
+        img_bytes = _make_test_image_bytes()
+        job = ProcessingJob(
+            job_id="meta-1", pipeline="manga_translate",
+            image_bytes=img_bytes, source_hash="abc123",
+        )
+        result = process_job(job)
+
+        meta = result.metadata_payload
+        assert meta is not None
+        assert meta["schema_version"] == 1
+        assert meta["pipeline"] == "manga_translate"
+        assert meta["source_hash"] == "abc123"
+        assert "width" in meta["image"]
+        assert "height" in meta["image"]
+        assert len(meta["regions"]) == 1
+
+        region = meta["regions"][0]
+        assert region["id"] == "r1"
+        assert region["kind"] == "bubble"
+        assert isinstance(region["bbox"], list) and len(region["bbox"]) == 4
+        assert isinstance(region["bbox_norm"], list) and len(region["bbox_norm"]) == 4
+        assert region["ocr_text"] == "テスト"
+        assert region["is_valid"] is True
+        assert region["transformed"] == {"kind": "text", "value": "Test"}
+        # user dict has only manual_translation — no false_positive/wrong_sfx/undetected
+        assert region["user"] == {"manual_translation": ""}
+        assert "false_positive" not in region["user"]
+
 
 # --- Webtoon pipeline routing ---
 
@@ -389,10 +432,7 @@ class TestRerenderFromMetadata:
                         "kind": "bubble",
                         "bbox": [10, 10, 90, 70],
                         "transformed": {"kind": "text", "value": "Hello"},
-                        "user": {
-                            "false_positive": False,
-                            "manual_translation": "",
-                        },
+                        "user": {"manual_translation": ""},
                     },
                 ],
             },
@@ -417,10 +457,7 @@ class TestRerenderFromMetadata:
                         "kind": "bubble",
                         "bbox": [10, 10, 90, 70],
                         "transformed": {"kind": "text", "value": "Original"},
-                        "user": {
-                            "false_positive": False,
-                            "manual_translation": "Corrected text",
-                        },
+                        "user": {"manual_translation": "Corrected text"},
                     },
                 ],
             },
@@ -445,10 +482,7 @@ class TestRerenderFromMetadata:
                         "kind": "bubble",
                         "bbox": [10, 10, 590, 790],
                         "transformed": {"kind": "text", "value": "A"},
-                        "user": {
-                            "false_positive": False,
-                            "manual_translation": "",
-                        },
+                        "user": {"manual_translation": ""},
                     },
                 ],
             },
@@ -470,10 +504,7 @@ class TestRerenderFromMetadata:
                     "kind": "bubble",
                     "bbox": [10, 10, 90, 70],
                     "transformed": {"kind": "text", "value": "Test"},
-                    "user": {
-                        "false_positive": False,
-                        "manual_translation": "",
-                    },
+                    "user": {"manual_translation": ""},
                 },
             ],
         }
@@ -486,3 +517,58 @@ class TestRerenderFromMetadata:
         )
         result = process_job(job)
         assert result.metadata_payload is payload
+
+    def test_rerender_renders_regions_with_legacy_fp_key(self):
+        """Legacy metadata with false_positive key should still render (key is ignored)."""
+        img_bytes = _make_test_image_bytes(200, 300)
+        job = ProcessingJob(
+            job_id="rr-legacy-fp",
+            pipeline="manga_translate",
+            image_bytes=img_bytes,
+            rerender_from_metadata=True,
+            metadata_payload={
+                "regions": [
+                    {
+                        "id": "r1",
+                        "kind": "bubble",
+                        "bbox": [10, 10, 90, 70],
+                        "transformed": {"kind": "text", "value": "Hello"},
+                        "user": {"false_positive": True, "manual_translation": ""},
+                    },
+                    {
+                        "id": "r2",
+                        "kind": "bubble",
+                        "bbox": [10, 80, 90, 150],
+                        "transformed": {"kind": "text", "value": "World"},
+                        "user": {"manual_translation": ""},
+                    },
+                ],
+            },
+        )
+        result = process_job(job)
+        assert result.status == "completed"
+        # Both regions render — false_positive is ignored
+        assert result.bubble_count == 2
+
+    def test_rerender_handles_missing_user_dict(self):
+        """Regions without a user dict should render normally."""
+        img_bytes = _make_test_image_bytes(200, 300)
+        job = ProcessingJob(
+            job_id="rr-no-user",
+            pipeline="manga_translate",
+            image_bytes=img_bytes,
+            rerender_from_metadata=True,
+            metadata_payload={
+                "regions": [
+                    {
+                        "id": "r1",
+                        "kind": "bubble",
+                        "bbox": [10, 10, 90, 70],
+                        "transformed": {"kind": "text", "value": "Hello"},
+                    },
+                ],
+            },
+        )
+        result = process_job(job)
+        assert result.status == "completed"
+        assert result.bubble_count == 1

@@ -999,7 +999,7 @@ func TestPatchCacheMetaByHashQueuesRerender(t *testing.T) {
 
 	src := makePNGBytes()
 	sourceHash := hashHex(src)
-	initialMeta := []byte(`{"schema_version":1,"regions":[{"id":"r1","user":{"false_positive":false}}]}`)
+	initialMeta := []byte(`{"schema_version":1,"regions":[{"id":"r1","user":{"manual_translation":""}}]}`)
 	manifest, err := srv.cache.StoreBySourceHash(
 		"manga_translate",
 		sourceHash,
@@ -1021,7 +1021,7 @@ func TestPatchCacheMetaByHashQueuesRerender(t *testing.T) {
 			"regions": []any{
 				map[string]any{
 					"id":   "r1",
-					"user": map[string]any{"false_positive": true},
+					"user": map[string]any{"manual_translation": "edited"},
 				},
 			},
 		},
@@ -1092,7 +1092,7 @@ func TestPatchCacheMetaByHashConflict409(t *testing.T) {
 			"regions": []any{
 				map[string]any{
 					"id":   "r1",
-					"user": map[string]any{"false_positive": true},
+					"user": map[string]any{"manual_translation": "edited"},
 				},
 			},
 		},

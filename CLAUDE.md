@@ -92,7 +92,7 @@ frank_manga/
 
   pipeline/                     # Manga processing modules
     config.py                   # Constants loaded from config.yaml
-    bubble_detector.py          # OpenCV contour analysis, 7-layer FP filtering
+    bubble_detector.py          # RT-DETR-v2 object detection + bubble mask extraction
     ocr.py                      # manga-ocr + Japanese validation
     furigana.py                 # pykakasi kanji → hiragana
     translator.py               # Ollama qwen3:14b, Google Translate fallback
@@ -115,7 +115,7 @@ frank_manga/
   worker/                       # Python Redis stream consumer
     main.py                     # Entry: python -m worker [--pipeline manga|webtoon|both]
     consumer.py                 # Two-stream priority consumer (high 100ms / low 1s)
-    job.py                      # ProcessingJob/ProcessingResult, pipeline routing
+    job.py                      # ProcessingJob/ProcessingResult, pipeline routing, shared metadata builders
     health.py                   # Worker health check (queue lengths, heartbeats)
 
   cmd/server/                   # Go API server
@@ -174,21 +174,13 @@ frank_manga/
 
 ### Bubble Detection (bubble_detector.py)
 
-Uses pure OpenCV — VLM-based detection (Qwen2.5-VL) was tried first but produced unreliable coordinates.
+Uses **RT-DETR-v2** (real-time detection transformer) trained to detect speech bubbles and artwork text in a single pass. Previous approaches tried and rejected:
+- Pure OpenCV heuristic (contour + 7-layer FP filtering) — replaced because RT-DETR-v2 is more accurate
+- Qwen2.5-VL (VLM-based detection) — produced unreliable coordinates
 
-**Detection flow**: Binary threshold (>200) → morphological cleanup → RETR_TREE contour hierarchy → filter by area, aspect ratio, convex hull solidity (>0.6), interior brightness (>200).
+**Detection flow**: RT-DETR-v2 forward pass → NMS → classify as `bubble` or `artwork_text` → extract bubble mask via OpenCV flood-fill for shape-aware text clearing.
 
-**False-positive filters** (reject faces, clothing, white backgrounds):
-
-1. **Edge density < 0.12** — Bubbles have sparse edges; faces have many
-2. **Bright pixel ratio** — Grayscale: >0.65 at 240, color: >0.50 at 220
-3. **Very bright ratio > 0.20 (color only)** — Catches colored skin/faces
-4. **Mid-tone ratio** — Grayscale: <0.15, color: <0.40
-5. **Circularity > 0.15** — `4π × area / perimeter²`
-6. **Border darkness < 160** — Bubbles have dark ink outlines
-7. **Largest dark component < 0.08 × inner area** — Rejects face regions
-
-**Why NOT std dev**: Text strokes create high variance even in real bubbles.
+Model detections are trusted — no user-facing false-positive marking UI. Users can only edit translations via the `manual_translation` field in region metadata.
 
 ### Translation (translator.py)
 
@@ -210,11 +202,13 @@ Uses pure OpenCV — VLM-based detection (Qwen2.5-VL) was tried first but produc
 
 **Overlay**: Webtoon replaces `<img>` src with blob URL of translated image, click toggles original/translated. Kindle overlay is TODO (needs coordinate tracking from JS).
 
+**Translation editing**: Edit mode shows detection boxes on the overlay. Single-click or right-click on a region opens the translation edit dialog. Edits are staged locally until the user explicitly saves, which PATCHes the server metadata and triggers a rerender. The `user` dict on each region contains only `manual_translation` — no false-positive or undetected flags (RT-DETR-v2 detections are trusted).
+
 **Cache**: SQLite3 FFI with filesystem storage at app support directory. Keyed by image hash + pipeline. No TTL (never expires).
 
 ### Web Service Design
 
-- **Go API**: Accepts images, deduplicates via SHA256, enqueues to Redis streams, serves results. Never blocks on GPU.
+- **Go API**: Accepts images (default 20 MiB max, configurable via `MAX_IMAGE_SIZE_MB`), deduplicates via SHA256, enqueues to Redis streams, serves results. Never blocks on GPU.
 - **Redis Streams**: Two priority levels (`frank:jobs:high` for current page, `frank:jobs:low` for prefetch). MAXLEN trimmed.
 - **Python Workers**: Long-running processes, models loaded once at startup. Consumer reads high stream first (100ms block), then low (1s block).
 - **WebSocket**: Real-time result push via Redis Pub/Sub → Go subscriber → per-connection channels.
@@ -277,21 +271,21 @@ All settings in `config.yaml`:
 **Always run `pytest tests/` after modifying detection thresholds, filters, or rendering logic.**
 
 ```bash
-pytest tests/unit/ -v              # Fast — pure logic (318 tests)
+pytest tests/unit/ -v              # Fast — pure logic (344 tests)
 pytest tests/integration/ -v       # Slower — uses real images
-go test ./cmd/server/ -v           # Go API + middleware + subscribe/notify
-cd frank_client && flutter test    # Flutter model + strategy tests
+go test ./cmd/server/ -v           # Go API + middleware + cache + subscribe/notify
+cd frank_client && flutter test    # Flutter model + strategy tests (71 tests)
 ```
 
 ### Test coverage
 
-- `tests/unit/test_bubble_detector.py` — detection counts, known bubbles, FP rejection
+- `tests/unit/test_bubble_detector.py` — detection counts, known bubbles, RT-DETR-v2 integration
 - `tests/unit/test_ocr_validation.py` — Japanese text accept/reject
 - `tests/unit/test_text_renderer.py` — SFX detection, word wrap, hyphenation
 - `tests/unit/test_bytes_io.py` — encode/decode bytes, render_page_to_bytes, load_page_from_memory
-- `tests/unit/test_worker_*.py` — job routing, consumer priority logic, health checks
-- `cmd/server/handlers_test.go` — all REST endpoints, auth middleware, subscribe/notify
-- `frank_client/test/widget_test.dart` — ServerSettings, PageJob states, SiteConfig, strategy URL parsing
+- `tests/unit/test_worker_*.py` — job routing, consumer priority logic, health checks, rerender (manual_translation override, legacy metadata tolerance, metadata payload structure)
+- `cmd/server/handlers_test.go` — all REST endpoints, auth middleware, cache hit/miss, PATCH + rerender queueing, 409 conflict, subscribe/notify
+- `frank_client/test/widget_test.dart` — ServerSettings, PageJob states, SiteConfig, strategy URL parsing, overlay patterns, feedback toolbar + edit_translation dispatch
 
 **Workflow for adjustments**:
 1. Run existing tests before making changes
