@@ -8,16 +8,14 @@ from enum import Enum
 import numpy as np
 from PIL import Image
 
-from .bubble_detector import detect_bubbles
+from .bubble_detector import detect_bubbles, extract_bubble_mask_manga
 from .config import (
     EN_BASE_FONT_DIVISOR, EN_BASE_FONT_MAX, EN_BASE_FONT_MIN,
-    MANGA_INPAINT_ENABLED, TEXT_DETECTION_ENABLED,
+    MANGA_INPAINT_ENABLED,
 )
 from .furigana import annotate as furigana_annotate
 from .image_utils import (
-    clear_text_in_contour,
     clear_text_strokes,
-    contour_inner_bbox,
     encode_image_pil,
     load_image,
     load_image_pil,
@@ -40,11 +38,11 @@ class PipelineMode(Enum):
 @dataclass
 class BubbleResult:
     bbox: tuple[int, int, int, int]
-    contour: np.ndarray | None
     ocr_text: str = ""
     is_valid: bool = False
     transformed: object = None  # furigana segments or english string
     is_artwork_text: bool = False  # True if text found on artwork (no bubble)
+    mask: np.ndarray | None = None  # Bubble shape mask for curved clearing
 
 
 @dataclass
@@ -79,9 +77,21 @@ def load_page_from_memory(img_cv: np.ndarray, img_pil: Image.Image,
 
 
 def detect_page_bubbles(page: PageResult) -> None:
-    """Stage 2: Run bubble detection, populates page.bubbles_raw."""
+    """Stage 2: Run bubble detection, populates page.bubbles_raw.
+
+    Also extracts bubble shape masks for speech_bubble detections.
+    Artwork text (SFX/narration) gets no mask — it uses inpainting or
+    solid fill instead.
+    """
     log.info("Detecting bubbles: %s", page.name)
     page.bubbles_raw = detect_bubbles(page.img_cv)
+
+    for det in page.bubbles_raw:
+        if not det.get("is_artwork", False):
+            det["mask"] = extract_bubble_mask_manga(page.img_cv, det["bbox"])
+        else:
+            det["mask"] = None
+
     log.info("Found %d bubbles in %s", len(page.bubbles_raw), page.name)
 
 
@@ -127,7 +137,6 @@ def _verify_ocr_consistency(img_pil: Image.Image, bbox: tuple,
 def ocr_bubble(img_pil: Image.Image, bubble: dict) -> BubbleResult:
     """Stage 3: OCR + validation for a single bubble."""
     bbox = bubble["bbox"]
-    contour = bubble.get("contour")
     is_artwork = bubble.get("is_artwork", False)
     text = extract_text_from_region(img_pil, bbox)
     valid = bool(text.strip()) and is_valid_japanese(text)
@@ -141,8 +150,9 @@ def ocr_bubble(img_pil: Image.Image, bubble: dict) -> BubbleResult:
         log.info("  OCR noise (not Japanese): %s, skipping", text)
     elif valid:
         log.info("  OCR: %s", text)
-    return BubbleResult(bbox=bbox, contour=contour, ocr_text=text,
-                        is_valid=valid, is_artwork_text=is_artwork)
+    return BubbleResult(bbox=bbox, ocr_text=text,
+                        is_valid=valid, is_artwork_text=is_artwork,
+                        mask=bubble.get("mask"))
 
 
 def transform_furigana(br: BubbleResult) -> None:
@@ -168,71 +178,6 @@ def transform_translate(br: BubbleResult) -> None:
         log.info("  Translation empty for '%s', skipping", br.ocr_text)
 
 
-def detect_page_text(page: PageResult) -> None:
-    """Stage 2b: Detect text outside bubbles using EasyOCR and stroke analysis.
-
-    Two detection approaches run if text detection is enabled:
-    1. EasyOCR — finds text on artwork (narration, signs, titles)
-    2. Text-stroke clustering — finds vertical text in white panel areas
-       where speech bubbles merge with the panel background
-
-    Appends results to page.bubbles_raw.
-    """
-    if not TEXT_DETECTION_ENABLED:
-        return
-
-    from .text_detector import (
-        detect_panel_text, detect_small_bubbles, detect_text_regions,
-        find_unbubbled_text,
-    )
-
-    bubble_bboxes = [b["bbox"] for b in page.bubbles_raw]
-
-    # 1. EasyOCR detection for artwork text
-    log.info("Running text detection: %s", page.name)
-    text_regions = detect_text_regions(page.img_cv)
-    unbubbled = find_unbubbled_text(text_regions, bubble_bboxes)
-
-    for region in unbubbled:
-        page.bubbles_raw.append({
-            "bbox": region.bbox,
-            "type": "artwork_text",
-            "is_artwork": True,
-        })
-
-    if unbubbled:
-        log.info("Added %d artwork text regions for %s",
-                 len(unbubbled), page.name)
-
-    # 2. Text-stroke detection for panel-embedded text
-    all_bboxes = [b["bbox"] for b in page.bubbles_raw]
-    panel_texts = detect_panel_text(page.img_cv, all_bboxes)
-
-    for bbox in panel_texts:
-        page.bubbles_raw.append({
-            "bbox": bbox,
-            "type": "speech_bubble",
-        })
-
-    if panel_texts:
-        log.info("Added %d panel text regions for %s",
-                 len(panel_texts), page.name)
-
-    # 3. Small bubble recovery via morphological gradient
-    all_bboxes2 = [b["bbox"] for b in page.bubbles_raw]
-    small_bubbles = detect_small_bubbles(page.img_cv, all_bboxes2)
-
-    for bbox in small_bubbles:
-        page.bubbles_raw.append({
-            "bbox": bbox,
-            "type": "speech_bubble",
-        })
-
-    if small_bubbles:
-        log.info("Added %d small bubble regions for %s",
-                 len(small_bubbles), page.name)
-
-
 def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
                 debug: bool = False) -> None:
     """Stage 5: Clear bubbles, render transformed text, save output."""
@@ -250,40 +195,38 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
         log.info("Base English font size: %d (page height=%d)",
                  base_font_size, page_height)
 
-    for br in page.bubble_results:
+    # Two-pass rendering: clear all bubbles first, then render all text.
+    # This prevents overlapping bubbles from erasing each other's rendered text.
+
+    # Pass 1: Clear text strokes and inpaint artwork
+    artwork_inpainted: set[int] = set()
+    for i, br in enumerate(page.bubble_results):
         if br.transformed is None:
             continue
-
-        # Artwork text: inpaint background then render with overlay
         if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
-            inpainted = False
             if MANGA_INPAINT_ENABLED:
                 from .inpainter import inpaint_region
                 page.output_img = inpaint_region(page.output_img, br.bbox)
-                inpainted = True
+                artwork_inpainted.add(i)
+            continue
+        clear_text_strokes(page.output_img, br.bbox, mask=br.mask)
+
+    # Pass 2: Render text
+    for i, br in enumerate(page.bubble_results):
+        if br.transformed is None:
+            continue
+        if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
             render_english_on_artwork(page.output_img, br.bbox,
                                       br.transformed,
                                       base_font_size=base_font_size,
-                                      inpainted=inpainted)
+                                      inpainted=i in artwork_inpainted)
             continue
-
-        # Clear text region using contour shape when available.
-        # When no contour exists (panel text, small bubbles), clear only
-        # the area where dark text strokes are, not the full bbox — a full
-        # rectangle overflows past curved bubble borders.
-        layout_bbox = br.bbox
-        if br.contour is not None:
-            layout_bbox = contour_inner_bbox(br.contour) or br.bbox
-            clear_text_in_contour(page.output_img, br.contour)
-        else:
-            clear_text_strokes(page.output_img, br.bbox)
-
-        # Render
         if mode == PipelineMode.FURIGANA:
-            render_furigana_vertical(page.output_img, layout_bbox, br.transformed)
+            render_furigana_vertical(page.output_img, br.bbox, br.transformed,
+                                     mask=br.mask)
         else:
-            render_english(page.output_img, layout_bbox, br.transformed,
-                           base_font_size=base_font_size)
+            render_english(page.output_img, br.bbox, br.transformed,
+                           base_font_size=base_font_size, mask=br.mask)
 
     # Save
     suffix = "-furigana.png" if mode == PipelineMode.FURIGANA else "-en.png"
@@ -312,33 +255,33 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
         base_font_size = max(EN_BASE_FONT_MIN,
                              min(EN_BASE_FONT_MAX, page_height // EN_BASE_FONT_DIVISOR))
 
-    for br in page.bubble_results:
+    # Two-pass rendering (same as render_page)
+    artwork_inpainted: set[int] = set()
+    for i, br in enumerate(page.bubble_results):
         if br.transformed is None:
             continue
-
         if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
-            inpainted = False
             if MANGA_INPAINT_ENABLED:
                 from .inpainter import inpaint_region
                 page.output_img = inpaint_region(page.output_img, br.bbox)
-                inpainted = True
+                artwork_inpainted.add(i)
+            continue
+        clear_text_strokes(page.output_img, br.bbox, mask=br.mask)
+
+    for i, br in enumerate(page.bubble_results):
+        if br.transformed is None:
+            continue
+        if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
             render_english_on_artwork(page.output_img, br.bbox,
                                       br.transformed,
                                       base_font_size=base_font_size,
-                                      inpainted=inpainted)
+                                      inpainted=i in artwork_inpainted)
             continue
-
-        layout_bbox = br.bbox
-        if br.contour is not None:
-            layout_bbox = contour_inner_bbox(br.contour) or br.bbox
-            clear_text_in_contour(page.output_img, br.contour)
-        else:
-            clear_text_strokes(page.output_img, br.bbox)
-
         if mode == PipelineMode.FURIGANA:
-            render_furigana_vertical(page.output_img, layout_bbox, br.transformed)
+            render_furigana_vertical(page.output_img, br.bbox, br.transformed,
+                                     mask=br.mask)
         else:
-            render_english(page.output_img, layout_bbox, br.transformed,
-                           base_font_size=base_font_size)
+            render_english(page.output_img, br.bbox, br.transformed,
+                           base_font_size=base_font_size, mask=br.mask)
 
     return encode_image_pil(page.output_img)

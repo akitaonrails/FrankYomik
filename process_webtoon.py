@@ -16,8 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from webtoon.config import OUTPUT_DIR
 from webtoon.processor import (
     WebtoonPageResult,
-    cluster_and_find_bubbles,
-    detect_text,
+    detect_bubbles_rtdetr,
     load_page,
     render_page,
     validate_and_translate,
@@ -41,10 +40,9 @@ def _find_images(directory: str) -> list[str]:
 
 
 def _process_page(path: str) -> WebtoonPageResult:
-    """Run load → OCR → cluster → validate+translate for a single page."""
+    """Run load → detect → validate+translate for a single page."""
     page = load_page(path)
-    detect_text(page)
-    cluster_and_find_bubbles(page)
+    detect_bubbles_rtdetr(page)
     validate_and_translate(page)
     return page
 

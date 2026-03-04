@@ -213,18 +213,27 @@ def _sample_background(img_cv: np.ndarray,
 
 
 def _find_contour_boundary(img_cv: np.ndarray,
-                           text_bbox: tuple[int, int, int, int]
+                           text_bbox: tuple[int, int, int, int],
+                           expand_override: int | None = None,
                            ) -> tuple[tuple[int, int, int, int], np.ndarray] | None:
     """Level 3: Find bubble contour using edge detection around text area.
 
     Works for bubbles with clear dark outlines (common in many webtoons).
     Constrained to avoid finding huge panel-spanning contours.
+
+    Args:
+        expand_override: If set, use this fixed expansion instead of the
+            formula-based default.  Used when the bbox already covers the
+            full bubble (e.g. RT-DETR-v2 detections).
     """
     h, w = img_cv.shape[:2]
     x1, y1, x2, y2 = text_bbox
     tw, th = x2 - x1, y2 - y1
     # Search region: modest expansion around text (not half the bbox dimension)
-    expand = CONTOUR_EXPAND + max(tw, th) // 4
+    if expand_override is not None:
+        expand = expand_override
+    else:
+        expand = CONTOUR_EXPAND + max(tw, th) // 4
 
     sx1 = max(0, x1 - expand)
     sy1 = max(0, y1 - expand)
@@ -331,6 +340,39 @@ def _flood_fill_boundary(img_cv: np.ndarray,
     bbox = (fx, fy, fx + fw, fy + fh)
 
     return bbox, fill_mask
+
+
+def extract_bubble_mask(img_cv: np.ndarray,
+                        bbox: tuple[int, int, int, int],
+                        ) -> tuple[np.ndarray | None, tuple[int, int, int], bool]:
+    """Extract bubble mask and background color for an RT-DETR-v2 bbox.
+
+    Since RT-DETR-v2 bboxes already cover the full bubble, uses a small
+    fixed expansion for contour search instead of the text-cluster formula.
+
+    Returns:
+        (mask, bg_color, has_boundary) — mask is full-image-sized binary
+        array or None, bg_color is RGB tuple, has_boundary indicates whether
+        a visual contour was found.
+    """
+    h, w = img_cv.shape[:2]
+    bg_color = _sample_background(img_cv, bbox)
+
+    # Try contour detection with small expansion (bbox already covers bubble)
+    contour_result = _find_contour_boundary(img_cv, bbox, expand_override=20)
+    if contour_result is not None:
+        c_bbox, mask = contour_result
+        if not _spans_image(c_bbox, w, h):
+            return mask, bg_color, True
+
+    # Fall back to flood fill
+    fill_result = _flood_fill_boundary(img_cv, bbox, bg_color)
+    if fill_result is not None:
+        f_bbox, mask = fill_result
+        if not _spans_image(f_bbox, w, h):
+            return mask, bg_color, True
+
+    return None, bg_color, False
 
 
 def _is_sfx_detection(det: TextDetection) -> bool:

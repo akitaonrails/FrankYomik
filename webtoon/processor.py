@@ -12,10 +12,11 @@ from pipeline.image_utils import (
 )
 from .config import FONT_KO, FONT_KO_BOLD
 
-from .bubble_detector import WebtoonBubble, detect_bubbles
-from .image_utils import split_tall_image, stitch_detections
+from pipeline.bubble_detector import detect_bubbles as rtdetr_detect
+from .bubble_detector import WebtoonBubble, detect_bubbles, extract_bubble_mask
+from .image_utils import split_tall_image, stitch_detections, stitch_rtdetr_detections
 from .inpainter import inpaint_bubble
-from .ocr import TextDetection, detect_and_read, is_valid_korean
+from .ocr import TextDetection, detect_and_read, is_valid_korean, ocr_within_bbox
 from .translator import translate, translate_sfx
 
 log = logging.getLogger(__name__)
@@ -100,6 +101,75 @@ def cluster_and_find_bubbles(page: WebtoonPageResult) -> None:
     page.bubbles, page.sfx_detections = detect_bubbles(page.img_cv, page.detections)
     log.info("Found %d bubbles, %d SFX in %s",
              len(page.bubbles), len(page.sfx_detections), page.name)
+
+
+def detect_bubbles_rtdetr(page: WebtoonPageResult) -> None:
+    """Detect bubbles using RT-DETR-v2 and OCR text within each.
+
+    Replaces the EasyOCR detection → clustering → boundary fallback approach.
+    Handles tall images by splitting into strips and stitching results.
+
+    For each speech_bubble detection:
+      - Extract bubble mask + bg_color
+      - Run EasyOCR within the bbox to read text
+      - Build WebtoonBubble with mask, text regions, combined text
+
+    For each artwork_text detection:
+      - Run EasyOCR to read SFX text
+      - Add to page.sfx_detections
+    """
+    max_strip_height = 2000
+
+    h = page.img_cv.shape[0]
+    if h <= max_strip_height:
+        raw_detections = rtdetr_detect(page.img_cv)
+    else:
+        strips = split_tall_image(page.img_cv, max_height=max_strip_height)
+        strip_results = []
+        for strip_img, y_offset in strips:
+            dets = rtdetr_detect(strip_img)
+            strip_results.append((dets, y_offset))
+        raw_detections = stitch_rtdetr_detections(strip_results)
+
+    log.info("RT-DETR-v2 detected %d regions in %s", len(raw_detections), page.name)
+
+    bubbles: list[WebtoonBubble] = []
+    sfx_dets: list[TextDetection] = []
+
+    for det in raw_detections:
+        bbox = det["bbox"]
+
+        if det["type"] == "speech_bubble":
+            # Extract bubble mask and bg color
+            mask, bg_color, has_boundary = extract_bubble_mask(page.img_cv, bbox)
+
+            # OCR within the bbox
+            text_regions = ocr_within_bbox(page.img_cv, bbox)
+            combined = " ".join(d.text for d in text_regions)
+
+            bubble = WebtoonBubble(
+                bbox=bbox,
+                text_regions=text_regions,
+                combined_text=combined,
+                has_bubble_boundary=has_boundary,
+                bg_color=bg_color,
+                bubble_mask=mask,
+            )
+            log.info("  Bubble: %d texts, boundary=%s, bbox=%s",
+                     len(text_regions), has_boundary, bbox)
+            bubbles.append(bubble)
+        else:
+            # Artwork text (SFX, narration) — OCR to read it
+            text_regions = ocr_within_bbox(page.img_cv, bbox)
+            for tr in text_regions:
+                sfx_dets.append(tr)
+            if not text_regions:
+                log.debug("  Artwork text at %s: no OCR text found", bbox)
+
+    page.bubbles = bubbles
+    page.sfx_detections = sfx_dets
+    log.info("Found %d bubbles, %d SFX in %s",
+             len(bubbles), len(sfx_dets), page.name)
 
 
 def _is_hangul_text(text: str) -> bool:

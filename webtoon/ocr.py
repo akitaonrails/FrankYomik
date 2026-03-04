@@ -319,6 +319,67 @@ def _is_column_neighbor(det: TextDetection,
     return rescued
 
 
+def ocr_within_bbox(img: np.ndarray,
+                    bbox: tuple[int, int, int, int],
+                    pad: int = 20) -> list[TextDetection]:
+    """Run EasyOCR within a specific bounding box region.
+
+    Crops the image to the bbox (with padding), runs the full 3-pass OCR,
+    and maps detection coordinates back to full-image space.
+
+    Args:
+        img: OpenCV BGR image (full page).
+        bbox: (x1, y1, x2, y2) region to OCR.
+        pad: Pixel padding around bbox for context.
+
+    Returns:
+        List of TextDetection with coordinates in full-image space.
+    """
+    import cv2
+
+    h, w = img.shape[:2]
+    x1, y1, x2, y2 = bbox
+    # Pad and clamp to image bounds
+    cx1 = max(0, x1 - pad)
+    cy1 = max(0, y1 - pad)
+    cx2 = min(w, x2 + pad)
+    cy2 = min(h, y2 + pad)
+
+    crop = img[cy1:cy2, cx1:cx2]
+    if crop.size == 0:
+        return []
+
+    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+
+    # Run the full 3-pass OCR on the crop
+    pass1, rej1 = _run_ocr(crop_rgb)
+    enhanced = _enhance_for_ocr(crop_rgb)
+    pass2, rej2 = _run_ocr(enhanced)
+    inverted = _enhance_for_ocr_inverted(crop_rgb)
+    pass3, rej3 = _run_ocr(inverted, min_confidence=EASYOCR_INVERTED_CONFIDENCE)
+
+    merged = _merge_detections(pass1, pass2)
+    merged = _merge_detections(merged, pass3)
+
+    all_rejected = _merge_detections(rej1, rej2)
+    all_rejected = _merge_detections(all_rejected, rej3)
+    rescued = _rescue_neighbor_detections(merged, all_rejected)
+    merged.extend(rescued)
+
+    # Map coordinates back to full-image space
+    mapped = []
+    for det in merged:
+        dx1, dy1, dx2, dy2 = det.bbox_rect
+        mapped.append(TextDetection(
+            bbox_poly=[[pt[0] + cx1, pt[1] + cy1] for pt in det.bbox_poly],
+            text=det.text,
+            confidence=det.confidence,
+            bbox_rect=(dx1 + cx1, dy1 + cy1, dx2 + cx1, dy2 + cy1),
+        ))
+
+    return mapped
+
+
 def _bbox_area(bbox: tuple[int, int, int, int]) -> int:
     """Area of a (x1, y1, x2, y2) rectangle."""
     return max(0, bbox[2] - bbox[0]) * max(0, bbox[3] - bbox[1])

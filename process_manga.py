@@ -19,7 +19,6 @@ from pipeline.processor import (
     PageResult,
     PipelineMode,
     detect_page_bubbles,
-    detect_page_text,
     load_page,
     ocr_bubble,
     render_page,
@@ -44,7 +43,6 @@ def _process_page(path: str, mode: PipelineMode) -> "PageResult":
     """Run load → detect → OCR → transform for a single page."""
     page = load_page(path)
     detect_page_bubbles(page)
-    detect_page_text(page)
     page.bubble_results = [ocr_bubble(page.img_pil, b) for b in page.bubbles_raw]
     transform_fn = transform_furigana if mode == PipelineMode.FURIGANA else transform_translate
     for br in page.bubble_results:

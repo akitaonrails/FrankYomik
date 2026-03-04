@@ -93,12 +93,17 @@ def contour_inner_bbox(contour: np.ndarray, margin: int = 8) -> tuple[int, int, 
 
 def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
                        margin: int = 1,
-                       fill_color: tuple = (255, 255, 255)) -> None:
+                       fill_color: tuple = (255, 255, 255),
+                       mask: np.ndarray | None = None) -> None:
     """Clear the area covered by dark text strokes inside a bbox.
 
     Instead of filling the entire bbox (which overflows curved bubble borders),
     finds where the dark ink actually is, groups it into a tight cluster, adds
     a small margin, and clears only that sub-region.
+
+    When `mask` is provided (bubble shape mask), clearing is constrained to
+    pixels inside the mask and the fill color is sampled from the actual
+    bubble interior (handles grayish scanned pages).
     """
     from PIL import ImageDraw
 
@@ -127,8 +132,24 @@ def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
     cx2 = x1 + min(roi.shape[1], rx + rw + margin)
     cy2 = y1 + min(roi.shape[0], ry + rh + margin)
 
-    draw = ImageDraw.Draw(img)
-    draw.rectangle((cx1, cy1, cx2, cy2), fill=fill_color)
+    if mask is not None:
+        img_array = np.array(img)
+        roi_mask = mask[cy1:cy2, cx1:cx2]
+        if roi_mask.size > 0:
+            # Sample the actual interior color from bright pixels inside
+            # the mask — handles grayish scanned pages instead of using
+            # pure white which creates visible patches.
+            masked_pixels = img_array[cy1:cy2, cx1:cx2][roi_mask > 0]
+            if len(masked_pixels) > 0:
+                gray_vals = np.mean(masked_pixels, axis=1)
+                bright = masked_pixels[gray_vals > 180]
+                if len(bright) > 0:
+                    fill_color = tuple(int(v) for v in np.median(bright, axis=0))
+            img_array[cy1:cy2, cx1:cx2][roi_mask > 0] = fill_color
+            img.paste(Image.fromarray(img_array))
+    else:
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((cx1, cy1, cx2, cy2), fill=fill_color)
 
 
 def clear_text_in_contour(img: Image.Image, contour: np.ndarray,

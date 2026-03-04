@@ -217,7 +217,7 @@ class TestRenderPageToBytes:
         page = load_page_from_memory(img_cv, img_pil)
         # Add a bubble result with no transform (will be skipped)
         page.bubble_results = [
-            BubbleResult(bbox=(10, 10, 50, 50), contour=None,
+            BubbleResult(bbox=(10, 10, 50, 50),
                          ocr_text="テスト", is_valid=True, transformed=None),
         ]
 

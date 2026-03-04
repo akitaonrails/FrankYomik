@@ -8,7 +8,6 @@ from pipeline.processor import (
     BubbleResult,
     PageResult,
     PipelineMode,
-    detect_page_text,
     load_page,
     ocr_bubble,
     transform_furigana,
@@ -43,37 +42,9 @@ class TestOcrBubbleArtwork:
     @patch("pipeline.processor.extract_text_from_region", return_value="テスト")
     def test_regular_bubble_not_artwork(self, mock_ocr, mock_valid):
         img = Image.new("RGB", (100, 100))
-        bubble = {"bbox": (10, 10, 50, 50), "contour": None}
+        bubble = {"bbox": (10, 10, 50, 50)}
         br = ocr_bubble(img, bubble)
         assert br.is_artwork_text is False
-
-
-class TestDetectPageText:
-    @patch("pipeline.processor.TEXT_DETECTION_ENABLED", False)
-    def test_noop_when_disabled(self):
-        page = PageResult(image_path="test.png", name="test")
-        page.bubbles_raw = [{"bbox": (0, 0, 100, 100), "type": "speech_bubble"}]
-        detect_page_text(page)
-        # No artwork text added
-        assert len(page.bubbles_raw) == 1
-
-    @patch("pipeline.processor.TEXT_DETECTION_ENABLED", True)
-    def test_adds_artwork_text_when_enabled(self):
-        from pipeline.text_detector import TextRegion
-        page = PageResult(
-            image_path="test.png", name="test",
-            img_cv=np.zeros((100, 100, 3), dtype=np.uint8),
-        )
-        page.bubbles_raw = [{"bbox": (0, 0, 50, 50), "type": "speech_bubble"}]
-
-        mock_regions = [TextRegion(bbox=(200, 200, 300, 300), confidence=0.8)]
-        with patch("pipeline.text_detector.detect_text_regions",
-                   return_value=mock_regions):
-            detect_page_text(page)
-
-        assert len(page.bubbles_raw) == 2
-        assert page.bubbles_raw[1]["is_artwork"] is True
-        assert page.bubbles_raw[1]["type"] == "artwork_text"
 
 
 class TestOcrBubble:
@@ -81,7 +52,7 @@ class TestOcrBubble:
     @patch("pipeline.processor.extract_text_from_region", return_value="こんにちは")
     def test_valid_text(self, mock_ocr, mock_valid):
         img = Image.new("RGB", (100, 100))
-        bubble = {"bbox": (10, 10, 50, 50), "contour": None}
+        bubble = {"bbox": (10, 10, 50, 50)}
         br = ocr_bubble(img, bubble)
         assert br.is_valid
         assert br.ocr_text == "こんにちは"
@@ -90,14 +61,14 @@ class TestOcrBubble:
     @patch("pipeline.processor.extract_text_from_region", return_value="abc")
     def test_invalid_text(self, mock_ocr, mock_valid):
         img = Image.new("RGB", (100, 100))
-        bubble = {"bbox": (10, 10, 50, 50), "contour": None}
+        bubble = {"bbox": (10, 10, 50, 50)}
         br = ocr_bubble(img, bubble)
         assert not br.is_valid
 
     @patch("pipeline.processor.extract_text_from_region", return_value="")
     def test_empty_text(self, mock_ocr):
         img = Image.new("RGB", (100, 100))
-        bubble = {"bbox": (10, 10, 50, 50), "contour": None}
+        bubble = {"bbox": (10, 10, 50, 50)}
         br = ocr_bubble(img, bubble)
         assert not br.is_valid
 
@@ -108,14 +79,14 @@ class TestTransformFurigana:
         mock_annotate.return_value = [
             {"text": "今日", "furigana": "きょう", "needs_furigana": True}
         ]
-        br = BubbleResult(bbox=(0, 0, 100, 100), contour=None,
+        br = BubbleResult(bbox=(0, 0, 100, 100),
                           ocr_text="今日", is_valid=True)
         transform_furigana(br)
         assert br.transformed is not None
         assert len(br.transformed) == 1
 
     def test_skips_invalid(self):
-        br = BubbleResult(bbox=(0, 0, 100, 100), contour=None,
+        br = BubbleResult(bbox=(0, 0, 100, 100),
                           ocr_text="", is_valid=False)
         transform_furigana(br)
         assert br.transformed is None
@@ -124,13 +95,13 @@ class TestTransformFurigana:
 class TestTransformTranslate:
     @patch("pipeline.processor.translate", return_value="Hello")
     def test_sets_translated(self, mock_translate):
-        br = BubbleResult(bbox=(0, 0, 100, 100), contour=None,
+        br = BubbleResult(bbox=(0, 0, 100, 100),
                           ocr_text="こんにちは", is_valid=True)
         transform_translate(br)
         assert br.transformed == "Hello"
 
     def test_skips_invalid(self):
-        br = BubbleResult(bbox=(0, 0, 100, 100), contour=None,
+        br = BubbleResult(bbox=(0, 0, 100, 100),
                           ocr_text="", is_valid=False)
         transform_translate(br)
         assert br.transformed is None

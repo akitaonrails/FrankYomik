@@ -137,8 +137,13 @@ def _load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
 # --- English rendering entry point ---
 
 def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
-                   text: str, base_font_size: int | None = None) -> None:
-    """Render English text inside a bubble, choosing the best layout."""
+                   text: str, base_font_size: int | None = None,
+                   mask: 'np.ndarray | None' = None) -> None:
+    """Render English text inside a bubble, choosing the best layout.
+
+    When `mask` is provided, the rendered text is clipped to the bubble
+    shape using an RGBA overlay + mask-clip pattern.
+    """
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
@@ -150,16 +155,19 @@ def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
     log.debug("  Layout: %s for '%s' in %dx%d", layout, text, bw, bh)
 
     if layout == "vertical_sfx":
-        _render_vertical_sfx(img, bbox, text)
+        _render_vertical_sfx(img, bbox, text, mask=mask)
     else:
-        _render_horizontal_english(img, bbox, text, base_font_size)
+        _render_horizontal_english(img, bbox, text, base_font_size, mask=mask)
 
 
 # --- Vertical sound effect rendering ---
 
 def _render_vertical_sfx(img: Image.Image, bbox: tuple[int, int, int, int],
-                         text: str) -> None:
+                         text: str,
+                         mask: 'np.ndarray | None' = None) -> None:
     """Render a sound effect / short exclamation vertically with large font."""
+    import numpy as np
+
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
@@ -173,7 +181,6 @@ def _render_vertical_sfx(img: Image.Image, bbox: tuple[int, int, int, int],
     # Find largest font size where all chars fit stacked vertically
     font_size = _fit_vertical_chars(chars, bw, bh)
     font = _load_font(FONT_EN, font_size)
-    draw = ImageDraw.Draw(img)
 
     char_h = int(font_size * 1.1)
     total_h = len(chars) * char_h
@@ -181,6 +188,13 @@ def _render_vertical_sfx(img: Image.Image, bbox: tuple[int, int, int, int],
     # Center the stack in the bubble
     start_y = y1 + TEXT_MARGIN + max(0, (bh - total_h) // 2)
     cx = x1 + TEXT_MARGIN + bw // 2
+
+    if mask is not None:
+        # Render to RGBA overlay, then mask-clip
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+    else:
+        draw = ImageDraw.Draw(img)
 
     for ch in chars:
         ch_bbox = draw.textbbox((0, 0), ch, font=font)
@@ -190,15 +204,23 @@ def _render_vertical_sfx(img: Image.Image, bbox: tuple[int, int, int, int],
         # Offset background by bbox origin (font ascender shifts ink down/right)
         bg_x = tx + ch_bbox[0]
         bg_y = start_y + ch_bbox[1]
+        bg_fill = (255, 255, 255, 255) if mask is not None else "white"
+        text_fill = (0, 0, 0, 255) if mask is not None else "black"
         draw.rectangle(
             (bg_x - _TEXT_BG_PAD, bg_y - _TEXT_BG_PAD,
              bg_x + ch_w + _TEXT_BG_PAD, bg_y + ch_h + _TEXT_BG_PAD),
-            fill="white",
+            fill=bg_fill,
         )
-        draw.text((tx, start_y), ch, fill="black", font=font)
+        draw.text((tx, start_y), ch, fill=text_fill, font=font)
         start_y += char_h
         if start_y + char_h > y2 - TEXT_MARGIN:
             break
+
+    if mask is not None:
+        overlay_arr = np.array(overlay)
+        overlay_arr[:, :, 3][mask == 0] = 0
+        overlay = Image.fromarray(overlay_arr)
+        img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 
 
 def _fit_vertical_chars(chars: list[str], bw: int, bh: int) -> int:
@@ -224,18 +246,27 @@ def _fit_vertical_chars(chars: list[str], bw: int, bh: int) -> int:
 
 def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int],
                                text: str,
-                               base_font_size: int | None = None) -> None:
+                               base_font_size: int | None = None,
+                               mask: 'np.ndarray | None' = None) -> None:
     """Render horizontal English text centered inside a bubble region.
 
     Words are only hyphenated during word wrap when they don't fit on a line.
+    When `mask` is provided, renders to an RGBA overlay and clips to mask.
     """
+    import numpy as np
+
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
 
     font_size = _fit_horizontal_english_size(text, bw, bh, base_font_size)
     font = _load_font(FONT_EN, font_size)
-    draw = ImageDraw.Draw(img)
+
+    if mask is not None:
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+    else:
+        draw = ImageDraw.Draw(img)
 
     lines = _word_wrap(text, font, bw, draw)
     if not lines:
@@ -255,13 +286,21 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
         # Offset background by bbox origin (font ascender shifts ink down/right)
         bg_x = text_x + line_bbox[0]
         bg_y = text_y + line_bbox[1]
+        bg_fill = (255, 255, 255, 255) if mask is not None else "white"
+        text_fill = (0, 0, 0, 255) if mask is not None else "black"
         draw.rectangle(
             (bg_x - _TEXT_BG_PAD, bg_y - _TEXT_BG_PAD,
              bg_x + line_w + _TEXT_BG_PAD, bg_y + line_h + _TEXT_BG_PAD),
-            fill="white",
+            fill=bg_fill,
         )
-        draw.text((text_x, text_y), line, fill="black", font=font)
+        draw.text((text_x, text_y), line, fill=text_fill, font=font)
         text_y += line_height
+
+    if mask is not None:
+        overlay_arr = np.array(overlay)
+        overlay_arr[:, :, 3][mask == 0] = 0
+        overlay = Image.fromarray(overlay_arr)
+        img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 
 
 def _fit_horizontal_english_size(text: str, bw: int, bh: int,
@@ -362,8 +401,14 @@ def _break_word_to_fit(word: str, font: ImageFont.FreeTypeFont,
 # --- Vertical Japanese with furigana ---
 
 def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
-                             segments: list[dict]) -> None:
-    """Render vertical Japanese text with furigana inside a bubble region."""
+                             segments: list[dict],
+                             mask: 'np.ndarray | None' = None) -> None:
+    """Render vertical Japanese text with furigana inside a bubble region.
+
+    When `mask` is provided, renders to an RGBA overlay and clips to mask.
+    """
+    import numpy as np
+
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
@@ -393,18 +438,24 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     font = _load_font(FONT_JP, font_size)
     furi_font = _load_font(FONT_JP, furi_size)
 
-    draw = ImageDraw.Draw(img)
+    if mask is not None:
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        bg_fill = (255, 255, 255, 255)
+        text_fill = (0, 0, 0, 255)
+        furi_bg_fill = (255, 255, 255, 255)
+    else:
+        draw = ImageDraw.Draw(img)
+        bg_fill = "white"
+        text_fill = "black"
+        furi_bg_fill = "white"
 
     col_width = font_size + furi_size + 4
     char_height = int(font_size * 1.15)
 
     furi_space = furi_size + 2 if any(c["furigana"] for c in chars) else 0
 
-    # Center columns horizontally in the bubble.  Right-aligning pushes
-    # the first column against the right edge, which can overflow curved
-    # bubble walls (the bbox corresponds to the widest point, but the
-    # bubble narrows at top/bottom).  Centering distributes the margin
-    # equally on both sides.
+    # Center columns horizontally in the bubble.
     chars_per_col = max(1, bh // char_height)
     cols_needed = (len(chars) + chars_per_col - 1) // chars_per_col
     block_width = font_size + furi_space + max(0, cols_needed - 1) * col_width
@@ -434,9 +485,9 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         draw.rectangle(
             (mbg_x - _TEXT_BG_PAD, mbg_y - _TEXT_BG_PAD,
              mbg_x + main_w + _TEXT_BG_PAD, mbg_y + main_h + _TEXT_BG_PAD),
-            fill="white",
+            fill=bg_fill,
         )
-        draw.text((col_x, char_y), ch_info["char"], fill="black", font=font)
+        draw.text((col_x, char_y), ch_info["char"], fill=text_fill, font=font)
 
         if ch_info["furigana"]:
             furi_x = col_x + font_size + 1
@@ -458,12 +509,18 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                     draw.rectangle(
                         (fbg_x - 1, fbg_y - 1,
                          fbg_x + fc_w + 1, fbg_y + fc_h + 1),
-                        fill="white",
+                        fill=furi_bg_fill,
                     )
-                    draw.text((furi_x, furi_y), fc, fill="black", font=furi_font)
+                    draw.text((furi_x, furi_y), fc, fill=text_fill, font=furi_font)
                 furi_y += furi_char_h
 
         char_y += char_height
+
+    if mask is not None:
+        overlay_arr = np.array(overlay)
+        overlay_arr[:, :, 3][mask == 0] = 0
+        overlay = Image.fromarray(overlay_arr)
+        img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 
 
 def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:

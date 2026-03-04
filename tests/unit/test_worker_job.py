@@ -115,13 +115,12 @@ class TestValidPipelines:
 class TestProcessJobManga:
     @patch("worker.job.transform_translate")
     @patch("worker.job.ocr_bubble")
-    @patch("worker.job.detect_page_text")
     @patch("worker.job.detect_page_bubbles")
     def test_translate_pipeline_returns_png(
-        self, mock_detect, mock_text, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_translate
     ):
         mock_ocr.return_value = BubbleResult(
-            bbox=(10, 10, 50, 50), contour=None,
+            bbox=(10, 10, 50, 50),
             ocr_text="テスト", is_valid=True,
         )
 
@@ -138,13 +137,12 @@ class TestProcessJobManga:
 
     @patch("worker.job.transform_furigana")
     @patch("worker.job.ocr_bubble")
-    @patch("worker.job.detect_page_text")
     @patch("worker.job.detect_page_bubbles")
     def test_furigana_pipeline_returns_bytes(
-        self, mock_detect, mock_text, mock_ocr, mock_furigana
+        self, mock_detect, mock_ocr, mock_furigana
     ):
         mock_ocr.return_value = BubbleResult(
-            bbox=(10, 10, 50, 50), contour=None,
+            bbox=(10, 10, 50, 50),
         )
 
         img_bytes = _make_test_image_bytes()
@@ -158,14 +156,13 @@ class TestProcessJobManga:
 
     @patch("worker.job.transform_translate")
     @patch("worker.job.ocr_bubble")
-    @patch("worker.job.detect_page_text")
     @patch("worker.job.detect_page_bubbles")
     def test_calls_stages_in_order(
-        self, mock_detect, mock_text, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_translate
     ):
-        """Verify pipeline stages are called: detect → text → ocr → transform."""
+        """Verify pipeline stages are called: detect → ocr → transform."""
         mock_ocr.return_value = BubbleResult(
-            bbox=(0, 0, 10, 10), contour=None,
+            bbox=(0, 0, 10, 10),
         )
 
         img_bytes = _make_test_image_bytes()
@@ -175,19 +172,17 @@ class TestProcessJobManga:
         process_job(job)
 
         mock_detect.assert_called_once()
-        mock_text.assert_called_once()
         # OCR is called for each bubble in bubbles_raw (default empty = 0 calls)
 
     @patch("worker.job.transform_translate")
     @patch("worker.job.ocr_bubble")
-    @patch("worker.job.detect_page_text")
     @patch("worker.job.detect_page_bubbles")
     def test_translate_uses_transform_translate(
-        self, mock_detect, mock_text, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_translate
     ):
         """manga_translate should call transform_translate, not furigana."""
         mock_ocr.return_value = BubbleResult(
-            bbox=(0, 0, 10, 10), contour=None, is_valid=True, ocr_text="テスト",
+            bbox=(0, 0, 10, 10), is_valid=True, ocr_text="テスト",
         )
         # Simulate one bubble being detected
         def add_bubble(page):
@@ -204,14 +199,13 @@ class TestProcessJobManga:
 
     @patch("worker.job.transform_furigana")
     @patch("worker.job.ocr_bubble")
-    @patch("worker.job.detect_page_text")
     @patch("worker.job.detect_page_bubbles")
     def test_furigana_uses_transform_furigana(
-        self, mock_detect, mock_text, mock_ocr, mock_furigana
+        self, mock_detect, mock_ocr, mock_furigana
     ):
         """manga_furigana should call transform_furigana."""
         mock_ocr.return_value = BubbleResult(
-            bbox=(0, 0, 10, 10), contour=None, is_valid=True, ocr_text="漢字",
+            bbox=(0, 0, 10, 10), is_valid=True, ocr_text="漢字",
         )
         def add_bubble(page):
             page.bubbles_raw = [{"bbox": (0, 0, 10, 10)}]
@@ -227,10 +221,9 @@ class TestProcessJobManga:
 
     @patch("worker.job.transform_translate")
     @patch("worker.job.ocr_bubble")
-    @patch("worker.job.detect_page_text")
     @patch("worker.job.detect_page_bubbles")
     def test_bubble_count_reflects_transformed(
-        self, mock_detect, mock_text, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_translate
     ):
         """bubble_count should count only bubbles with non-None transformed."""
         def add_bubbles(page):
@@ -245,7 +238,7 @@ class TestProcessJobManga:
         def mock_ocr_fn(img, bubble):
             call_count[0] += 1
             return BubbleResult(
-                bbox=bubble["bbox"], contour=None,
+                bbox=bubble["bbox"],
                 ocr_text="テスト", is_valid=True,
             )
         mock_ocr.side_effect = mock_ocr_fn

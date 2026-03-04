@@ -57,9 +57,7 @@ FONT_EN = _resolve_font(_fonts.get("en", "fonts/KomikaText-Regular.ttf"))
 FONT_EN_BOLD = _resolve_font(_fonts.get("en_bold", "fonts/KomikaText-Bold.ttf"))
 FONT_SFX = _resolve_font(_fonts.get("sfx", "fonts/BadaBoomBB.ttf"))
 
-# --- Bubble detection thresholds ---
-MIN_BUBBLE_AREA = 2000        # Minimum contour area to consider a bubble
-MAX_BUBBLE_AREA_RATIO = 0.25  # Max fraction of page area for a single bubble
+# --- Bubble detection (RT-DETR-v2) ---
 BUBBLE_PADDING = 5            # Pixels to pad inside bubble for text rendering
 
 # --- OCR settings ---
@@ -76,7 +74,10 @@ EN_BASE_FONT_DIVISOR = 55
 EN_BASE_FONT_MIN = 14
 EN_BASE_FONT_MAX = 24
 
-# --- Text detection (EasyOCR Japanese) ---
+# --- Text detection ---
+# EasyOCR-based text detection is no longer needed for manga — RT-DETR-v2
+# detects both bubbles and free text. These are kept for backward compat
+# if text_detector.py is used directly.
 TEXT_DETECTION_ENABLED = _text_det.get("enabled", False)
 TEXT_DETECTION_CONFIDENCE = _text_det.get("confidence", 0.3)
 TEXT_DETECTION_GPU = _text_det.get("gpu", True)

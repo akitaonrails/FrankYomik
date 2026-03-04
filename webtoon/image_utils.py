@@ -100,6 +100,54 @@ def _deduplicate(detections: list[TextDetection],
     return keep
 
 
+def stitch_rtdetr_detections(
+    strip_results: list[tuple[list[dict], int]],
+    iou_threshold: float = 0.5,
+) -> list[dict]:
+    """Merge RT-DETR-v2 detections from overlapping strips.
+
+    Maps bbox coordinates to full-image space and deduplicates by IoU.
+    Each detection dict must have a "bbox" key with (x1, y1, x2, y2).
+
+    Args:
+        strip_results: List of (detections, y_offset) from each strip.
+        iou_threshold: IoU threshold for deduplication.
+
+    Returns:
+        Merged detections with coordinates mapped to the full image.
+    """
+    all_dets: list[dict] = []
+
+    for detections, y_offset in strip_results:
+        for det in detections:
+            x1, y1, x2, y2 = det["bbox"]
+            mapped = dict(det)
+            mapped["bbox"] = (x1, y1 + y_offset, x2, y2 + y_offset)
+            all_dets.append(mapped)
+
+    if len(all_dets) <= 1:
+        return all_dets
+
+    # Deduplicate: sort by score descending, keep highest confidence
+    sorted_dets = sorted(all_dets, key=lambda d: d.get("score", 0), reverse=True)
+    kept: list[dict] = []
+
+    for det in sorted_dets:
+        is_dup = False
+        for existing in kept:
+            if _iou(det["bbox"], existing["bbox"]) > iou_threshold:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append(det)
+
+    removed = len(all_dets) - len(kept)
+    if removed > 0:
+        log.info("Deduplicated %d overlapping RT-DETR-v2 detections", removed)
+
+    return kept
+
+
 def _iou(a: tuple[int, int, int, int],
          b: tuple[int, int, int, int]) -> float:
     """Compute Intersection over Union of two bboxes."""
