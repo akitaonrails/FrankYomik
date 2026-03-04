@@ -50,9 +50,6 @@ Region entry:
 - `is_valid`
 - `transformed`: `{ kind, value }`
 - `user`:
-  - `false_positive`
-  - `wrong_sfx`
-  - `undetected`
   - `manual_translation`
 
 ## API

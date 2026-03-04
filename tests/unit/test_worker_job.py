@@ -402,44 +402,6 @@ class TestRerenderFromMetadata:
         assert result.bubble_count == 1
         assert result.image_bytes is not None
 
-    def test_rerender_skips_false_positives(self):
-        """Rerender should skip regions marked as false_positive."""
-        img_bytes = _make_test_image_bytes(200, 300)
-        job = ProcessingJob(
-            job_id="rr-fp",
-            pipeline="manga_translate",
-            image_bytes=img_bytes,
-            rerender_from_metadata=True,
-            metadata_payload={
-                "regions": [
-                    {
-                        "id": "r1",
-                        "kind": "bubble",
-                        "bbox": [10, 10, 90, 70],
-                        "transformed": {"kind": "text", "value": "Hello"},
-                        "user": {
-                            "false_positive": True,
-                            "manual_translation": "",
-                        },
-                    },
-                    {
-                        "id": "r2",
-                        "kind": "bubble",
-                        "bbox": [10, 80, 90, 150],
-                        "transformed": {"kind": "text", "value": "World"},
-                        "user": {
-                            "false_positive": False,
-                            "manual_translation": "",
-                        },
-                    },
-                ],
-            },
-        )
-        result = process_job(job)
-        assert result.status == "completed"
-        # Only r2 should be rendered (r1 is FP)
-        assert result.bubble_count == 1
-
     def test_rerender_uses_manual_translation(self):
         """Rerender should prefer user.manual_translation over transformed."""
         img_bytes = _make_test_image_bytes(200, 300)

@@ -566,17 +566,11 @@ void main() {
       expect(readerSource.contains('cancel_feedback_edits'), true);
     });
 
-    test('feedback actions dispatch via mark click/dblclick', () {
-      // Single click toggles FP / undo, double-click opens translation edit
-      expect(readerSource.contains("action: isMarked ? 'undo_mark' : 'false_positive'"), true);
+    test('click on mark opens edit_translation', () {
       expect(readerSource.contains("action: 'edit_translation'"), true);
     });
 
-    test('feedback marks rendering styles exist for all mark types', () {
-      expect(readerSource.contains("kind === 'false_positive'"), true);
-      expect(readerSource.contains("kind === 'wrong_sfx'"), true);
-      expect(readerSource.contains("kind === 'undetected'"), true);
-      // Default style for manual_translation
+    test('mark style uses TXT label for manual_translation', () {
       expect(readerSource.contains("label: 'TXT'"), true);
     });
 

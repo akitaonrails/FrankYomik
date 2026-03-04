@@ -175,17 +175,6 @@ def _region_manual_text(region: dict[str, Any]) -> str:
     return ""
 
 
-def _region_skipped(region: dict[str, Any]) -> bool:
-    user = region.get("user")
-    if not isinstance(user, dict):
-        return False
-    if user.get("false_positive") is True:
-        return True
-    if user.get("wrong_sfx") is True:
-        return True
-    return False
-
-
 def _rerender_from_metadata(job: ProcessingJob,
                             progress_cb: ProgressCallback | None = None,
                             ) -> ProcessingResult:
@@ -222,8 +211,6 @@ def _rerender_from_metadata(job: ProcessingJob,
     render_items: list[dict] = []
     for ri, region in enumerate(regions):
         if not isinstance(region, dict):
-            continue
-        if _region_skipped(region):
             continue
         bbox = _bbox_from_region(region, img_w, img_h)
         if not bbox:
@@ -347,9 +334,6 @@ def _process_manga(job: ProcessingJob,
             "is_valid": bool(br.is_valid),
             "transformed": transformed_obj,
             "user": {
-                "false_positive": False,
-                "wrong_sfx": False,
-                "undetected": False,
                 "manual_translation": "",
             },
         })
@@ -416,9 +400,6 @@ def _process_webtoon(job: ProcessingJob,
             "is_valid": bool(region.is_valid),
             "transformed": transformed_obj,
             "user": {
-                "false_positive": False,
-                "wrong_sfx": False,
-                "undetected": False,
                 "manual_translation": "",
             },
         })
@@ -435,9 +416,6 @@ def _process_webtoon(job: ProcessingJob,
             "is_valid": True,
             "transformed": {"kind": "text", "value": ""},
             "user": {
-                "false_positive": False,
-                "wrong_sfx": False,
-                "undetected": False,
                 "manual_translation": "",
             },
         })

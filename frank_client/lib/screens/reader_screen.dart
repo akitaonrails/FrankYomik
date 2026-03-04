@@ -1487,15 +1487,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     return best;
   }
   function markStyle(kind) {
-    if (kind === 'false_positive') {
-      return { border: 'rgba(244,67,54,0.98)', fill: 'rgba(244,67,54,0.16)', dash: false, label: 'FP' };
-    }
-    if (kind === 'wrong_sfx') {
-      return { border: 'rgba(255,152,0,0.98)', fill: 'rgba(255,152,0,0.16)', dash: false, label: 'SFX' };
-    }
-    if (kind === 'undetected') {
-      return { border: 'rgba(33,150,243,0.98)', fill: 'rgba(33,150,243,0.12)', dash: true, label: 'NEW' };
-    }
     return { border: 'rgba(156,39,176,0.98)', fill: 'rgba(156,39,176,0.14)', dash: false, label: 'TXT' };
   }
   function detectionStyle(regionKind) {
@@ -1628,7 +1619,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     return best;
   }
-  // Single tap/click on a mark box: toggle false_positive (or undo if already marked)
+  // Single tap/click on a mark box: open edit_translation dialog
   marksLayer.addEventListener('click', function(e) {
     if (!editMode) return;
     var box = e.target.closest('[data-frank-mark-region-id]');
@@ -1637,7 +1628,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     e.stopPropagation();
     var pageId = box.dataset.frankMarkPageId || null;
     var regionId = box.dataset.frankMarkRegionId || null;
-    var isMarked = box.dataset.frankMarkMarked === 'true';
     var img = findImageByPageId(box.dataset.frankMarkAnchorPageId);
     if (!img) return;
     var r = img.getBoundingClientRect();
@@ -1645,7 +1635,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     var xNorm = ((br.left + br.width / 2) - r.left) / r.width;
     var yNorm = ((br.top + br.height / 2) - r.top) / r.height;
     window.flutter_inappwebview.callHandler('onOverlayEditAction', {
-      action: isMarked ? 'undo_mark' : 'false_positive',
+      action: 'edit_translation',
       pageId: pageId,
       regionId: regionId,
       xNorm: Math.max(0, Math.min(1, xNorm)),
@@ -1653,46 +1643,29 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     });
   }, true);
 
-  // Right-click in edit mode:
-  //   on existing mark box → edit translation
-  //   on empty area → mark undetected bubble
+  // Right-click in edit mode on existing mark box → edit translation
   document.addEventListener('contextmenu', function(e) {
     if (!editMode) return;
     e.preventDefault();
     e.stopPropagation();
     if (isUiTarget(e.target)) return;
     var box = e.target.closest ? e.target.closest('[data-frank-mark-region-id]') : null;
-    if (box) {
-      var pageId = box.dataset.frankMarkPageId || null;
-      var regionId = box.dataset.frankMarkRegionId || null;
-      var img = findImageByPageId(box.dataset.frankMarkAnchorPageId);
-      if (!img) return;
-      var r = img.getBoundingClientRect();
-      var br = box.getBoundingClientRect();
-      var xNorm = ((br.left + br.width / 2) - r.left) / r.width;
-      var yNorm = ((br.top + br.height / 2) - r.top) / r.height;
-      window.flutter_inappwebview.callHandler('onOverlayEditAction', {
-        action: 'edit_translation',
-        pageId: pageId,
-        regionId: regionId,
-        xNorm: Math.max(0, Math.min(1, xNorm)),
-        yNorm: Math.max(0, Math.min(1, yNorm))
-      });
-    } else {
-      var img = findImageAtPoint(e.clientX, e.clientY);
-      if (!img) return;
-      var r = img.getBoundingClientRect();
-      var xNorm = (e.clientX - r.left) / r.width;
-      var yNorm = (e.clientY - r.top) / r.height;
-      var pageId = (img.dataset && img.dataset.frankPageId) ? img.dataset.frankPageId : null;
-      window.flutter_inappwebview.callHandler('onOverlayEditAction', {
-        action: 'undetected',
-        pageId: pageId,
-        regionId: null,
-        xNorm: Math.max(0, Math.min(1, xNorm)),
-        yNorm: Math.max(0, Math.min(1, yNorm))
-      });
-    }
+    if (!box) return;
+    var pageId = box.dataset.frankMarkPageId || null;
+    var regionId = box.dataset.frankMarkRegionId || null;
+    var img = findImageByPageId(box.dataset.frankMarkAnchorPageId);
+    if (!img) return;
+    var r = img.getBoundingClientRect();
+    var br = box.getBoundingClientRect();
+    var xNorm = ((br.left + br.width / 2) - r.left) / r.width;
+    var yNorm = ((br.top + br.height / 2) - r.top) / r.height;
+    window.flutter_inappwebview.callHandler('onOverlayEditAction', {
+      action: 'edit_translation',
+      pageId: pageId,
+      regionId: regionId,
+      xNorm: Math.max(0, Math.min(1, xNorm)),
+      yNorm: Math.max(0, Math.min(1, yNorm))
+    });
   }, true);
   window.addEventListener('resize', scheduleFeedbackMarksRender);
   document.addEventListener('scroll', scheduleFeedbackMarksRender, true);
@@ -2128,16 +2101,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           : <String, dynamic>{};
 
       final manual = ((user['manual_translation'] as String?) ?? '').trim();
-      String? type;
-      if (user['false_positive'] == true) {
-        type = 'false_positive';
-      } else if (user['wrong_sfx'] == true) {
-        type = 'wrong_sfx';
-      } else if (user['undetected'] == true) {
-        type = 'undetected';
-      } else if (manual.isNotEmpty) {
-        type = 'manual_translation';
-      }
+      final String? type = manual.isNotEmpty ? 'manual_translation' : null;
       final bool marked = type != null;
 
       final norm = region['bbox_norm'];
@@ -2565,40 +2529,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         ? Map<String, dynamic>.from(regions[idx] as Map<String, dynamic>)
         : null;
 
-    if (action == 'undetected') {
-      final img = metadata['image'];
-      final imgW =
-          (img is Map ? (img['width'] as num?)?.toInt() : null) ?? 1000;
-      final imgH =
-          (img is Map ? (img['height'] as num?)?.toInt() : null) ?? 1000;
-      const halfW = 0.05;
-      const halfH = 0.05;
-      final x1 = (xNorm - halfW).clamp(0.0, 1.0);
-      final y1 = (yNorm - halfH).clamp(0.0, 1.0);
-      final x2 = (xNorm + halfW).clamp(0.0, 1.0);
-      final y2 = (yNorm + halfH).clamp(0.0, 1.0);
-      final r = <String, dynamic>{
-        'id': 'u-${DateTime.now().millisecondsSinceEpoch}',
-        'kind': 'bubble',
-        'bbox_norm': [x1, y1, x2, y2],
-        'bbox': [
-          (x1 * imgW).round(),
-          (y1 * imgH).round(),
-          (x2 * imgW).round(),
-          (y2 * imgH).round(),
-        ],
-        'ocr_text': '',
-        'is_valid': false,
-        'transformed': {'kind': 'text', 'value': ''},
-        'user': {
-          'false_positive': false,
-          'wrong_sfx': false,
-          'undetected': true,
-          'manual_translation': '',
-        },
-      };
-      regions.add(r);
-    } else if (action == 'undo_mark') {
+    if (action == 'undo_mark') {
       if (region == null) {
         _updateInPageStatus(
           'No existing mark at click',
@@ -2609,27 +2540,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final user = Map<String, dynamic>.from(
         (region['user'] as Map?)?.cast<String, dynamic>() ??
             <String, dynamic>{
-              'false_positive': false,
-              'wrong_sfx': false,
-              'undetected': false,
               'manual_translation': '',
             },
       );
-      final wasUserUndetected = user['undetected'] == true;
-      final regionTag = (region['id'] as String?) ?? '';
-      if (wasUserUndetected && regionTag.startsWith('u-')) {
-        regions.removeAt(idx);
-      } else {
-        user['false_positive'] = false;
-        user['wrong_sfx'] = false;
-        user['undetected'] = false;
-        user['manual_translation'] = '';
-        region['user'] = user;
-        if (idx >= 0) {
-          regions[idx] = region;
-        }
+      user['manual_translation'] = '';
+      region['user'] = user;
+      if (idx >= 0) {
+        regions[idx] = region;
       }
-    } else {
+    } else if (action == 'edit_translation') {
       if (region == null) {
         _updateInPageStatus(
           'No text region at click',
@@ -2640,29 +2559,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final user = Map<String, dynamic>.from(
         (region['user'] as Map?)?.cast<String, dynamic>() ??
             <String, dynamic>{
-              'false_positive': false,
-              'wrong_sfx': false,
-              'undetected': false,
               'manual_translation': '',
             },
       );
 
-      if (action == 'false_positive') {
-        user['false_positive'] = true;
-      } else if (action == 'wrong_sfx') {
-        user['wrong_sfx'] = true;
-      } else if (action == 'edit_translation') {
-        var initial = (user['manual_translation'] as String?) ?? '';
-        if (initial.isEmpty) {
-          final transformed = region['transformed'];
-          if (transformed is Map) {
-            initial = (transformed['value'] as String?) ?? '';
-          }
+      var initial = (user['manual_translation'] as String?) ?? '';
+      if (initial.isEmpty) {
+        final transformed = region['transformed'];
+        if (transformed is Map) {
+          initial = (transformed['value'] as String?) ?? '';
         }
-        final edited = await _showTranslationEditDialog(initial);
-        if (edited == null) return;
-        user['manual_translation'] = edited.trim();
       }
+      final edited = await _showTranslationEditDialog(initial);
+      if (edited == null) return;
+      user['manual_translation'] = edited.trim();
 
       region['user'] = user;
       if (idx >= 0) {
@@ -2910,7 +2820,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   /// Merge user edits from the local metadata onto fresh server metadata.
-  /// Preserves user overrides (false_positive, manual_translation) while
+  /// Preserves user overrides (manual_translation) while
   /// picking up any server-side changes (new regions, updated transforms).
   Map<String, dynamic> _mergeUserEdits(
     Map<String, dynamic> serverMeta,
