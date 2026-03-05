@@ -12,37 +12,6 @@ class ImageCaptureService {
     return controller.takeScreenshot();
   }
 
-  /// Extract an image from the page by evaluating JS that fetches it as base64.
-  Future<Uint8List?> captureImageElement(
-      AppWebViewController controller, String selector) async {
-    final result = await controller.evaluateJavascript(source: '''
-      (function() {
-        const img = document.querySelector('$selector');
-        if (!img || !img.src) return null;
-        return new Promise((resolve) => {
-          fetch(img.src)
-            .then(r => r.blob())
-            .then(blob => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result.split(',')[1]);
-              reader.readAsDataURL(blob);
-            })
-            .catch(() => resolve(null));
-        });
-      })()
-    ''');
-
-    if (result == null) return null;
-    try {
-      // Dart's base64 decode
-      return Uint8List.fromList(
-        List<int>.from(Uri.parse('data:;base64,$result').data!.contentAsBytes()),
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
   /// Crop a screenshot to the reader content area.
   ///
   /// [screenshot] is the full WebView screenshot as PNG bytes.
@@ -128,22 +97,4 @@ class ImageCaptureService {
     return stitchSpread(args.$1, args.$2);
   }
 
-  /// [cropToRect] on a background isolate.
-  static Future<Uint8List?> cropToRectAsync(
-    Uint8List screenshot,
-    ui.Rect contentRect,
-    double devicePixelRatio,
-  ) {
-    return compute(
-      _cropToRectWorker,
-      (screenshot, contentRect.left, contentRect.top, contentRect.width,
-          contentRect.height, devicePixelRatio),
-    );
-  }
-
-  static Uint8List? _cropToRectWorker(
-      (Uint8List, double, double, double, double, double) args) {
-    final (bytes, left, top, width, height, dpr) = args;
-    return cropToRect(bytes, ui.Rect.fromLTWH(left, top, width, height), dpr);
-  }
 }

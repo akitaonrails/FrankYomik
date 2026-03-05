@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import '../providers/jobs_provider.dart';
-import '../providers/connection_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/image_capture_service.dart';
 import '../webview/dom_inspector.dart';

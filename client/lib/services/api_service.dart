@@ -21,7 +21,6 @@ class ApiService {
     String? pageNumber,
     String? sourceUrl,
     String priority = 'high',
-    bool force = false,
     String? targetLanguage,
   }) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/jobs');
@@ -38,7 +37,6 @@ class ApiService {
     if (chapter != null) request.fields['chapter'] = chapter;
     if (pageNumber != null) request.fields['page_number'] = pageNumber;
     if (sourceUrl != null) request.fields['source_url'] = sourceUrl;
-    if (force) request.fields['force'] = 'true';
 
     final response = await _client.send(request);
     final body = await response.stream.bytesToString();
@@ -76,24 +74,6 @@ class ApiService {
 
     if (response.statusCode != 200) {
       throw ApiException('Image download failed (${response.statusCode})');
-    }
-    return response.bodyBytes;
-  }
-
-  /// Download cached image bytes by source hash.
-  Future<Uint8List> getCacheImageByHash({
-    required ServerSettings settings,
-    required String pipeline,
-    required String sourceHash,
-  }) async {
-    final uri = Uri.parse(
-      '${settings.serverUrl}/api/v1/cache/by-hash/$pipeline/$sourceHash/image',
-    );
-    final response = await _client.get(uri, headers: _headers(settings));
-    if (response.statusCode != 200) {
-      throw ApiException(
-        'Cache image download failed (${response.statusCode})',
-      );
     }
     return response.bodyBytes;
   }

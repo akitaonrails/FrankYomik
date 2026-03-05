@@ -158,31 +158,6 @@ class CacheService {
     return file.readAsBytes();
   }
 
-  /// Look up cached metadata JSON by image hash and pipeline.
-  Future<String?> lookupMetadataByHash(String hash, String pipeline) async {
-    await ready;
-    final rows = await _db?.query(
-      'pages',
-      columns: ['metadata_json'],
-      where: 'image_hash = ? AND pipeline = ?',
-      whereArgs: [hash, pipeline],
-      limit: 1,
-    );
-    if (rows == null || rows.isEmpty) return null;
-    return rows.first['metadata_json'] as String?;
-  }
-
-  /// Update metadata JSON for an existing cache entry.
-  Future<void> updateMetadata(String hash, String pipeline, String? metadataJson) async {
-    await ready;
-    await _db?.update(
-      'pages',
-      {'metadata_json': metadataJson},
-      where: 'image_hash = ? AND pipeline = ?',
-      whereArgs: [hash, pipeline],
-    );
-  }
-
   /// Store a translated image in the local cache.
   Future<void> store({
     required String hash,
@@ -191,7 +166,6 @@ class CacheService {
     String? title,
     String? chapter,
     String? pageNumber,
-    String? metadataJson,
   }) async {
     // Always populate memory cache immediately
     _memoryCache['$hash:$pipeline'] = imageBytes;
@@ -212,7 +186,7 @@ class CacheService {
         'page_number': pageNumber,
         'file_path': filePath,
         'created_at': DateTime.now().millisecondsSinceEpoch,
-        'metadata_json': metadataJson,
+        'metadata_json': null,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );

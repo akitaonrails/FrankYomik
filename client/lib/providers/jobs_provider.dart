@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,9 +27,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   final Ref _ref;
   Timer? _pollTimer;
 
-  /// Tracks background metadata-backfill jobs: jobId → {hash, pipeline}.
-  final Map<String, ({String hash, String pipeline})> _backfillJobs = {};
-
   JobsNotifier(this._ref) : super({}) {
     // Listen for WebSocket messages
     final ws = _ref.read(wsServiceProvider);
@@ -43,8 +39,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   CacheService get _cache => _ref.read(cacheServiceProvider);
 
   /// Submit a page for translation.
-  /// When [force] is true, bypass all local and server caches and reprocess
-  /// from scratch.
   Future<void> submitPage({
     required String pageId,
     required Uint8List imageBytes,
@@ -54,7 +48,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     String? pageNumber,
     String? sourceUrl,
     String priority = 'high',
-    bool force = false,
     String? targetLanguage,
   }) async {
     // Check local cache first (hash-based — works for re-visits)
@@ -65,77 +58,54 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         ? effectivePipeline
         : '${effectivePipeline}_$effectiveLang';
     final hash = await _cache.hashImage(imageBytes);
-    if (!force) {
-      final cached = await _cache.lookupByHash(hash, cachePipeline);
-      if (cached != null) {
-        state = {
-          ...state,
-          pageId: PageJob(
-            pageId: pageId,
-            title: title,
-            chapter: chapter,
-            pageNumber: pageNumber,
-            pipeline: effectivePipeline,
-            status: PageJobStatus.completed,
-            translatedImage: cached,
-            cached: true,
-            sourceHash: hash,
-          ),
-        };
-        // Backfill metadata for pages cached before metadata storage existed.
-        unawaited(_backfillMetadataIfMissing(
-          hash: hash,
-          pipeline: cachePipeline,
-          imageBytes: imageBytes,
+    final cached = await _cache.lookupByHash(hash, cachePipeline);
+    if (cached != null) {
+      state = {
+        ...state,
+        pageId: PageJob(
+          pageId: pageId,
           title: title,
           chapter: chapter,
           pageNumber: pageNumber,
-          sourceUrl: sourceUrl,
-          priority: 'low',
-        ));
-        return;
-      }
+          pipeline: effectivePipeline,
+          status: PageJobStatus.completed,
+          translatedImage: cached,
+          cached: true,
+          sourceHash: hash,
+        ),
+      };
+      return;
+    }
 
-      // Also check by metadata (title/chapter/page) — but only if the
-      // source hash matches.  The Kindle reader loads different resolution
-      // images depending on window size; a metadata hit from a smaller
-      // screenshot would serve a worse translation for the larger image.
-      if (title != null && chapter != null && pageNumber != null) {
-        final metaHash = await _cache.lookupHashByMetadata(
-          cachePipeline,
-          title,
-          chapter,
-          pageNumber,
-        );
-        if (metaHash != null && metaHash == hash) {
-          final metaCached = await _cache.lookupByHash(hash, cachePipeline);
-          if (metaCached != null) {
-            state = {
-              ...state,
-              pageId: PageJob(
-                pageId: pageId,
-                title: title,
-                chapter: chapter,
-                pageNumber: pageNumber,
-                pipeline: effectivePipeline,
-                status: PageJobStatus.completed,
-                translatedImage: metaCached,
-                cached: true,
-                sourceHash: hash,
-              ),
-            };
-            unawaited(_backfillMetadataIfMissing(
-              hash: hash,
-              pipeline: cachePipeline,
-              imageBytes: imageBytes,
+    // Also check by metadata (title/chapter/page) — but only if the
+    // source hash matches.  The Kindle reader loads different resolution
+    // images depending on window size; a metadata hit from a smaller
+    // screenshot would serve a worse translation for the larger image.
+    if (title != null && chapter != null && pageNumber != null) {
+      final metaHash = await _cache.lookupHashByMetadata(
+        cachePipeline,
+        title,
+        chapter,
+        pageNumber,
+      );
+      if (metaHash != null && metaHash == hash) {
+        final metaCached = await _cache.lookupByHash(hash, cachePipeline);
+        if (metaCached != null) {
+          state = {
+            ...state,
+            pageId: PageJob(
+              pageId: pageId,
               title: title,
               chapter: chapter,
               pageNumber: pageNumber,
-              sourceUrl: sourceUrl,
-              priority: 'low',
-            ));
-            return;
-          }
+              pipeline: effectivePipeline,
+              status: PageJobStatus.completed,
+              translatedImage: metaCached,
+              cached: true,
+              sourceHash: hash,
+            ),
+          };
+          return;
         }
       }
     }
@@ -164,17 +134,13 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         pageNumber: pageNumber,
         sourceUrl: sourceUrl,
         priority: priority,
-        force: force,
         targetLanguage: targetLanguage,
       );
 
       final jobId = response['job_id'] as String;
       final isCached = response['cached'] == true;
       job.jobId = jobId;
-      job.metaUrl = response['meta_url'] as String?;
       job.sourceHash = (response['source_hash'] as String?) ?? hash;
-      job.contentHash = response['content_hash'] as String?;
-      job.renderHash = response['render_hash'] as String?;
 
       if (isCached) {
         // Server had it cached — download immediately
@@ -203,7 +169,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             chapter: chapter,
             pageNumber: pageNumber,
           );
-          unawaited(_fetchAndCacheMetadata(hash, cachePipeline));
         }
       } else {
         // Subscribe for updates
@@ -225,16 +190,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     final jobId = msg['job_id'] as String?;
     if (type == null || jobId == null) return;
 
-    // Check if this is a metadata-backfill job (no matching PageJob expected)
-    final backfill = _backfillJobs.remove(jobId);
-    if (backfill != null && type == 'job_complete') {
-      final status = msg['status'] as String?;
-      if (status == 'completed') {
-        unawaited(_fetchAndCacheMetadata(backfill.hash, backfill.pipeline));
-      }
-      return;
-    }
-
     // Find the PageJob with this jobId
     final entry = state.entries
         .where((e) => e.value.jobId == jobId)
@@ -253,10 +208,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       final status = msg['status'] as String?;
       if (status == 'completed') {
         job.imageUrl = msg['image_url'] as String?;
-        job.metaUrl = msg['meta_url'] as String?;
         job.sourceHash = msg['source_hash'] as String? ?? job.sourceHash;
-        job.contentHash = msg['content_hash'] as String?;
-        job.renderHash = msg['render_hash'] as String?;
         job.cached = msg['cached'] == true;
         _downloadTranslatedImage(job);
       } else {
@@ -294,7 +246,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           chapter: job.chapter,
           pageNumber: job.pageNumber,
         );
-        unawaited(_fetchAndCacheMetadata(hash, cp));
       }
     } catch (e) {
       job.status = PageJobStatus.failed;
@@ -302,21 +253,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       state = {...state};
     }
   }
-
-  /// No-op: metadata backfill was part of the removed feedback system.
-  Future<void> _backfillMetadataIfMissing({
-    required String hash,
-    required String pipeline,
-    required Uint8List imageBytes,
-    String? title,
-    String? chapter,
-    String? pageNumber,
-    String? sourceUrl,
-    String priority = 'low',
-  }) async {}
-
-  /// No-op: metadata fetch was part of the removed feedback system.
-  Future<void> _fetchAndCacheMetadata(String hash, String pipeline) async {}
 
   /// Fallback polling for active jobs when WebSocket is unavailable.
   void _startPollingFallback() {
@@ -326,7 +262,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       final activeJobs = state.values
           .where((j) => j.isActive && j.jobId != null)
           .toList();
-      if (activeJobs.isEmpty && _backfillJobs.isEmpty) {
+      if (activeJobs.isEmpty) {
         _pollTimer?.cancel();
         _pollTimer = null;
         return;
@@ -343,10 +279,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             job.imageUrl =
                 status['image_url'] as String? ??
                 '/api/v1/jobs/${job.jobId}/image';
-            job.metaUrl = status['meta_url'] as String?;
             job.sourceHash = status['source_hash'] as String? ?? job.sourceHash;
-            job.contentHash = status['content_hash'] as String?;
-            job.renderHash = status['render_hash'] as String?;
             _downloadTranslatedImage(job);
           } else if (jobStatus == 'failed') {
             debugPrint('[Jobs] ${job.pageId} failed');
@@ -356,27 +289,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           }
         } catch (e) {
           debugPrint('[Jobs] Poll status failed for ${job.jobId}: $e');
-        }
-      }
-
-      // Poll backfill jobs for metadata completion
-      for (final entry in _backfillJobs.entries.toList()) {
-        try {
-          final status = await _api.getJobStatus(
-            settings: _settings,
-            jobId: entry.key,
-          );
-          final jobStatus = status['status'] as String?;
-          if (jobStatus == 'completed') {
-            final bf = _backfillJobs.remove(entry.key);
-            if (bf != null) {
-              unawaited(_fetchAndCacheMetadata(bf.hash, bf.pipeline));
-            }
-          } else if (jobStatus == 'failed') {
-            _backfillJobs.remove(entry.key);
-          }
-        } catch (e) {
-          debugPrint('[Jobs] Poll backfill status failed for ${entry.key}: $e');
         }
       }
     });
@@ -389,7 +301,6 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         _ws.unsubscribeFromJobs([job.jobId!]);
       }
     }
-    _backfillJobs.clear();
     state = {};
   }
 

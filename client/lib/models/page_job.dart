@@ -17,11 +17,7 @@ class PageJob {
   int percent;
   Uint8List? translatedImage;
   String? imageUrl;
-  String? metaUrl;
   String? sourceHash;
-  String? contentHash;
-  String? renderHash;
-  Map<String, dynamic>? metadata;
   String? error;
   bool cached;
 
@@ -40,11 +36,7 @@ class PageJob {
     this.percent = 0,
     this.translatedImage,
     this.imageUrl,
-    this.metaUrl,
     this.sourceHash,
-    this.contentHash,
-    this.renderHash,
-    this.metadata,
     this.error,
     this.cached = false,
   });
