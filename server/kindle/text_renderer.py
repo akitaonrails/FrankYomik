@@ -142,10 +142,10 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     """Compute a tighter bbox that fits inside the bubble mask.
 
     For each row in the mask, find the horizontal extent of filled pixels.
-    Return the median left/right edges across the middle ~90% of rows.
-    Using median instead of intersection (narrowest row) recovers ~20% more
-    width for oval bubbles — text is mask-clipped at render so minor edge
-    overflow on a few outer rows is invisible.
+    Uses 15% vertical inset (keeps text in the wider middle 70% of the
+    bubble) and 30th-percentile width (safe for ~60% of rows).  This
+    prevents lines near the top/bottom of the text block from overflowing
+    the narrow edges of oval bubbles.
     """
     x1, y1, x2, y2 = bbox
     crop = mask[y1:y2, x1:x2]
@@ -162,18 +162,18 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     mask_top, mask_bot = int(filled[0]), int(filled[-1])
     mask_h = mask_bot - mask_top + 1
 
-    # Vertical: inset 5% from top/bottom of the mask to stay away from
-    # the pointed/narrow tips of the bubble.  Text is mask-clipped at
-    # render so a slim inset is safe.
-    v_inset = max(1, mask_h * 5 // 100)
+    # Vertical: inset 15% from top/bottom to keep text in the wider
+    # center of oval bubbles.  At 15% the bubble is typically ~70% of
+    # its max width — much safer for horizontal text.
+    v_inset = max(2, mask_h * 15 // 100)
     safe_top = mask_top + v_inset
     safe_bot = mask_bot - v_inset
     if safe_top >= safe_bot:
         return bbox
 
-    # Horizontal: across the safe vertical range, use median left/right
-    # edges rather than the narrowest row.  Text is mask-clipped at render
-    # so minor edge overflow on a few rows is invisible.
+    # Horizontal: use 30th-percentile width (safe for ~60% of rows).
+    # This is more conservative than median, avoiding clipping on the
+    # narrower rows near the edges of the safe vertical range.
     lefts = []
     rights = []
     for r in range(safe_top, safe_bot + 1):
@@ -185,13 +185,15 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     if not lefts:
         return bbox
 
-    med_left = int(np.median(lefts))
-    med_right = int(np.median(rights))
+    # 70th percentile of lefts = further right (conservative)
+    # 30th percentile of rights = further left (conservative)
+    safe_left = int(np.percentile(lefts, 70))
+    safe_right = int(np.percentile(rights, 30))
 
-    if med_left >= med_right:
+    if safe_left >= safe_right:
         return bbox
 
-    return (x1 + med_left, y1 + safe_top, x1 + med_right + 1, y1 + safe_bot + 1)
+    return (x1 + safe_left, y1 + safe_top, x1 + safe_right + 1, y1 + safe_bot + 1)
 
 
 # --- Font size pre-computation for page-level normalization ---
@@ -202,21 +204,20 @@ def compute_bubble_font_size(bbox: tuple[int, int, int, int],
                               mask: 'np.ndarray | None' = None) -> int | None:
     """Compute the fitted font size for horizontal English text in a bubble.
 
-    Uses raw bbox width (maximizes horizontal space) but mask-safe height
-    (prevents vertical clipping by the oval mask).  Returns None for
+    Uses mask-safe bbox (both width and height) so the computed size matches
+    what will actually be visible after mask clipping.  Returns None for
     SFX/vertical layout so the caller can skip normalization for those.
     """
     if _choose_layout(text) == "vertical_sfx":
         return None
 
-    x1, y1, x2, y2 = bbox
-    bw = x2 - x1 - 2 * TEXT_MARGIN
-
-    # Use mask-safe height to prevent clipping, raw width for max space
     if mask is not None:
         safe = _mask_safe_bbox(bbox, mask)
+        bw = safe[2] - safe[0] - 2 * TEXT_MARGIN
         bh = safe[3] - safe[1] - 2 * TEXT_MARGIN
     else:
+        x1, y1, x2, y2 = bbox
+        bw = x2 - x1 - 2 * TEXT_MARGIN
         bh = y2 - y1 - 2 * TEXT_MARGIN
 
     if bw < 10 or bh < 10:
@@ -234,12 +235,9 @@ def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
 
     ``base_font_size`` is the page-wide target computed from image height.
     All bubbles try to use this size for consistency; smaller bubbles shrink
-    as needed.  When `mask` is provided, the rendered text is clipped to the
-    bubble shape using an RGBA overlay + mask-clip pattern.
-
-    Unlike furigana, English text uses the raw detection bbox for font sizing
-    (not the conservative mask-safe bbox).  The mask clip at render handles
-    overflow — this produces ~20% larger fonts that fill bubbles better.
+    as needed.  When `mask` is provided, horizontal text uses the mask-safe
+    bbox for sizing, wrapping, and positioning so text stays inside the
+    visible bubble area, with mask-clip as a safety net.
     """
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
@@ -349,11 +347,21 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
     ``target_size`` is the page-wide font target for consistency.  Text
     starts at this size and shrinks only if it doesn't fit.  Words are
     hyphenated during word wrap when they don't fit on a line.
-    When `mask` is provided, renders to an RGBA overlay and clips to mask.
+    When `mask` is provided, uses mask-safe bbox for sizing, wrapping,
+    and positioning so text stays inside the visible bubble area, then
+    renders to an RGBA overlay and clips to mask as a safety net.
     """
-    x1, y1, x2, y2 = bbox
-    bw = x2 - x1 - 2 * TEXT_MARGIN
-    bh = y2 - y1 - 2 * TEXT_MARGIN
+    # Use mask-safe bbox for sizing/wrapping/positioning when mask available
+    if mask is not None:
+        sx1, sy1, sx2, sy2 = _mask_safe_bbox(bbox, mask)
+    else:
+        sx1, sy1, sx2, sy2 = bbox
+
+    bw = sx2 - sx1 - 2 * TEXT_MARGIN
+    bh = sy2 - sy1 - 2 * TEXT_MARGIN
+
+    if bw < 10 or bh < 10:
+        return
 
     font_size = _fit_horizontal_english_size(text, bw, bh, target_size)
     font = _load_font(FONT_EN_BOLD, font_size)
@@ -371,13 +379,13 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
     line_height = int(font_size * 1.2)
     total_height = len(lines) * line_height
 
-    text_y = y1 + TEXT_MARGIN + (bh - total_height) // 2
+    text_y = sy1 + TEXT_MARGIN + (bh - total_height) // 2
 
     for line in lines:
         line_bbox = draw.textbbox((0, 0), line, font=font)
         line_w = line_bbox[2] - line_bbox[0]
         line_h = line_bbox[3] - line_bbox[1]
-        text_x = x1 + TEXT_MARGIN + (bw - line_w) // 2
+        text_x = sx1 + TEXT_MARGIN + (bw - line_w) // 2
 
         # Offset background by bbox origin (font ascender shifts ink down/right)
         bg_x = text_x + line_bbox[0]
@@ -406,9 +414,11 @@ def _fit_horizontal_english_size(text: str, bw: int, bh: int,
     When ``target_size`` is given (page-wide target), uses it as the upper
     bound so all bubbles on a page share a consistent size.  Small bubbles
     that can't fit at the target will shrink.  Without a target, uses the
-    bubble height as the upper bound.
+    bubble height as the upper bound.  MAX_FONT_SIZE is always enforced as
+    a hard cap to prevent oversized text in large bubbles.
     """
     upper = min(target_size, bh) if target_size else bh
+    upper = min(upper, MAX_FONT_SIZE)
     lo, hi = MIN_FONT_SIZE, upper
     best = lo
 
