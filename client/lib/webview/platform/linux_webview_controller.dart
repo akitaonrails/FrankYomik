@@ -13,6 +13,7 @@ class LinuxWebViewController implements AppWebViewController {
   Future<void> create({required String url, String? userAgent}) async {
     await _channel.invokeMethod('create', {
       'url': url,
+      // ignore: use_null_aware_elements
       if (userAgent != null) 'userAgent': userAgent,
     });
   }

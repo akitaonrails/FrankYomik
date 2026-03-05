@@ -753,7 +753,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final sub = ref.listenManual(jobsProvider, (previous, next) {
       final job = next[pageId];
       if (job == null) return;
-      final prevJob = previous?[pageId];
       final isWebtoonSite = _jsBridge.activeStrategy?.siteName == 'webtoon';
       if (job.isComplete && job.translatedImage != null) {
         if (isWebtoonSite) {
@@ -1495,27 +1494,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       _completionListeners[pageId]?.close();
       _completionListeners.remove(pageId);
       notifier.removeJob(pageId);
-    }
-  }
-
-
-  void _refreshCurrentPageFromCache() {
-    if (!mounted) return;
-    if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
-      _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
-      return;
-    }
-    if (_jsBridge.activeStrategy?.siteName == 'webtoon') {
-      final visible = _detectedWebtoonPages.entries
-          .where((e) => e.value['pageId'] is String)
-          .toList();
-      if (visible.isNotEmpty) {
-        final last = visible.last.value;
-        final pageId = last['pageId'] as String?;
-        if (pageId != null) {
-          _capturePageImage(pageId, last);
-        }
-      }
     }
   }
 
