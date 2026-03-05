@@ -11,6 +11,7 @@ class WebSocketService {
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   Timer? _reconnectTimer;
+  Timer? _heartbeatTimer;
   int _reconnectAttempts = 0;
   static const _maxReconnectDelay = 30;
 
@@ -46,6 +47,7 @@ class WebSocketService {
         onDone: _onDone,
       );
       _reconnectAttempts = 0;
+      _startHeartbeat();
       onConnected?.call();
 
       // Re-subscribe to any active jobs
@@ -96,6 +98,21 @@ class WebSocketService {
     _send({'type': 'unsubscribe', 'job_ids': jobIds});
   }
 
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+      if (_channel == null) return;
+      try {
+        _channel!.sink.add(jsonEncode({'type': 'ping'}));
+      } catch (e) {
+        debugPrint('[WS] Heartbeat send failed: $e');
+        _cleanup();
+        onDisconnected?.call();
+        _scheduleReconnect();
+      }
+    });
+  }
+
   void _send(Map<String, dynamic> message) {
     if (_channel == null) return;
     try {
@@ -106,6 +123,8 @@ class WebSocketService {
   }
 
   void _cleanup() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     _subscription?.cancel();
     _subscription = null;
     try {

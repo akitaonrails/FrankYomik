@@ -26,6 +26,7 @@ final jobsProvider = StateNotifierProvider<JobsNotifier, Map<String, PageJob>>((
 class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   final Ref _ref;
   Timer? _pollTimer;
+  final Set<String> _downloadingJobIds = {};
 
   JobsNotifier(this._ref) : super({}) {
     // Listen for WebSocket messages
@@ -223,6 +224,12 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   Future<void> _downloadTranslatedImage(PageJob job) async {
     if (job.imageUrl == null) return;
 
+    // Deduplicate concurrent downloads for the same job
+    if (job.jobId != null) {
+      if (_downloadingJobIds.contains(job.jobId)) return;
+      _downloadingJobIds.add(job.jobId!);
+    }
+
     try {
       final img = await _api.getJobImage(
         settings: _settings,
@@ -251,13 +258,17 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       job.status = PageJobStatus.failed;
       job.error = 'Download failed: $e';
       state = {...state};
+    } finally {
+      if (job.jobId != null) {
+        _downloadingJobIds.remove(job.jobId);
+      }
     }
   }
 
   /// Fallback polling for active jobs when WebSocket is unavailable.
+  /// Always restarts the timer so new batch submissions refresh the cycle.
   void _startPollingFallback() {
-    // Don't restart if already polling — restarting resets the 3s countdown
-    if (_pollTimer != null) return;
+    _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       final activeJobs = state.values
           .where((j) => j.isActive && j.jobId != null)
@@ -267,6 +278,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         _pollTimer = null;
         return;
       }
+
+      // Re-subscribe on each tick to recover from dead-then-reconnected WS
+      final activeJobIds = activeJobs.map((j) => j.jobId!).toList();
+      _ws.subscribeToJobs(activeJobIds);
 
       for (final job in activeJobs) {
         try {
