@@ -65,7 +65,7 @@ MANGA_OCR_DEVICE = _ocr.get("device", "cpu")  # Force CPU to avoid VRAM conflict
 FURIGANA_SIZE_RATIO = 0.45   # Furigana font size relative to main text
 MIN_FONT_SIZE = 10
 MAX_FONT_SIZE = 60           # Cap for vertical JP/SFX
-TEXT_MARGIN = 4               # Margin inside bubble for text placement
+TEXT_MARGIN = 2               # Margin inside bubble for text placement
 
 # English page-wide font target: page_height / divisor.
 # Scales proportionally with screen resolution (e.g. ~75px for 1345px desktop,

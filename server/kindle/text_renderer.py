@@ -142,7 +142,7 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     """Compute a tighter bbox that fits inside the bubble mask.
 
     For each row in the mask, find the horizontal extent of filled pixels.
-    Return the median left/right edges across the middle ~84% of rows.
+    Return the median left/right edges across the middle ~90% of rows.
     Using median instead of intersection (narrowest row) recovers ~20% more
     width for oval bubbles — text is mask-clipped at render so minor edge
     overflow on a few outer rows is invisible.
@@ -162,9 +162,10 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     mask_top, mask_bot = int(filled[0]), int(filled[-1])
     mask_h = mask_bot - mask_top + 1
 
-    # Vertical: inset 8% from top/bottom of the mask to stay away from
-    # the pointed/narrow tips of the bubble.
-    v_inset = max(1, mask_h * 8 // 100)
+    # Vertical: inset 5% from top/bottom of the mask to stay away from
+    # the pointed/narrow tips of the bubble.  Text is mask-clipped at
+    # render so a slim inset is safe.
+    v_inset = max(1, mask_h * 5 // 100)
     safe_top = mask_top + v_inset
     safe_bot = mask_bot - v_inset
     if safe_top >= safe_bot:
@@ -335,7 +336,7 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
     if not lines:
         return
 
-    line_height = int(font_size * 1.3)
+    line_height = int(font_size * 1.2)
     total_height = len(lines) * line_height
 
     text_y = y1 + TEXT_MARGIN + (bh - total_height) // 2
@@ -385,7 +386,7 @@ def _fit_horizontal_english_size(text: str, bw: int, bh: int,
         draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
 
         lines = _word_wrap(text, font, bw, draw)
-        line_height = int(mid * 1.3)
+        line_height = int(mid * 1.2)
         total_height = len(lines) * line_height
 
         if total_height <= bh and len(lines) > 0:
@@ -664,7 +665,7 @@ def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
     if not lines:
         return
 
-    line_height = int(font_size * 1.3)
+    line_height = int(font_size * 1.2)
     total_height = len(lines) * line_height
 
     if inpainted:

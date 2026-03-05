@@ -1421,6 +1421,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   /// Manually translate the current page (used when auto-translate is off).
   void _translateCurrentPage() {
+    _showKindleSpinner();
+    _updateInPageStatus('Translating...');
     if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
       _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
       return;
