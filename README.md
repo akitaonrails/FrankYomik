@@ -1,10 +1,17 @@
 <p align="center">
-  <img src="docs/icon.png" width="128" alt="Frank Manga icon">
+  <img src="docs/icon.png" width="128" alt="Frank Yomik icon">
 </p>
 
-# Frank Manga
+# Frank Yomik
 
-Automatic manga and webtoon translation. Detects speech bubbles with RT-DETR-v2, extracts text via OCR, translates with a local LLM, and renders the result back onto the page.
+Automatic manga and webtoon translation system. Detects speech bubbles with RT-DETR-v2, extracts text via OCR, translates with a local LLM (Ollama), and renders the result back onto the page — all running on your own hardware.
+
+<p align="center">
+  <img src="docs/sample_translate.png" width="45%" alt="English translation sample">
+  &nbsp;&nbsp;
+  <img src="docs/sample_furigana.png" width="45%" alt="Furigana sample">
+</p>
+<p align="center"><em>Left: Japanese → English translation. Right: Furigana reading aids.</em></p>
 
 ## Components
 
@@ -29,6 +36,8 @@ Image → EasyOCR text detection → cluster into bubbles → Ollama translation
 
 **Web service**: Go API accepts images over HTTP, deduplicates via SHA256, queues through Redis Streams with priority ordering. Python workers process jobs and push results via Redis Pub/Sub + WebSocket.
 
+**Flutter client**: Wraps Kindle (read.amazon.co.jp) and Naver Webtoon in a WebView, captures pages, submits them to the API, and overlays translated images in real-time. Supports auto-translate or manual translate-on-demand, per-volume pipeline selection (furigana vs English), and local SQLite caching.
+
 ## Requirements
 
 - Python 3.12+
@@ -40,8 +49,8 @@ Image → EasyOCR text detection → cluster into bubbles → Ollama translation
 ## Setup
 
 ```bash
-git clone https://github.com/akitaonrails/frank_manga.git
-cd frank_manga/server
+git clone https://github.com/akitaonrails/FrankYomik.git
+cd FrankYomik/server
 
 python -m venv .venv
 source .venv/bin/activate
@@ -149,10 +158,10 @@ Expose the API over HTTPS via [Cloudflare Tunnel](https://developers.cloudflare.
 cloudflared tunnel login
 
 # Create a tunnel
-cloudflared tunnel create yomik
+cloudflared tunnel create <tunnel-name>
 
 # Route DNS (requires a domain managed by Cloudflare)
-cloudflared tunnel route dns yomik yomik.example.com
+cloudflared tunnel route dns <tunnel-name> <your-hostname>
 ```
 
 ### Configure
@@ -164,7 +173,7 @@ tunnel: <TUNNEL_UUID>
 credentials-file: /etc/cloudflared/<TUNNEL_UUID>.json
 
 ingress:
-  - hostname: yomik.example.com
+  - hostname: <your-hostname>
     service: http://api:8080
   - service: http_status:404
 ```
@@ -179,7 +188,7 @@ The `docker-compose.yml` includes `init-cloudflared` and `cloudflared` services.
 docker compose up -d
 ```
 
-The API is now reachable at `https://yomik.example.com`. Configure this URL in the Flutter client's Settings screen.
+The API is now reachable at `https://<your-hostname>`. Configure this URL in the Flutter client's Settings screen.
 
 ## Flutter Client
 
@@ -193,26 +202,23 @@ flutter run -d <device>    # Android
 flutter build apk
 ```
 
-## Testing
+The client defaults to `http://localhost:8080`. Configure the server URL and auth token in the Settings screen.
 
-All tests run from `server/`:
+## Testing
 
 ```bash
 cd server
 
-# Python unit tests (345 tests, ~8s)
+# Python unit tests (356 tests)
 .venv/bin/pytest tests/unit/ -v
 
-# Python integration tests (34 tests, ~16s, needs test images in docs/)
+# Python integration tests (34 tests, needs test images in docs/)
 .venv/bin/pytest tests/integration/ -v
-
-# All Python tests
-.venv/bin/pytest tests/ -v
 
 # Go API tests (needs Redis for full coverage, skips gracefully without it)
 go test -v .
 
-# Flutter tests
+# Flutter tests (50 tests)
 cd ../client && flutter test
 ```
 
