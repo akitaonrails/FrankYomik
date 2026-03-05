@@ -63,62 +63,6 @@ class ApiService {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
-  /// Fetch cached metadata payload by source hash.
-  Future<Map<String, dynamic>> getCacheMetadataByHash({
-    required ServerSettings settings,
-    required String pipeline,
-    required String sourceHash,
-  }) async {
-    final uri = Uri.parse(
-      '${settings.serverUrl}/api/v1/cache/by-hash/$pipeline/$sourceHash/meta',
-    );
-    final response = await _client.get(uri, headers: _headers(settings));
-    if (response.statusCode != 200) {
-      throw ApiException(
-        'Meta fetch failed (${response.statusCode})',
-        statusCode: response.statusCode,
-      );
-    }
-    return jsonDecode(response.body) as Map<String, dynamic>;
-  }
-
-  /// Update cached metadata and enqueue rerender.
-  Future<Map<String, dynamic>> patchCacheMetadataByHash({
-    required ServerSettings settings,
-    required String pipeline,
-    required String sourceHash,
-    required Map<String, dynamic> metadata,
-    String? baseContentHash,
-    String priority = 'high',
-  }) async {
-    final uri = Uri.parse(
-      '${settings.serverUrl}/api/v1/cache/by-hash/$pipeline/$sourceHash/meta',
-    );
-    final payload = <String, dynamic>{
-      'metadata': metadata,
-      'priority': priority,
-      if (baseContentHash != null && baseContentHash.isNotEmpty)
-        'base_content_hash': baseContentHash,
-    };
-    final response = await _client.patch(
-      uri,
-      headers: {..._headers(settings), 'Content-Type': 'application/json'},
-      body: jsonEncode(payload),
-    );
-    if (response.statusCode == 409) {
-      throw ApiConflictException(
-        'Content hash mismatch — metadata was modified concurrently',
-      );
-    }
-    if (response.statusCode != 202) {
-      throw ApiException(
-        'Meta patch failed (${response.statusCode}): ${response.body}',
-        statusCode: response.statusCode,
-      );
-    }
-    return jsonDecode(response.body) as Map<String, dynamic>;
-  }
-
   /// Download the translated image bytes.
   Future<Uint8List> getJobImage({
     required ServerSettings settings,
@@ -176,7 +120,3 @@ class ApiException implements Exception {
   String toString() => 'ApiException: $message';
 }
 
-/// Thrown when a PATCH request hits a 409 Conflict (stale content hash).
-class ApiConflictException extends ApiException {
-  ApiConflictException(super.message) : super(statusCode: 409);
-}

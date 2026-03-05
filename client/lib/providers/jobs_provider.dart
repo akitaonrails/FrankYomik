@@ -303,9 +303,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     }
   }
 
-  /// Check if metadata exists locally; if not, resubmit to server in background
-  /// so the worker produces metadata. Called for local cache hits on pages that
-  /// were cached before metadata storage was introduced.
+  /// No-op: metadata backfill was part of the removed feedback system.
   Future<void> _backfillMetadataIfMissing({
     required String hash,
     required String pipeline,
@@ -315,69 +313,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     String? pageNumber,
     String? sourceUrl,
     String priority = 'low',
-  }) async {
-    // First try the fast path: metadata already in SQLite
-    final localJson = await _cache.lookupMetadataByHash(hash, pipeline);
-    if (localJson != null) return;
+  }) async {}
 
-    // Try fetching from server (covers pages processed after Redis bridge fix)
-    try {
-      final resp = await _api.getCacheMetadataByHash(
-        settings: _settings,
-        pipeline: pipeline,
-        sourceHash: hash,
-      );
-      final metadataJson = jsonEncode(resp);
-      await _cache.updateMetadata(hash, pipeline, metadataJson);
-      return;
-    } catch (e) {
-      debugPrint('[Jobs] Server metadata fetch failed for $hash: $e');
-    }
-
-    // Resubmit to server so the worker produces fresh metadata.
-    try {
-      final response = await _api.submitJob(
-        settings: _settings,
-        imageBytes: imageBytes,
-        pipeline: pipeline,
-        title: title,
-        chapter: chapter,
-        pageNumber: pageNumber,
-        sourceUrl: sourceUrl,
-        priority: priority,
-      );
-      final jobId = response['job_id'] as String;
-      final isCached = response['cached'] == true;
-
-      if (isCached) {
-        // Server had it cached (dedup hit) — metadata should be available now
-        unawaited(_fetchAndCacheMetadata(hash, pipeline));
-      } else {
-        // Track for WS/polling completion
-        _backfillJobs[jobId] = (hash: hash, pipeline: pipeline);
-        _ws.subscribeToJobs([jobId]);
-        _startPollingFallback();
-      }
-    } catch (e) {
-      debugPrint('[Jobs] Metadata backfill resubmit failed for $hash: $e');
-    }
-  }
-
-  /// Fetch metadata from server and persist in local SQLite cache.
-  /// Non-fatal: logs and returns on failure.
-  Future<void> _fetchAndCacheMetadata(String hash, String pipeline) async {
-    try {
-      final resp = await _api.getCacheMetadataByHash(
-        settings: _settings,
-        pipeline: pipeline,
-        sourceHash: hash,
-      );
-      final metadataJson = jsonEncode(resp);
-      await _cache.updateMetadata(hash, pipeline, metadataJson);
-    } catch (e) {
-      debugPrint('[Jobs] Fetch/cache metadata failed for $hash: $e');
-    }
-  }
+  /// No-op: metadata fetch was part of the removed feedback system.
+  Future<void> _fetchAndCacheMetadata(String hash, String pipeline) async {}
 
   /// Fallback polling for active jobs when WebSocket is unavailable.
   void _startPollingFallback() {

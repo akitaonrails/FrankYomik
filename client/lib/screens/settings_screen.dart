@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/server_settings.dart';
 import '../providers/connection_provider.dart';
+import '../providers/jobs_provider.dart';
 import '../providers/settings_provider.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -49,6 +50,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Settings saved')),
+      );
+    }
+  }
+
+  Future<void> _clearCache() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear Cache'),
+        content: const Text(
+            'Delete all locally cached translations? Pages will be re-translated on next visit.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Clear')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final cache = ref.read(cacheServiceProvider);
+    final count = await cache.clearAll();
+    ref.read(jobsProvider.notifier).clearAll();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Cleared $count cached pages')),
       );
     }
   }
@@ -179,6 +210,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                 ),
               ],
+            ),
+          ),
+          const Divider(height: 32),
+          OutlinedButton.icon(
+            onPressed: _clearCache,
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('Clear Translation Cache'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.red,
             ),
           ),
         ],

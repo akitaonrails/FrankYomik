@@ -458,8 +458,13 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                              mask: 'np.ndarray | None' = None) -> None:
     """Render vertical Japanese text with furigana inside a bubble region.
 
-    When `mask` is provided, renders to an RGBA overlay and clips to mask.
+    When `mask` is provided, the bbox is first tightened to the mask's
+    interior (same as English rendering) so text is sized to the actual
+    bubble shape, then renders to an RGBA overlay and clips to mask.
     """
+    if mask is not None:
+        bbox = _mask_safe_bbox(bbox, mask)
+
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
@@ -544,14 +549,20 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             furi_x = col_x + font_size + 1
             furi_char_h = furi_size + 1
             furi_total_h = len(ch_info["furigana"]) * furi_char_h
-            # Compress furigana spacing when stack overflows char_height
+            local_furi_font = furi_font
+            local_furi_size = furi_size
+            # Compress furigana spacing and font when stack overflows char_height
             if furi_total_h > char_height and len(ch_info["furigana"]) > 1:
                 furi_char_h = char_height // len(ch_info["furigana"])
                 furi_total_h = len(ch_info["furigana"]) * furi_char_h
+                # Shrink font to match reduced spacing so characters don't overlap
+                if furi_char_h < furi_size:
+                    local_furi_size = max(MIN_FONT_SIZE // 2, furi_char_h - 1)
+                    local_furi_font = _load_font(FONT_JP, local_furi_size)
             furi_y = char_y + (char_height - furi_total_h) // 2
             for fc in ch_info["furigana"]:
-                if furi_x + furi_size <= x2 - BUBBLE_PADDING:
-                    fc_bbox = draw.textbbox((0, 0), fc, font=furi_font)
+                if furi_x + local_furi_size <= x2 - BUBBLE_PADDING:
+                    fc_bbox = draw.textbbox((0, 0), fc, font=local_furi_font)
                     fc_w = fc_bbox[2] - fc_bbox[0]
                     fc_h = fc_bbox[3] - fc_bbox[1]
                     # Offset background by bbox origin
@@ -562,7 +573,7 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                          fbg_x + fc_w + 1, fbg_y + fc_h + 1),
                         fill=furi_bg_fill,
                     )
-                    draw.text((furi_x, furi_y), fc, fill=text_fill, font=furi_font)
+                    draw.text((furi_x, furi_y), fc, fill=text_fill, font=local_furi_font)
                 furi_y += furi_char_h
 
         char_y += char_height

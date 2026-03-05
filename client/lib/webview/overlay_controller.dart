@@ -24,16 +24,11 @@ class OverlayController {
 (function() {
   var targetSrc = $safeSrc;
 
-  // Find the img by matching src or data-frank-original-src
+  // Find the img by matching src
   var allImgs = document.querySelectorAll('img');
   var img = null;
   var matchType = '';
   for (var i = 0; i < allImgs.length; i++) {
-    if (allImgs[i].dataset.frankOriginalSrc === targetSrc) {
-      img = allImgs[i];
-      matchType = 'original-src-attr(already replaced)';
-      break;
-    }
     if (allImgs[i].src === targetSrc) {
       img = allImgs[i];
       matchType = 'current-src';
@@ -62,16 +57,11 @@ class OverlayController {
     console.log('[Frank] Available srcs:');
     for (var i = 0; i < Math.min(allImgs.length, 10); i++) {
       console.log('[Frank]   [' + i + '] src=' + allImgs[i].src.substring(0, 80) +
-        ' orig=' + (allImgs[i].dataset.frankOriginalSrc || 'none'));
+        ' translated=' + (allImgs[i].dataset.frankTranslated || 'none'));
     }
     return false;
   }
   console.log('[Frank] Replacing img matched by ' + matchType + ': ' + targetSrc.substring(0, 80));
-
-  // Store original src for toggle
-  if (!img.dataset.frankOriginalSrc) {
-    img.dataset.frankOriginalSrc = img.src;
-  }
 
   // Convert base64 to blob URL (base64 is safe: A-Za-z0-9+/= only)
   var binary = atob('$base64Data');
@@ -94,21 +84,6 @@ class OverlayController {
       img.style.opacity = '';
     }).catch(function(e) {
       console.error('[Frank] webtoon decode FAILED: ' + e);
-    });
-  }
-
-  // Add toggle on double-click (once) — single clicks pass through
-  // to the site's own navigation (Kindle bars, page turns, etc.)
-  if (!img.dataset.frankToggle) {
-    img.dataset.frankToggle = 'true';
-    img.addEventListener('dblclick', function(e) {
-      if (img.dataset.frankTranslated === 'true') {
-        img.src = img.dataset.frankOriginalSrc;
-        img.dataset.frankTranslated = 'false';
-      } else {
-        img.src = blobUrl;
-        img.dataset.frankTranslated = 'true';
-      }
     });
   }
 
@@ -242,7 +217,7 @@ class OverlayController {
         overlap0 = Math.min(overlap0, rootOverlap0);
       }
       if (!isActuallyVisible(imgs[i])) continue;
-      if (imgs[i].src === expected || imgs[i].dataset.frankOriginalSrc === expected) {
+      if (imgs[i].src === expected) {
         var hits0 = topLayerHits(imgs[i]);
         var score0 = (hits0 * 1000000000) + overlap0 + rectBiasScore(r0);
         if (!target || score0 > targetScore) {
@@ -291,10 +266,6 @@ class OverlayController {
     ' natural=' + target.naturalWidth + 'x' + target.naturalHeight +
     ' currentSrc=' + target.src.substring(0, 60));
 
-  // Always update the original src to the CURRENT blob (Kindle regenerates
-  // blob URLs on each page visit, so the old originalSrc would be stale).
-  target.dataset.frankOriginalSrc = target.src;
-
   // Convert base64 to blob URL (base64 is safe: A-Za-z0-9+/= only)
   var b64Len = '$base64Data'.length;
   console.log('[Frank] base64 length=' + b64Len);
@@ -315,10 +286,6 @@ class OverlayController {
   target.dataset.frankTranslated = 'true';
   if ('${pageId ?? ''}') target.dataset.frankPageId = '${pageId ?? ''}';
   target.dataset.frankTranslatedSrc = blobUrl;
-  window.__frankTranslatedBlobByPage = window.__frankTranslatedBlobByPage || {};
-  if ('${pageId ?? ''}') {
-    window.__frankTranslatedBlobByPage['${pageId ?? ''}'] = blobUrl;
-  }
   if (overlayToken) target.dataset.frankOverlayToken = overlayToken;
 
   // Fire-and-forget: decode the new image, then nudge the compositor.
@@ -358,29 +325,6 @@ class OverlayController {
   } else {
     target.style.outline = '';
     target.style.outlineOffset = '';
-  }
-
-  // Add toggle on double-click (once)
-  if (!target.dataset.frankToggle) {
-    target.dataset.frankToggle = 'true';
-    target.addEventListener('dblclick', function(e) {
-      if (target.dataset.frankTranslated === 'true') {
-        target.src = target.dataset.frankOriginalSrc;
-        target.dataset.frankTranslated = 'false';
-        target.style.outline = '';
-        target.style.outlineOffset = '';
-      } else {
-        target.src = target.dataset.frankTranslatedSrc;
-        target.dataset.frankTranslated = 'true';
-        if (debugVisible) {
-          target.style.outline = '3px solid rgba(76,175,80,0.95)';
-          target.style.outlineOffset = '-3px';
-        }
-      }
-      if (typeof window.__frankLastBlob !== 'undefined') {
-        window.__frankLastBlob = target.src;
-      }
-    });
   }
 
   return JSON.stringify({ok: true, blobBytes: binary.length,
@@ -524,8 +468,7 @@ class OverlayController {
     }
     if (!isActuallyVisible(imgs[i])) continue;
     if (expected &&
-        imgs[i].src !== expected &&
-        imgs[i].dataset.frankOriginalSrc !== expected) {
+        imgs[i].src !== expected) {
       continue;
     }
     var score = (topLayerHits(imgs[i]) * 1000000000) + overlap + rectBiasScore(r);
@@ -537,13 +480,11 @@ class OverlayController {
 
   if (!target) return false;
 
-  var translatedMap = window.__frankTranslatedBlobByPage || {};
-  var translatedSrc = target.dataset.frankTranslatedSrc ||
-      (pageId ? translatedMap[pageId] : null);
+  // Re-apply requires the translated blob URL stored on the element
+  var translatedSrc = target.dataset.frankTranslatedSrc;
   if (!translatedSrc) return false;
 
   target.dataset.frankTranslated = 'true';
-  target.dataset.frankTranslatedSrc = translatedSrc;
   if (pageId) target.dataset.frankPageId = pageId;
   if (overlayToken) target.dataset.frankOverlayToken = overlayToken;
   target.src = translatedSrc;
@@ -696,7 +637,7 @@ class OverlayController {
       overlapVp: Math.round(overlapVp),
       overlapRoot: Math.round(overlapRoot),
       topHits: topHits(img),
-      expectedMatch: !!(expected && (img.src === expected || img.dataset.frankOriginalSrc === expected)),
+      expectedMatch: !!(expected && img.src === expected),
       hasToken: !!(token && img.dataset.frankOverlayToken === token),
       translated: img.dataset.frankTranslated === 'true',
       token: shortStr(img.dataset.frankOverlayToken || '', 80),
