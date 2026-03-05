@@ -147,6 +147,10 @@ frank_manga/
     android/                    # Android platform (com.frankmanga.frank_client)
     linux/                      # Linux platform (GTK, Wayland/X11 aware)
 
+  .cloudflared/                  # Cloudflare Tunnel credentials (gitignored)
+    config.yml                  # Tunnel config (hostname → service mapping)
+    <UUID>.json                 # Tunnel credentials
+
   docs/                         # Documentation + test images
 ```
 
@@ -193,6 +197,15 @@ Model detections are trusted — no user-facing false-positive marking UI. Users
 - **Python Workers**: Long-running processes, models loaded once at startup. Consumer reads high stream first (100ms block), then low (1s block).
 - **WebSocket**: Real-time result push via Redis Pub/Sub → Go subscriber → per-connection channels.
 - **Dedup**: SHA256 hash of image bytes → if already queued/completed, returns existing job_id.
+
+### Cloudflare Tunnel
+
+Remote access is provided via Cloudflare Tunnel (`cloudflared`), configured in `docker-compose.yml`:
+
+- **`init-cloudflared`**: Busybox init container that copies `.cloudflared/` credentials into a Docker named volume (`cloudflared-config`). This avoids permission issues with NFS or restrictive host mounts.
+- **`cloudflared`**: Runs the tunnel using config from the volume, routes `localhost:8080` → `http://api:8080`.
+- **Setup**: Requires `cloudflared tunnel login`, `cloudflared tunnel create yomik`, and DNS routing. Credentials (tunnel UUID JSON + `config.yml`) go in `.cloudflared/` (gitignored).
+- **Client default**: Flutter client defaults to `https://localhost:8080` with auth token `mysecrettoken`.
 
 ### Text Rendering (text_renderer.py)
 

@@ -130,6 +130,53 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 
 Pipelines: `manga_translate`, `manga_furigana`, `webtoon`. Priority: `high` (default) or `low` (prefetch).
 
+## Cloudflare Tunnel (Remote Access)
+
+Expose the API over HTTPS via [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) so the Flutter client can reach it from anywhere.
+
+### One-time setup
+
+```bash
+# Install cloudflared
+# Arch: pacman -S cloudflared
+# Debian/Ubuntu: see https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+
+# Authenticate with Cloudflare (opens browser)
+cloudflared tunnel login
+
+# Create a tunnel
+cloudflared tunnel create yomik
+
+# Route DNS (requires a domain managed by Cloudflare)
+cloudflared tunnel route dns yomik yomik.example.com
+```
+
+### Configure
+
+Create `.cloudflared/config.yml` in the project root:
+
+```yaml
+tunnel: <TUNNEL_UUID>
+credentials-file: /etc/cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  - hostname: yomik.example.com
+    service: http://api:8080
+  - service: http_status:404
+```
+
+Copy your tunnel credentials JSON from `~/.cloudflared/<TUNNEL_UUID>.json` into `.cloudflared/`.
+
+### Run with Docker Compose
+
+The `docker-compose.yml` includes `init-cloudflared` and `cloudflared` services. The init container copies credentials from `.cloudflared/` into a Docker volume (avoids filesystem permission issues with NFS or restrictive mounts), then cloudflared connects the tunnel.
+
+```bash
+docker compose up -d
+```
+
+The API is now reachable at `https://yomik.example.com`. The Flutter client defaults to this URL — configure it in Settings.
+
 ## Flutter Client
 
 ```bash
@@ -137,6 +184,9 @@ cd client
 flutter pub get
 flutter run -d linux       # Desktop
 flutter run -d <device>    # Android
+
+# Build release APK
+flutter build apk
 ```
 
 ## Testing
