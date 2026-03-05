@@ -9,13 +9,19 @@ from .config import OLLAMA_BASE_URL, TRANSLATE_MODEL, TRANSLATE_OPTIONS, TRANSLA
 
 log = logging.getLogger(__name__)
 
+LANG_MAP = {
+    "en": ("en", "English"),
+    "pt-br": ("pt", "Brazilian Portuguese"),
+}
 
-def translate(japanese_text: str) -> str:
-    """Translate Japanese text to English using Ollama."""
+
+def translate(japanese_text: str, target_lang: str = "en") -> str:
+    """Translate Japanese text to the target language using Ollama."""
+    _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
     prompt = (
-        "Translate this Japanese manga dialogue to natural English.\n"
+        f"Translate this Japanese manga dialogue to natural {lang_name}.\n"
         "Keep it concise and suitable for a speech bubble.\n"
-        "Output ONLY the English translation, nothing else.\n"
+        f"Output ONLY the {lang_name} translation, nothing else.\n"
         f"\nJapanese: {japanese_text}"
     )
 
@@ -42,7 +48,7 @@ def translate(japanese_text: str) -> str:
     except Exception as e:
         log.warning("Ollama translation failed: %s, trying fallback", e)
 
-    return _fallback_translate(japanese_text)
+    return _fallback_translate(japanese_text, target_lang)
 
 
 def _clean_response(text: str) -> str:
@@ -54,11 +60,12 @@ def _clean_response(text: str) -> str:
     return text.strip()
 
 
-def _fallback_translate(japanese_text: str) -> str:
+def _fallback_translate(japanese_text: str, target_lang: str = "en") -> str:
     """Fallback using deep-translator (Google Translate)."""
     try:
         from deep_translator import GoogleTranslator
-        result = GoogleTranslator(source="ja", target="en").translate(japanese_text)
+        gt_code, _ = LANG_MAP.get(target_lang, ("en", "English"))
+        result = GoogleTranslator(source="ja", target=gt_code).translate(japanese_text)
         return result or japanese_text
     except Exception as e:
         log.error("Fallback translation also failed: %s", e)

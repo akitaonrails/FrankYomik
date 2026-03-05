@@ -39,20 +39,25 @@ def _find_images(prefix: str) -> list[str]:
     return sorted(glob.glob(pattern))
 
 
-def _process_page(path: str, mode: PipelineMode) -> "PageResult":
+def _process_page(path: str, mode: PipelineMode,
+                   target_lang: str = "en") -> "PageResult":
     """Run load → detect → OCR → transform for a single page."""
     page = load_page(path)
     detect_page_bubbles(page)
     page.bubble_results = [ocr_bubble(page.img_pil, b) for b in page.bubbles_raw]
-    transform_fn = transform_furigana if mode == PipelineMode.FURIGANA else transform_translate
-    for br in page.bubble_results:
-        if br.is_valid:
-            transform_fn(br)
+    if mode == PipelineMode.FURIGANA:
+        for br in page.bubble_results:
+            if br.is_valid:
+                transform_furigana(br)
+    else:
+        for br in page.bubble_results:
+            if br.is_valid:
+                transform_translate(br, target_lang)
     return page
 
 
 def run_pipeline(image_paths: list[str], mode: PipelineMode, out_dir: str,
-                 debug: bool = False) -> None:
+                 debug: bool = False, target_lang: str = "en") -> None:
     """Run the full pipeline with page-level parallelism."""
     os.makedirs(out_dir, exist_ok=True)
 
@@ -64,7 +69,9 @@ def run_pipeline(image_paths: list[str], mode: PipelineMode, out_dir: str,
 
     # Process pages in parallel (each page flows through load→detect→OCR→transform)
     with ThreadPoolExecutor(max_workers=4) as pool:
-        pages = list(pool.map(lambda p: _process_page(p, mode), image_paths))
+        pages = list(pool.map(
+            lambda p: _process_page(p, mode, target_lang), image_paths
+        ))
 
     # Render pages in parallel (each page has its own independent output_img)
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -79,6 +86,9 @@ def main():
                         help="Pipeline to run")
     parser.add_argument("--debug", action="store_true",
                         help="Save debug images with bounding boxes")
+    parser.add_argument("--target-lang", default="en",
+                        choices=["en", "pt-br"],
+                        help="Target language (default: en)")
     args = parser.parse_args()
 
     furigana_dir = os.path.join(OUTPUT_DIR, "furigana")
@@ -90,7 +100,8 @@ def main():
 
     if args.command in ("translate", "all"):
         images = _find_images("shounen")
-        run_pipeline(images, PipelineMode.TRANSLATE, translate_dir, debug=args.debug)
+        run_pipeline(images, PipelineMode.TRANSLATE, translate_dir,
+                     debug=args.debug, target_lang=args.target_lang)
 
 
 if __name__ == "__main__":

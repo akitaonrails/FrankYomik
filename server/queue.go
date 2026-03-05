@@ -39,6 +39,7 @@ type JobMetadata struct {
 	SourceURL            string
 	RerenderFromMetadata bool
 	ForceReprocess       bool
+	TargetLang           string
 }
 
 // SubmitJob stores the image, deduplicates, and enqueues a job.
@@ -47,9 +48,13 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 	// Compute SHA256 for dedup
 	hash := fmt.Sprintf("%x", sha256.Sum256(imageBytes))
 	forceNew := meta != nil && (meta.RerenderFromMetadata || meta.ForceReprocess)
+	targetLang := "en"
+	if meta != nil && meta.TargetLang != "" {
+		targetLang = meta.TargetLang
+	}
 
-	// Check dedup (keyed by hash + pipeline to avoid cross-pipeline collisions)
-	dedupField := hash + ":" + pipeline
+	// Check dedup (keyed by hash + pipeline + target_lang to avoid collisions)
+	dedupField := hash + ":" + pipeline + ":" + targetLang
 	if !forceNew {
 		existingJobID, err := q.rdb.HGet(ctx, dedupKey, dedupField).Result()
 		if err == nil && existingJobID != "" {
@@ -80,6 +85,9 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 		"pipeline":    pipeline,
 		"image_key":   imageKey,
 		"source_hash": hash,
+	}
+	if targetLang != "en" {
+		values["target_lang"] = targetLang
 	}
 	if meta != nil {
 		if meta.Title != "" {

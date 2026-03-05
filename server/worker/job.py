@@ -49,6 +49,7 @@ class ProcessingJob:
     source_hash: str = ""
     rerender_from_metadata: bool = False
     metadata_payload: dict[str, Any] | None = None
+    target_lang: str = "en"
 
 
 @dataclass
@@ -355,7 +356,7 @@ def _process_manga(job: ProcessingJob,
                 max_workers=min(8, len(translatable))
             ) as pool:
                 futures = {
-                    pool.submit(translate, br.ocr_text): (i, br)
+                    pool.submit(translate, br.ocr_text, job.target_lang): (i, br)
                     for i, br in translatable
                 }
                 done = 0
@@ -431,10 +432,10 @@ def _process_webtoon(job: ProcessingJob,
     detect_bubbles_rtdetr(page)
 
     _report(progress_cb, "translating", "", 50)
-    validate_and_translate(page, parallel=True)
+    validate_and_translate(page, parallel=True, target_lang=job.target_lang)
 
     _report(progress_cb, "rendering", "", 90)
-    output_bytes = wt_render_bytes(page)
+    output_bytes = wt_render_bytes(page, target_lang=job.target_lang)
     bubble_count = sum(1 for r in page.regions if r.english)
 
     img_w, img_h = page.img_pil.width, page.img_pil.height

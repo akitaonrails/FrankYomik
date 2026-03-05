@@ -32,6 +32,7 @@ void main() {
       expect(s.pipeline, 'manga_translate');
       expect(s.autoTranslate, true);
       expect(s.isConfigured, false);
+      expect(s.targetLanguage, 'en');
     });
 
     test('isConfigured with token', () {
@@ -44,6 +45,20 @@ void main() {
       final s2 = s.copyWith(serverUrl: 'http://other:9090');
       expect(s2.serverUrl, 'http://other:9090');
       expect(s2.authToken, 'a');
+      expect(s2.targetLanguage, 'en');
+    });
+
+    test('copyWith targetLanguage', () {
+      const s = ServerSettings();
+      final s2 = s.copyWith(targetLanguage: 'pt-br');
+      expect(s2.targetLanguage, 'pt-br');
+      expect(s2.pipeline, 'manga_translate');
+    });
+
+    test('targetLanguages map', () {
+      expect(ServerSettings.targetLanguages.containsKey('en'), true);
+      expect(ServerSettings.targetLanguages.containsKey('pt-br'), true);
+      expect(ServerSettings.targetLanguages['pt-br'], 'Brazilian Portuguese');
     });
   });
 

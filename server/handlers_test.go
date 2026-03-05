@@ -216,6 +216,94 @@ func TestCreateJobValidation(t *testing.T) {
 	})
 }
 
+func TestCreateJobInvalidTargetLang(t *testing.T) {
+	srv, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("pipeline", "manga_translate")
+	writer.WriteField("target_lang", "invalid")
+	part, _ := writer.CreateFormFile("image", "test.png")
+	part.Write(makePNGBytes())
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/jobs", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("got %d, want 400", w.Code)
+	}
+	assertJSONError(t, w.Body, "invalid target_lang")
+}
+
+func TestCreateJobTargetLangForwarded(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("pipeline", "manga_translate")
+	writer.WriteField("target_lang", "pt-br")
+	part, _ := writer.CreateFormFile("image", "test.png")
+	part.Write(makePNGBytes())
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/jobs", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	// Verify target_lang was passed to the stream
+	ctx := context.Background()
+	msgs, err := rdb.XRange(ctx, streamHigh, "-", "+").Result()
+	if err != nil {
+		t.Fatalf("xrange: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one stream message")
+	}
+	last := msgs[len(msgs)-1]
+	if last.Values["target_lang"] != "pt-br" {
+		t.Errorf("target_lang: got %q, want 'pt-br'", last.Values["target_lang"])
+	}
+}
+
+func TestCreateJobDefaultTargetLang(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req, w := makeJobRequest(t, "manga_translate", "", makePNGBytes())
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("got %d, want 201", w.Code)
+	}
+
+	// When target_lang is "en" (default), it should NOT be in the stream
+	ctx := context.Background()
+	msgs, err := rdb.XRange(ctx, streamHigh, "-", "+").Result()
+	if err != nil {
+		t.Fatalf("xrange: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one stream message")
+	}
+	last := msgs[len(msgs)-1]
+	if _, exists := last.Values["target_lang"]; exists {
+		t.Errorf("target_lang should not be in stream for default 'en'")
+	}
+}
+
 func TestCreateJobSuccess(t *testing.T) {
 	srv, _ := newTestServer(t)
 	mux := http.NewServeMux()

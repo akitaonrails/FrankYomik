@@ -166,14 +166,14 @@ def transform_furigana(br: BubbleResult) -> None:
         log.info("  No kanji in '%s', skipping furigana", br.ocr_text)
 
 
-def transform_translate(br: BubbleResult) -> None:
-    """Stage 4b: Translate Japanese to English."""
+def transform_translate(br: BubbleResult, target_lang: str = "en") -> None:
+    """Stage 4b: Translate Japanese to target language."""
     if not br.is_valid:
         return
-    english = translate(br.ocr_text)
-    if english.strip():
-        br.transformed = english
-        log.info("  EN: %s", english)
+    translated = translate(br.ocr_text, target_lang)
+    if translated.strip():
+        br.transformed = translated
+        log.info("  Translated: %s", translated)
     else:
         log.info("  Translation empty for '%s', skipping", br.ocr_text)
 

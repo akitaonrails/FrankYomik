@@ -97,3 +97,9 @@ var validPriorities = map[string]bool{
 	"high": true,
 	"low":  true,
 }
+
+// Valid target language values.
+var validTargetLangs = map[string]bool{
+	"en":    true,
+	"pt-br": true,
+}

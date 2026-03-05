@@ -37,7 +37,7 @@ class TestTranslate:
     def test_fallback_on_failure(self, mock_post, mock_fallback):
         result = translate("안녕하세요")
         assert result == "Fallback"
-        mock_fallback.assert_called_once_with("안녕하세요")
+        mock_fallback.assert_called_once_with("안녕하세요", "en")
 
     @patch("webtoon.translator._fallback_translate", return_value="Fallback")
     @patch("webtoon.translator.requests.post")
@@ -49,6 +49,25 @@ class TestTranslate:
 
         result = translate("안녕하세요")
         assert result == "Fallback"
+
+    @patch("webtoon.translator.requests.post")
+    def test_pt_br_prompt_contains_portuguese(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "Olá"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = translate("안녕하세요", target_lang="pt-br")
+        assert result == "Olá"
+        payload = mock_post.call_args[1]["json"]
+        prompt = payload["messages"][0]["content"]
+        assert "Brazilian Portuguese" in prompt
+
+    @patch("webtoon.translator._fallback_translate", return_value="Fallback")
+    @patch("webtoon.translator.requests.post", side_effect=Exception("timeout"))
+    def test_pt_br_fallback_passes_target_lang(self, mock_post, mock_fallback):
+        translate("안녕하세요", target_lang="pt-br")
+        mock_fallback.assert_called_once_with("안녕하세요", "pt-br")
 
 
 class TestTranslateSfx:
@@ -96,4 +115,17 @@ class TestTranslateSfx:
         """Falls back to Google Translate on Ollama failure."""
         result = translate_sfx("쾅")
         assert result == "BOOM"
-        mock_fallback.assert_called_once_with("쾅")
+        mock_fallback.assert_called_once_with("쾅", "en")
+
+    @patch("webtoon.translator.requests.post")
+    def test_sfx_pt_br_prompt(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "ESTRONDO"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = translate_sfx("쾅", target_lang="pt-br")
+        assert result == "ESTRONDO"
+        payload = mock_post.call_args[1]["json"]
+        prompt = payload["messages"][0]["content"]
+        assert "Brazilian Portuguese" in prompt

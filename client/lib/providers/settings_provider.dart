@@ -20,6 +20,7 @@ class SettingsNotifier extends StateNotifier<ServerSettings> {
       pipeline: prefs.getString('pipeline') ?? 'manga_furigana',
       prefetchPages: prefs.getInt('prefetch_pages') ?? 2,
       autoTranslate: prefs.getBool('auto_translate') ?? true,
+      targetLanguage: prefs.getString('target_language') ?? 'en',
     );
   }
 
@@ -31,5 +32,6 @@ class SettingsNotifier extends StateNotifier<ServerSettings> {
     await prefs.setString('pipeline', settings.pipeline);
     await prefs.setInt('prefetch_pages', settings.prefetchPages);
     await prefs.setBool('auto_translate', settings.autoTranslate);
+    await prefs.setString('target_language', settings.targetLanguage);
   }
 }

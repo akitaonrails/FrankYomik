@@ -55,12 +55,18 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     String? sourceUrl,
     String priority = 'high',
     bool force = false,
+    String? targetLanguage,
   }) async {
     // Check local cache first (hash-based — works for re-visits)
     final effectivePipeline = pipeline ?? _settings.pipeline;
+    final effectiveLang = targetLanguage ?? _settings.targetLanguage;
+    // Use composite pipeline for cache keys when target lang is not English
+    final cachePipeline = effectiveLang == 'en'
+        ? effectivePipeline
+        : '${effectivePipeline}_$effectiveLang';
     final hash = await _cache.hashImage(imageBytes);
     if (!force) {
-      final cached = await _cache.lookupByHash(hash, effectivePipeline);
+      final cached = await _cache.lookupByHash(hash, cachePipeline);
       if (cached != null) {
         state = {
           ...state,
@@ -79,7 +85,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         // Backfill metadata for pages cached before metadata storage existed.
         unawaited(_backfillMetadataIfMissing(
           hash: hash,
-          pipeline: effectivePipeline,
+          pipeline: cachePipeline,
           imageBytes: imageBytes,
           title: title,
           chapter: chapter,
@@ -93,7 +99,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       // Also check by metadata (title/chapter/page)
       if (title != null && chapter != null && pageNumber != null) {
         final metaCached = await _cache.lookupByMetadata(
-          effectivePipeline,
+          cachePipeline,
           title,
           chapter,
           pageNumber,
@@ -116,7 +122,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           // Backfill metadata for pages cached before metadata storage existed.
           unawaited(_backfillMetadataIfMissing(
             hash: hash,
-            pipeline: effectivePipeline,
+            pipeline: cachePipeline,
             imageBytes: imageBytes,
             title: title,
             chapter: chapter,
@@ -154,6 +160,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         sourceUrl: sourceUrl,
         priority: priority,
         force: force,
+        targetLanguage: targetLanguage,
       );
 
       final jobId = response['job_id'] as String;
@@ -185,13 +192,13 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           // Save to local cache
           await _cache.store(
             hash: hash,
-            pipeline: effectivePipeline,
+            pipeline: cachePipeline,
             imageBytes: img,
             title: title,
             chapter: chapter,
             pageNumber: pageNumber,
           );
-          unawaited(_fetchAndCacheMetadata(hash, effectivePipeline));
+          unawaited(_fetchAndCacheMetadata(hash, cachePipeline));
         }
       } else {
         // Subscribe for updates
@@ -272,15 +279,17 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       if (job.originalImage != null) {
         final hash = await _cache.hashImage(job.originalImage!);
         final effectivePipeline = job.pipeline ?? _settings.pipeline;
+        final lang = _settings.targetLanguage;
+        final cp = lang == 'en' ? effectivePipeline : '${effectivePipeline}_$lang';
         await _cache.store(
           hash: hash,
-          pipeline: effectivePipeline,
+          pipeline: cp,
           imageBytes: img,
           title: job.title,
           chapter: job.chapter,
           pageNumber: job.pageNumber,
         );
-        unawaited(_fetchAndCacheMetadata(hash, effectivePipeline));
+        unawaited(_fetchAndCacheMetadata(hash, cp));
       }
     } catch (e) {
       job.status = PageJobStatus.failed;

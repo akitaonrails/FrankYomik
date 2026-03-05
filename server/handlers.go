@@ -16,7 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-var cachedV2JobIDRe = regexp.MustCompile(`^cached-v2-([a-z_]+)-([a-f0-9]{64})$`)
+var cachedV2JobIDRe = regexp.MustCompile(`^cached-v2-([a-z_-]+)-([a-f0-9]{64})$`)
 
 type metadataPatchRequest struct {
 	BaseContentHash string          `json:"base_content_hash"`
@@ -96,6 +96,17 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse target language
+	targetLang := r.FormValue("target_lang")
+	if targetLang == "" {
+		targetLang = "en"
+	}
+	if !validTargetLangs[targetLang] {
+		jsonError(w, fmt.Sprintf("invalid target_lang: %s (valid: en, pt-br)", targetLang),
+			http.StatusBadRequest)
+		return
+	}
+
 	// Parse optional metadata
 	forceReprocess := r.FormValue("force") == "true"
 	meta := &JobMetadata{
@@ -104,6 +115,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		PageNumber:     r.FormValue("page_number"),
 		SourceURL:      r.FormValue("source_url"),
 		ForceReprocess: forceReprocess,
+		TargetLang:     targetLang,
 	}
 
 	file, _, err := r.FormFile("image")
@@ -132,21 +144,26 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	// Hash-first filesystem cache check (works for Kindle where page number is unstable).
 	// Skip when force=true so the image is fully reprocessed.
+	// Use composite cachePipeline for non-"en" target languages.
+	cachePipeline := pipeline
+	if targetLang != "en" {
+		cachePipeline = pipeline + "_" + targetLang
+	}
 	if !forceReprocess {
-		if _, m, ok := s.cache.LookupBySourceHash(pipeline, sourceHash); ok {
+		if _, m, ok := s.cache.LookupBySourceHash(cachePipeline, sourceHash); ok {
 			// Keep by-ref link warm when metadata is provided.
 			if meta.Title != "" && meta.Chapter != "" && meta.PageNumber != "" {
-				_ = s.cache.LinkRef(pipeline, meta.Title, meta.Chapter, meta.PageNumber, sourceHash)
+				_ = s.cache.LinkRef(cachePipeline, meta.Title, meta.Chapter, meta.PageNumber, sourceHash)
 			}
-			cacheJobID := fmt.Sprintf("cached-v2-%s-%s", pipeline, sourceHash)
+			cacheJobID := fmt.Sprintf("cached-v2-%s-%s", cachePipeline, sourceHash)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			if err := json.NewEncoder(w).Encode(JobResponse{
 				JobID:       cacheJobID,
 				Status:      "completed",
 				Cached:      true,
-				ImageURL:    fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", pipeline, sourceHash),
-				MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, sourceHash),
+				ImageURL:    fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", cachePipeline, sourceHash),
+				MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", cachePipeline, sourceHash),
 				SourceHash:  sourceHash,
 				ContentHash: m.ContentHash,
 				RenderHash:  m.RenderHash,
@@ -696,8 +713,24 @@ func parseCachedV2JobID(jobID string) (pipeline string, sourceHash string, ok bo
 	}
 	pipeline = m[1]
 	sourceHash = m[2]
+	// Accept base pipelines and composite pipeline_targetlang (e.g. manga_translate_pt-br)
 	if !validPipelines[pipeline] {
-		return "", "", false
+		// Check if it's a composite: base pipeline + "_" + target lang
+		valid := false
+		for p := range validPipelines {
+			for lang := range validTargetLangs {
+				if lang != "en" && pipeline == p+"_"+lang {
+					valid = true
+					break
+				}
+			}
+			if valid {
+				break
+			}
+		}
+		if !valid {
+			return "", "", false
+		}
 	}
 	return pipeline, sourceHash, true
 }

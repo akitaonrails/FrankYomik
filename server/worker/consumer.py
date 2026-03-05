@@ -199,6 +199,7 @@ class Consumer:
         chapter = self._decode_field(fields, b"chapter")
         page_number = self._decode_field(fields, b"page_number")
         source_url = self._decode_field(fields, b"source_url")
+        target_lang = self._decode_field(fields, b"target_lang") or "en"
         rerender_flag = self._decode_field(fields, b"rerender_from_metadata")
         rerender_from_metadata = rerender_flag in {"1", "true", "True"}
 
@@ -233,10 +234,11 @@ class Consumer:
             self._publish_progress(job_id, stage, detail, percent)
 
         # Resolve metadata payload for rerender jobs.
+        cache_pipeline_for_lookup = pipeline if target_lang == "en" else f"{pipeline}_{target_lang}"
         metadata_payload = None
         if rerender_from_metadata and source_hash:
             metadata_payload = self._page_cache.load_metadata_by_hash(
-                pipeline, source_hash)
+                cache_pipeline_for_lookup, source_hash)
             if metadata_payload is None:
                 log.error(
                     "Metadata not found for rerender job %s (%s/%s) — "
@@ -266,12 +268,14 @@ class Consumer:
             source_hash=source_hash,
             rerender_from_metadata=rerender_from_metadata,
             metadata_payload=metadata_payload,
+            target_lang=target_lang,
         )
         result = process_job(job, progress_cb=progress_cb)
         if not result.source_hash and source_hash:
             result.source_hash = source_hash
 
         # Save to robust filesystem cache v2 when image + metadata are available.
+        cache_pipeline = pipeline if target_lang == "en" else f"{pipeline}_{target_lang}"
         has_image = bool(result.image_bytes)
         has_metadata = bool(result.metadata_payload)
         log.info(
@@ -281,7 +285,7 @@ class Consumer:
         )
         if has_image and has_metadata:
             self._cache_to_v2(
-                pipeline=pipeline,
+                pipeline=cache_pipeline,
                 source_hash=result.source_hash or source_hash,
                 source_image_bytes=image_bytes,
                 rendered_image_bytes=result.image_bytes,

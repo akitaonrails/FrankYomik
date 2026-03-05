@@ -22,6 +22,7 @@ class ApiService {
     String? sourceUrl,
     String priority = 'high',
     bool force = false,
+    String? targetLanguage,
   }) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/jobs');
     final request = http.MultipartRequest('POST', uri)
@@ -32,6 +33,7 @@ class ApiService {
         http.MultipartFile.fromBytes('image', imageBytes, filename: 'page.png'),
       );
 
+    request.fields['target_lang'] = targetLanguage ?? settings.targetLanguage;
     if (title != null) request.fields['title'] = title;
     if (chapter != null) request.fields['chapter'] = chapter;
     if (pageNumber != null) request.fields['page_number'] = pageNumber;

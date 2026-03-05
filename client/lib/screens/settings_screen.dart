@@ -17,6 +17,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late String _pipeline;
   late int _prefetchPages;
   late bool _autoTranslate;
+  late String _targetLanguage;
 
   @override
   void initState() {
@@ -27,6 +28,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _pipeline = s.pipeline;
     _prefetchPages = s.prefetchPages;
     _autoTranslate = s.autoTranslate;
+    _targetLanguage = s.targetLanguage;
   }
 
   @override
@@ -43,6 +45,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       pipeline: _pipeline,
       prefetchPages: _prefetchPages,
       autoTranslate: _autoTranslate,
+      targetLanguage: _targetLanguage,
     );
     await ref.read(settingsProvider.notifier).update(settings);
 
@@ -99,7 +102,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             initialValue: _pipeline,
             decoration: const InputDecoration(
               labelText: 'Kindle Pipeline (Japanese)',
-              helperText: 'Webtoon always uses Korean→English pipeline',
+              helperText: 'Webtoon always uses Korean pipeline',
               border: OutlineInputBorder(),
             ),
             items: const [
@@ -108,9 +111,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   child: Text('Furigana (add reading aids)')),
               DropdownMenuItem(
                   value: 'manga_translate',
-                  child: Text('Translate (Japanese→English)')),
+                  child: Text('Translate')),
             ],
             onChanged: (v) => setState(() => _pipeline = v ?? _pipeline),
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+            initialValue: _targetLanguage,
+            decoration: const InputDecoration(
+              labelText: 'Target Language',
+              helperText: 'Language for translation output',
+              border: OutlineInputBorder(),
+            ),
+            items: ServerSettings.targetLanguages.entries
+                .map((e) => DropdownMenuItem(
+                      value: e.key,
+                      child: Text(e.value),
+                    ))
+                .toList(),
+            onChanged: (v) =>
+                setState(() => _targetLanguage = v ?? _targetLanguage),
           ),
           const SizedBox(height: 16),
           Row(

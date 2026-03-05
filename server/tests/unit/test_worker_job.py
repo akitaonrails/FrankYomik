@@ -45,6 +45,7 @@ class TestProcessingJobDataclass:
         assert job.chapter == ""
         assert job.page_number == ""
         assert job.source_url == ""
+        assert job.target_lang == "en"
 
     def test_metadata_fields(self):
         job = ProcessingJob(
@@ -199,7 +200,7 @@ class TestProcessJobManga:
         )
         process_job(job)
 
-        mock_translate.assert_called_once_with("テスト")
+        mock_translate.assert_called_once_with("テスト", "en")
 
     @patch("worker.job.transform_furigana")
     @patch("worker.job.ocr_bubble")
@@ -249,7 +250,7 @@ class TestProcessJobManga:
 
         # Return English for first 2, empty for third
         translate_calls = [0]
-        def mock_translate_fn(text):
+        def mock_translate_fn(text, target_lang="en"):
             translate_calls[0] += 1
             if translate_calls[0] <= 2:
                 return "English text"
@@ -263,6 +264,31 @@ class TestProcessJobManga:
         result = process_job(job)
 
         assert result.bubble_count == 2
+
+    @patch("worker.job.translate")
+    @patch("worker.job.ocr_bubble")
+    @patch("worker.job.detect_page_bubbles")
+    def test_translate_passes_target_lang(
+        self, mock_detect, mock_ocr, mock_translate
+    ):
+        """manga_translate with pt-br should pass target_lang to translate()."""
+        mock_translate.return_value = "Teste"
+        mock_ocr.return_value = BubbleResult(
+            bbox=(0, 0, 10, 10), is_valid=True, ocr_text="テスト",
+        )
+        def add_bubble(page):
+            page.bubbles_raw = [{"bbox": (0, 0, 10, 10)}]
+        mock_detect.side_effect = add_bubble
+
+        img_bytes = _make_test_image_bytes()
+        job = ProcessingJob(
+            job_id="tl-1", pipeline="manga_translate", image_bytes=img_bytes,
+            target_lang="pt-br",
+        )
+        result = process_job(job)
+
+        assert result.status == "completed"
+        mock_translate.assert_called_once_with("テスト", "pt-br")
 
     @patch("worker.job.translate")
     @patch("worker.job.ocr_bubble")
@@ -606,7 +632,7 @@ class TestParallelTranslation:
             )
         mock_ocr.side_effect = mock_ocr_fn
 
-        def slow_translate(text):
+        def slow_translate(text, target_lang="en"):
             time.sleep(SLEEP_PER_CALL)
             return "English"
         mock_translate.side_effect = slow_translate

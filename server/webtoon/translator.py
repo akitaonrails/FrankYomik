@@ -6,17 +6,18 @@ import re
 import requests
 
 from .config import OLLAMA_BASE_URL, TRANSLATE_MODEL, TRANSLATE_OPTIONS, TRANSLATE_THINK
-from kindle.translator import _clean_response
+from kindle.translator import LANG_MAP, _clean_response
 
 log = logging.getLogger(__name__)
 
 
-def translate(korean_text: str) -> str:
-    """Translate Korean text to English using Ollama."""
+def translate(korean_text: str, target_lang: str = "en") -> str:
+    """Translate Korean text to the target language using Ollama."""
+    _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
     prompt = (
-        "Translate this Korean manhwa/webtoon dialogue to natural English.\n"
+        f"Translate this Korean manhwa/webtoon dialogue to natural {lang_name}.\n"
         "Keep it concise and suitable for a speech bubble.\n"
-        "Output ONLY the English translation, nothing else.\n"
+        f"Output ONLY the {lang_name} translation, nothing else.\n"
         f"\nKorean: {korean_text}"
     )
 
@@ -43,20 +44,21 @@ def translate(korean_text: str) -> str:
     except Exception as e:
         log.warning("Ollama translation failed: %s, trying fallback", e)
 
-    return _fallback_translate(korean_text)
+    return _fallback_translate(korean_text, target_lang)
 
 
-def translate_sfx(korean_text: str) -> str:
-    """Translate a Korean sound effect to an English SFX word.
+def translate_sfx(korean_text: str, target_lang: str = "en") -> str:
+    """Translate a Korean sound effect to an SFX word in the target language.
 
     Uses a specialized prompt that produces short uppercase onomatopoeia.
     Falls back to uppercased Google Translate result.
     """
+    _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
     prompt = (
         "This is a Korean sound effect (SFX/onomatopoeia) from a webtoon comic.\n"
-        "Translate it to a short English sound effect word.\n"
+        f"Translate it to a short {lang_name} sound effect word.\n"
         "Examples: 꽈양→CRASH, 쾅→BOOM, 슈우→WHOOSH, 두근→THUMP, 콰광→KABOOM\n"
-        "Output ONLY the English SFX word in uppercase, nothing else.\n"
+        f"Output ONLY the {lang_name} SFX word in uppercase, nothing else.\n"
         f"\nKorean SFX: {korean_text}"
     )
 
@@ -85,25 +87,27 @@ def translate_sfx(korean_text: str) -> str:
     except Exception as e:
         log.warning("Ollama SFX translation failed: %s, trying fallback", e)
 
-    return _fallback_translate_sfx(korean_text)
+    return _fallback_translate_sfx(korean_text, target_lang)
 
 
-def _fallback_translate_sfx(korean_text: str) -> str:
+def _fallback_translate_sfx(korean_text: str, target_lang: str = "en") -> str:
     """Fallback SFX translation using Google Translate, uppercased."""
     try:
         from deep_translator import GoogleTranslator
-        result = GoogleTranslator(source="ko", target="en").translate(korean_text)
+        gt_code, _ = LANG_MAP.get(target_lang, ("en", "English"))
+        result = GoogleTranslator(source="ko", target=gt_code).translate(korean_text)
         return (result or korean_text).strip().upper()
     except Exception as e:
         log.error("Fallback SFX translation also failed: %s", e)
         return korean_text.upper()
 
 
-def _fallback_translate(korean_text: str) -> str:
+def _fallback_translate(korean_text: str, target_lang: str = "en") -> str:
     """Fallback using deep-translator (Google Translate) for Korean."""
     try:
         from deep_translator import GoogleTranslator
-        result = GoogleTranslator(source="ko", target="en").translate(korean_text)
+        gt_code, _ = LANG_MAP.get(target_lang, ("en", "English"))
+        result = GoogleTranslator(source="ko", target=gt_code).translate(korean_text)
         return result or korean_text
     except Exception as e:
         log.error("Fallback translation also failed: %s", e)

@@ -257,8 +257,9 @@ def _detect_subgroups(detections: list[TextDetection],
 
 
 def validate_and_translate(page: WebtoonPageResult,
-                           parallel: bool = False) -> None:
-    """Stage 4: Validate Korean text and translate to English.
+                           parallel: bool = False,
+                           target_lang: str = "en") -> None:
+    """Stage 4: Validate Korean text and translate.
 
     When a bubble contains multiple distinct text groups (separated by a
     significant vertical gap), each group is translated independently and
@@ -287,12 +288,12 @@ def validate_and_translate(page: WebtoonPageResult,
 
         if len(groups) == 1:
             _validate_group(page, bubble, bubble.text_regions, None, pending,
-                            defer=parallel)
+                            defer=parallel, target_lang=target_lang)
         else:
             log.info("  Split bubble into %d sub-groups", len(groups))
             for group_dets in groups:
                 _validate_group(page, bubble, group_dets, group_dets, pending,
-                                defer=parallel)
+                                defer=parallel, target_lang=target_lang)
 
     # Phase 2: translate (parallel or already done inline)
     if parallel and pending:
@@ -300,16 +301,16 @@ def validate_and_translate(page: WebtoonPageResult,
             max_workers=min(8, len(pending))
         ) as pool:
             futures = {
-                pool.submit(translate, text): (region, text)
+                pool.submit(translate, text, target_lang): (region, text)
                 for region, text in pending
             }
             for future in as_completed(futures):
                 region, text = futures[future]
                 try:
-                    english = future.result()
-                    if english.strip():
-                        region.english = english
-                        log.info("  EN: %s", english)
+                    translated = future.result()
+                    if translated.strip():
+                        region.english = translated
+                        log.info("  Translated: %s", translated)
                     else:
                         log.info("  Translation empty for '%s'", text)
                 except Exception:
@@ -324,6 +325,7 @@ def _validate_group(
     group_dets: list[TextDetection] | None,
     pending: list[tuple[WebtoonTextRegion, str]],
     defer: bool = False,
+    target_lang: str = "en",
 ) -> None:
     """Validate a group of detections and translate or defer translation.
 
@@ -347,7 +349,7 @@ def _validate_group(
     if defer:
         pending.append((region, group_text))
     else:
-        english = translate(group_text)
+        english = translate(group_text, target_lang)
         if english.strip():
             region.english = english
             log.info("  EN: %s", english)
@@ -356,8 +358,8 @@ def _validate_group(
 
 
 def render_page(page: WebtoonPageResult, out_dir: str,
-                debug: bool = False) -> None:
-    """Stage 5: Clear text regions, render color-aware English, save output."""
+                debug: bool = False, target_lang: str = "en") -> None:
+    """Stage 5: Clear text regions, render translated text, save output."""
     if debug:
         debug_img = _draw_webtoon_debug(page)
         debug_img.save(os.path.join(out_dir, f"{page.name}-debug.png"))
@@ -412,10 +414,10 @@ def render_page(page: WebtoonPageResult, out_dir: str,
         if not _is_hangul_text(det.text):
             log.info("  Skipping non-Korean SFX: '%s'", det.text)
             continue
-        sfx_english = translate_sfx(det.text)
-        if sfx_english.strip():
-            log.info("  SFX: '%s' → '%s'", det.text, sfx_english)
-            _render_sfx(page.output_img, det, sfx_english, page.img_pil)
+        sfx_translated = translate_sfx(det.text, target_lang)
+        if sfx_translated.strip():
+            log.info("  SFX: '%s' → '%s'", det.text, sfx_translated)
+            _render_sfx(page.output_img, det, sfx_translated, page.img_pil)
 
     output_path = os.path.join(out_dir, f"{page.name}-en.png")
     page.output_img.save(output_path)
@@ -1079,7 +1081,8 @@ def _draw_webtoon_debug(page: WebtoonPageResult) -> Image.Image:
     return debug_img
 
 
-def render_page_to_bytes(page: WebtoonPageResult, debug: bool = False) -> bytes:
+def render_page_to_bytes(page: WebtoonPageResult, debug: bool = False,
+                         target_lang: str = "en") -> bytes:
     """Run the full render stage and return PNG bytes instead of saving to disk.
 
     Delegates to render_page() logic but captures the output image as bytes.
@@ -1123,8 +1126,8 @@ def render_page_to_bytes(page: WebtoonPageResult, debug: bool = False) -> bytes:
     for det in page.sfx_detections:
         if not _is_hangul_text(det.text):
             continue
-        sfx_english = translate_sfx(det.text)
-        if sfx_english.strip():
-            _render_sfx(page.output_img, det, sfx_english, page.img_pil)
+        sfx_translated = translate_sfx(det.text, target_lang)
+        if sfx_translated.strip():
+            _render_sfx(page.output_img, det, sfx_translated, page.img_pil)
 
     return encode_image_pil(page.output_img)

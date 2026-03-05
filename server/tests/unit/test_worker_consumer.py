@@ -581,6 +581,43 @@ class TestProcessMessageMetadata:
         assert job.source_url == "https://example.com"
 
     @patch("worker.consumer.process_job")
+    def test_decodes_target_lang_field(self, mock_process):
+        c = _make_consumer(cache_dir="/tmp/test_cache")
+        c._rdb.get.return_value = b"fake-png-bytes"
+        mock_process.return_value = ProcessingResult(
+            job_id="j-lang", status="completed", image_bytes=b"result",
+        )
+
+        fields = {
+            b"job_id": b"j-lang",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:abc",
+            b"target_lang": b"pt-br",
+        }
+        c._process_message(STREAM_HIGH, b"1-0", fields)
+
+        job = mock_process.call_args[0][0]
+        assert job.target_lang == "pt-br"
+
+    @patch("worker.consumer.process_job")
+    def test_target_lang_defaults_to_en(self, mock_process):
+        c = _make_consumer(cache_dir="/tmp/test_cache")
+        c._rdb.get.return_value = b"fake-png-bytes"
+        mock_process.return_value = ProcessingResult(
+            job_id="j-lang-def", status="completed", image_bytes=b"result",
+        )
+
+        fields = {
+            b"job_id": b"j-lang-def",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:abc",
+        }
+        c._process_message(STREAM_HIGH, b"2-0", fields)
+
+        job = mock_process.call_args[0][0]
+        assert job.target_lang == "en"
+
+    @patch("worker.consumer.process_job")
     def test_passes_progress_callback(self, mock_process):
         c = _make_consumer()
         c._rdb.get.return_value = b"fake-png"
