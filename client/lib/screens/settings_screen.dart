@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/server_settings.dart';
 import '../providers/connection_provider.dart';
 import '../providers/jobs_provider.dart';
@@ -221,6 +222,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             style: OutlinedButton.styleFrom(
               foregroundColor: Colors.red,
             ),
+          ),
+          const Divider(height: 32),
+          Column(
+            children: [
+              const Text(
+                '\u00a9 2026 Fabio Akita',
+                style: TextStyle(color: Colors.grey),
+              ),
+              const SizedBox(height: 4),
+              GestureDetector(
+                onTap: () => launchUrl(
+                  Uri.parse('https://github.com/akitaonrails/FrankYomik'),
+                  mode: LaunchMode.externalApplication,
+                ),
+                child: const Text(
+                  'github.com/akitaonrails/FrankYomik',
+                  style: TextStyle(
+                    color: Colors.blue,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
