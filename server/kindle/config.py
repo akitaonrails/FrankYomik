@@ -64,13 +64,13 @@ MANGA_OCR_DEVICE = _ocr.get("device", "cpu")  # Force CPU to avoid VRAM conflict
 # --- Text rendering ---
 FURIGANA_SIZE_RATIO = 0.45   # Furigana font size relative to main text
 MIN_FONT_SIZE = 10
-MAX_FONT_SIZE = 60
+MAX_FONT_SIZE = 120
 TEXT_MARGIN = 8               # Margin inside bubble for text placement
 
 # English font normalization (base_size = page_height / divisor, clamped)
-EN_BASE_FONT_DIVISOR = 55
-EN_BASE_FONT_MIN = 14
-EN_BASE_FONT_MAX = 24
+EN_BASE_FONT_DIVISOR = 28
+EN_BASE_FONT_MIN = 28
+EN_BASE_FONT_MAX = 48
 
 # --- Text detection (EasyOCR for artwork text outside bubbles) ---
 TEXT_DETECTION_CONFIDENCE = _text_det.get("confidence", 0.3)

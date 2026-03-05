@@ -359,8 +359,7 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
 def _fit_horizontal_english_size(text: str, bw: int, bh: int,
                                  base_font_size: int | None = None) -> int:
     """Binary search for the largest horizontal English font size."""
-    upper = base_font_size if base_font_size is not None else MAX_FONT_SIZE
-    lo, hi = MIN_FONT_SIZE, min(upper, bh)
+    lo, hi = MIN_FONT_SIZE, min(MAX_FONT_SIZE, bh)
     best = lo
 
     for _ in range(15):
