@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .config import (
     FONT_JP,
-    FONT_EN,
+    FONT_EN_BOLD,
     FURIGANA_SIZE_RATIO,
     MIN_FONT_SIZE,
     MAX_FONT_SIZE,
@@ -205,10 +205,11 @@ def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
     All bubbles try to use this size for consistency; smaller bubbles shrink
     as needed.  When `mask` is provided, the rendered text is clipped to the
     bubble shape using an RGBA overlay + mask-clip pattern.
-    """
-    if mask is not None:
-        bbox = _mask_safe_bbox(bbox, mask)
 
+    Unlike furigana, English text uses the raw detection bbox for font sizing
+    (not the conservative mask-safe bbox).  The mask clip at render handles
+    overflow — this produces ~20% larger fonts that fill bubbles better.
+    """
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
@@ -244,7 +245,7 @@ def _render_vertical_sfx(img: Image.Image, bbox: tuple[int, int, int, int],
 
     # Find largest font size where all chars fit stacked vertically
     font_size = _fit_vertical_chars(chars, bw, bh)
-    font = _load_font(FONT_EN, font_size)
+    font = _load_font(FONT_EN_BOLD, font_size)
 
     char_h = int(font_size * 1.1)
     total_h = len(chars) * char_h
@@ -324,7 +325,7 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
     bh = y2 - y1 - 2 * TEXT_MARGIN
 
     font_size = _fit_horizontal_english_size(text, bw, bh, target_size)
-    font = _load_font(FONT_EN, font_size)
+    font = _load_font(FONT_EN_BOLD, font_size)
 
     if mask is not None:
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
@@ -382,7 +383,7 @@ def _fit_horizontal_english_size(text: str, bw: int, bh: int,
 
     for _ in range(15):
         mid = (lo + hi) // 2
-        font = _load_font(FONT_EN, mid)
+        font = _load_font(FONT_EN_BOLD, mid)
         draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
 
         lines = _word_wrap(text, font, bw, draw)
@@ -658,7 +659,7 @@ def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
         return
 
     font_size = _fit_horizontal_english_size(text, bw, bh, base_font_size)
-    font = _load_font(FONT_EN, font_size)
+    font = _load_font(FONT_EN_BOLD, font_size)
     draw = ImageDraw.Draw(img)
 
     lines = _word_wrap(text, font, bw, draw)
