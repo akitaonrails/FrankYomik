@@ -44,6 +44,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       pipeline: _pipeline,
       autoTranslate: _autoTranslate,
       targetLanguage: _targetLanguage,
+      isLoaded: true,
     );
     await ref.read(settingsProvider.notifier).update(settings);
 
