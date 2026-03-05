@@ -2,7 +2,7 @@
 Type=Application
 Name=Frank Yomik
 Comment=Manga and webtoon translation reader
-Exec=frank_client
+Exec=FrankYomik
 Icon=frank-yomik
 Categories=Graphics;Viewer;
-StartupWMClass=frank_client
+StartupWMClass=FrankYomik

@@ -59,7 +59,7 @@ jobs:
           cat > AppDir/AppRun << 'EOF'
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "$0")")"
-          exec "$HERE/frank_client" "$@"
+          exec "$HERE/FrankYomik" "$@"
           EOF
           chmod +x AppDir/AppRun
 
