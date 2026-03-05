@@ -7,7 +7,7 @@
 docs/
 
 # Flutter client (separate build)
-frank_client/
+client/
 
 # Tests and test data
 tests/
@@ -29,16 +29,16 @@ __pycache__/
 *.swo
 
 # Font sources (only need .ttf/.otf for runtime)
-fonts/comic-neue.zip
-fonts/komika.zip
-fonts/badaboom.zip
-fonts/comicneue-master/
-fonts/komika_text/
-fonts/badaboom/
-fonts/genei-mirror/
+server/fonts/comic-neue.zip
+server/fonts/komika.zip
+server/fonts/badaboom.zip
+server/fonts/comicneue-master/
+server/fonts/komika_text/
+server/fonts/badaboom/
+server/fonts/genei-mirror/
 
 # Compiled Go binaries
-cmd/server/server
+server/server
 
 # Webtoon data / scratch
 webtoon_data/

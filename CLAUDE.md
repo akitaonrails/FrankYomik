@@ -2,11 +2,9 @@
 
 ## What This Is
 
-Manga and webtoon translation system with four components:
-1. **Manga pipeline** (`pipeline/`): Detect speech bubbles, OCR Japanese text, add furigana or translate to English
-2. **Webtoon pipeline** (`webtoon/`): Detect Korean text, translate to English, render with color-aware typography
-3. **Web service** (`cmd/server/` + `worker/`): Go API server + Python workers connected via Redis streams for async processing
-4. **Flutter client** (`frank_client/`): Cross-platform app (Android + Linux) — WebView-based reader for Kindle/Webtoon with inline translation overlay
+Manga and webtoon translation system with two main components:
+1. **Server** (`server/`): Go API, Python workers, manga pipeline (`kindle/`), webtoon pipeline (`webtoon/`), CLI tools, tests, fonts, config
+2. **Flutter client** (`client/`): Cross-platform app (Android + Linux) — WebView-based reader for Kindle/Webtoon with inline translation overlay
 
 The CLI tools (`process_manga.py`, `process_webtoon.py`) process local files. The web service accepts images via HTTP, queues them through Redis, and returns translated pages. The Flutter client wraps Kindle (read.amazon.co.jp) and Webtoon (webtoons.com) in a WebView, captures pages, submits them to the API, and overlays translated images.
 
@@ -15,6 +13,7 @@ The CLI tools (`process_manga.py`, `process_webtoon.py`) process local files. Th
 ### CLI (local processing)
 
 ```bash
+cd server
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -34,10 +33,10 @@ python process_webtoon.py pipeline URL    # download + translate webtoon
 redis-server
 
 # Terminal 2: Go API
-cd cmd/server && AUTH_TOKEN=secret go run .
+cd server && AUTH_TOKEN=secret go run .
 
-# Terminal 3: Python worker
-python -m worker --pipeline both
+# Terminal 3: Python worker (from server/)
+cd server && python -m worker --pipeline both
 
 # Submit a job
 curl -X POST -H "Authorization: Bearer secret" \
@@ -48,7 +47,7 @@ curl -X POST -H "Authorization: Bearer secret" \
 ### Flutter Client
 
 ```bash
-cd frank_client
+cd client
 flutter pub get
 flutter run -d linux       # Desktop
 flutter run -d <device>    # Android (connected device or emulator)
@@ -68,16 +67,16 @@ Image → [Bubble Detection] → [OCR] → [Validation] → ┬→ [Furigana] �
 ### Web Service + Flutter Client
 
 ```
-Flutter Client (frank_client/)
+Flutter Client (client/)
     ├── WebView: read.amazon.co.jp / webtoons.com
     ├── JS Bridge: page detection + image capture
     ├── Local SQLite cache (SHA256-keyed)
     ↕ HTTPS + WebSocket (Bearer token)
-Go API Server (cmd/server/)
+Go API Server (server/)
     ↕ Redis Streams (priority queues) + Pub/Sub (notifications)
-Python Workers (worker/)
-    ├── manga pipeline (pipeline/)
-    └── webtoon pipeline (webtoon/)
+Python Workers (server/worker/)
+    ├── manga pipeline (server/kindle/)
+    └── webtoon pipeline (server/webtoon/)
     ↕ HTTP
 Ollama (qwen3:14b)
 ```
@@ -86,39 +85,13 @@ Ollama (qwen3:14b)
 
 ```
 frank_manga/
-  process_manga.py              # CLI — manga furigana/translation
-  process_webtoon.py            # CLI — webtoon translation
-  config.yaml                   # All configuration (Ollama, fonts, OCR, worker)
-
-  pipeline/                     # Manga processing modules
-    config.py                   # Constants loaded from config.yaml
-    bubble_detector.py          # RT-DETR-v2 object detection + bubble mask extraction
-    ocr.py                      # manga-ocr + Japanese validation
-    furigana.py                 # pykakasi kanji → hiragana
-    translator.py               # Ollama qwen3:14b, Google Translate fallback
-    text_renderer.py            # Vertical JP, horizontal EN, SFX rendering
-    text_detector.py            # EasyOCR + stroke clustering + small bubble recovery
-    image_utils.py              # OpenCV/Pillow I/O, bytes encode/decode
-    processor.py                # Pipeline stages, PageResult dataclass
-    inpainter.py                # LaMa/diffusion-based text removal
-
-  webtoon/                      # Korean webtoon modules
-    processor.py                # Pipeline stages, WebtoonPageResult dataclass
-    ocr.py                      # EasyOCR Korean, CLAHE enhancement
-    bubble_detector.py          # Text-first clustering, boundary detection
-    translator.py               # Korean-specific Ollama prompts
-    image_utils.py              # Tall image splitting, detection stitching
-    inpainter.py                # LaMa inpainting for webtoon panels
-    scraper.py                  # Naver Webtoon downloader (nodriver)
-    config.py                   # Webtoon-specific font/path config
-
-  worker/                       # Python Redis stream consumer
-    main.py                     # Entry: python -m worker [--pipeline manga|webtoon|both]
-    consumer.py                 # Two-stream priority consumer (high 100ms / low 1s)
-    job.py                      # ProcessingJob/ProcessingResult, pipeline routing, shared metadata builders
-    health.py                   # Worker health check (queue lengths, heartbeats)
-
-  cmd/server/                   # Go API server
+  server/                       # All backend code (Python root)
+    config.yaml                 # All configuration (Ollama, fonts, OCR, worker)
+    requirements.txt            # Python dependencies
+    pyproject.toml              # Pytest config
+    process_manga.py            # CLI — manga furigana/translation
+    process_webtoon.py          # CLI — webtoon translation
+    go.mod, go.sum              # Go module
     main.go                     # Entry point, env config, graceful shutdown
     handlers.go                 # REST + WebSocket handlers
     middleware.go               # Bearer token auth (header + query param)
@@ -126,48 +99,55 @@ frank_manga/
     results.go                  # Result storage/retrieval
     websocket.go                # WebSocket upgrade, subscribe/notify
     types.go                    # Job, Result, Health types
+    cache.go                    # Disk cache layer
+    fonts/                      # Font files (.ttf/.otf)
+    kindle/                     # Manga processing modules
+      config.py                 # Constants loaded from config.yaml
+      bubble_detector.py        # RT-DETR-v2 object detection + bubble mask extraction
+      ocr.py                    # manga-ocr + Japanese validation
+      furigana.py               # pykakasi kanji → hiragana
+      translator.py             # Ollama qwen3:14b, Google Translate fallback
+      text_renderer.py          # Vertical JP, horizontal EN, SFX rendering
+      text_detector.py          # EasyOCR + stroke clustering + small bubble recovery
+      image_utils.py            # OpenCV/Pillow I/O, bytes encode/decode
+      processor.py              # Pipeline stages, PageResult dataclass
+      inpainter.py              # LaMa/diffusion-based text removal
+    webtoon/                    # Korean webtoon modules
+      processor.py              # Pipeline stages, WebtoonPageResult dataclass
+      ocr.py                    # EasyOCR Korean, CLAHE enhancement
+      bubble_detector.py        # Text-first clustering, boundary detection
+      translator.py             # Korean-specific Ollama prompts
+      image_utils.py            # Tall image splitting, detection stitching
+      inpainter.py              # LaMa inpainting for webtoon panels
+      scraper.py                # Naver Webtoon downloader (nodriver)
+      config.py                 # Webtoon-specific font/path config
+    worker/                     # Python Redis stream consumer
+      main.py                   # Entry: python -m worker [--pipeline manga|webtoon|both]
+      consumer.py               # Two-stream priority consumer (high 100ms / low 1s)
+      job.py                    # ProcessingJob/ProcessingResult, pipeline routing, shared metadata builders
+      health.py                 # Worker health check (queue lengths, heartbeats)
+      page_cache.py             # Disk page cache
+    tests/
+      unit/                     # Pure logic tests (no external deps)
+      integration/              # Tests using real images
+      conftest.py               # Shared fixtures
 
-  frank_client/                 # Flutter client app (Android + Linux)
+  client/                       # Flutter client app (Android + Linux)
     lib/
       main.dart                 # Entry point, ProviderScope
       app.dart                  # MaterialApp, dark Material 3 theme
-      models/
-        server_settings.dart    # Server URL, auth token, pipeline selection
-        page_job.dart           # Job lifecycle tracking (pending→completed)
-        site_config.dart        # Kindle + Webtoon site definitions
-      services/
-        api_service.dart        # REST client (all /api/v1/* endpoints)
-        websocket_service.dart  # WS client, auto-reconnect, subscribe/unsubscribe
-        cache_service.dart      # SQLite FFI cache (hash + metadata lookup)
-        image_capture_service.dart  # WebView screenshot + JS image extraction
-      providers/
-        settings_provider.dart  # SharedPreferences persistence
-        connection_provider.dart # Health check + WS handshake state
-        jobs_provider.dart      # Job submission, polling fallback, cache
-      screens/
-        home_screen.dart        # URL bar + quick-launch cards
-        reader_screen.dart      # WebView + JS bridge + overlay
-        settings_screen.dart    # Server config + pipeline selection
-        jobs_screen.dart        # Job history + status badges
-        inspector_screen.dart   # DOM debug view
-      webview/
-        js_bridge.dart          # Strategy manager, URL detection
-        overlay_controller.dart # Image src swap (original ↔ translated)
-        dom_inspector.dart      # JS element logger
-        strategies/
-          base_strategy.dart    # Abstract SiteStrategy interface
-          kindle_strategy.dart  # Screenshot capture, ASIN extraction
-          webtoon_strategy.dart # IntersectionObserver, JS fetch to base64
+      models/                   # server_settings, page_job, site_config
+      services/                 # api_service, websocket_service, cache_service, image_capture_service
+      providers/                # settings, connection, jobs providers
+      screens/                  # home, reader, settings, jobs, inspector screens
+      webview/                  # js_bridge, overlay_controller, dom_inspector, strategies/
       widgets/                  # connection_banner, progress_indicator, page_status_badge
     test/
       widget_test.dart          # Model + strategy unit tests
     android/                    # Android platform (com.frankmanga.frank_client)
     linux/                      # Linux platform (GTK, Wayland/X11 aware)
 
-  tests/
-    unit/                       # Pure logic tests (no external deps)
-    integration/                # Tests using real images
-    conftest.py                 # Shared fixtures
+  docs/                         # Documentation + test images
 ```
 
 ## Critical Technical Decisions
@@ -190,7 +170,7 @@ Model detections are trusted — no user-facing false-positive marking UI. Users
 - Fallback: `deep-translator` (Google Translate) on Ollama failure
 - A/B tested: qwen3:8b leaks Japanese, translategemma:12b flattens tone, qwen3:30b not worth VRAM
 
-### Flutter Client (frank_client/)
+### Flutter Client (client/)
 
 **State management**: Riverpod v2 — `settingsProvider`, `connectionProvider`, `jobsProvider`, `cacheServiceProvider`, `apiServiceProvider`, `wsServiceProvider`.
 
@@ -257,24 +237,24 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 
 ## Configuration
 
-All settings in `config.yaml`:
+All settings in `server/config.yaml`:
 - `ollama:` — model, URL, temperature, think mode
-- `fonts:` — JP, EN, SFX font paths (relative to project root)
+- `fonts:` — JP, EN, SFX font paths (relative to server/)
 - `ocr:` — device (cpu/cuda)
-- `text_detection:` — enable/disable, confidence, GPU
+- `text_detection:` — confidence, GPU
 - `manga_inpainting:` — LaMa/diffusion settings
 - `webtoon:` — scraper, OCR, bubble detection, inpainting
 - `worker:` — redis_url, consumer_group, heartbeat, timeout
 
 ## Regression Testing
 
-**Always run `pytest tests/` after modifying detection thresholds, filters, or rendering logic.**
+**Always run tests after modifying detection thresholds, filters, or rendering logic.**
 
 ```bash
-pytest tests/unit/ -v              # Fast — pure logic (344 tests)
-pytest tests/integration/ -v       # Slower — uses real images
-go test ./cmd/server/ -v           # Go API + middleware + cache + subscribe/notify
-cd frank_client && flutter test    # Flutter model + strategy tests (71 tests)
+cd server && .venv/bin/pytest tests/unit/ -v       # Fast — pure logic (345 tests)
+cd server && .venv/bin/pytest tests/integration/ -v # Slower — uses real images
+cd server && go test -v .                           # Go API + middleware + cache + subscribe/notify
+cd client && flutter test                           # Flutter model + strategy tests (71 tests)
 ```
 
 ### Test coverage
@@ -284,8 +264,8 @@ cd frank_client && flutter test    # Flutter model + strategy tests (71 tests)
 - `tests/unit/test_text_renderer.py` — SFX detection, word wrap, hyphenation
 - `tests/unit/test_bytes_io.py` — encode/decode bytes, render_page_to_bytes, load_page_from_memory
 - `tests/unit/test_worker_*.py` — job routing, consumer priority logic, health checks, rerender (manual_translation override, legacy metadata tolerance, metadata payload structure)
-- `cmd/server/handlers_test.go` — all REST endpoints, auth middleware, cache hit/miss, PATCH + rerender queueing, 409 conflict, subscribe/notify
-- `frank_client/test/widget_test.dart` — ServerSettings, PageJob states, SiteConfig, strategy URL parsing, overlay patterns, feedback toolbar + edit_translation dispatch
+- `handlers_test.go` — all REST endpoints, auth middleware, cache hit/miss, PATCH + rerender queueing, 409 conflict, subscribe/notify
+- `client/test/widget_test.dart` — ServerSettings, PageJob states, SiteConfig, strategy URL parsing, overlay patterns, feedback toolbar + edit_translation dispatch
 
 **Workflow for adjustments**:
 1. Run existing tests before making changes
@@ -299,3 +279,8 @@ cd frank_client && flutter test    # Flutter model + strategy tests (71 tests)
 - `docs/shounen*.png` (10 pages): Various styles — translation pipeline
 - Output: `output/furigana/` and `output/translate/` subdirectories
 - Debug mode (`--debug`): Saves `*-debug.png` with red bounding boxes
+
+## License
+
+- `server/` — [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0)
+- `client/` — [GNU General Public License v3.0](client/LICENSE) (GPL-3.0)

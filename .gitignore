@@ -18,26 +18,22 @@ webtoon_data/
 .idea/
 
 # Compiled binaries
-server
-cmd/server/server
+server/server
 
 # Font archives and embedded repos
-fonts/*.zip
-fonts/genei-mirror/
+server/fonts/*.zip
+server/fonts/genei-mirror/
 
 # Flutter
-frank_client/.dart_tool/
-frank_client/build/
-frank_client/.flutter-plugins
-frank_client/.flutter-plugins-dependencies
-frank_client/.packages
-frank_client/pubspec.lock
+client/.dart_tool/
+client/build/
+client/.flutter-plugins
+client/.flutter-plugins-dependencies
+client/.packages
+client/pubspec.lock
 
 # AB test results
-tests/ab_*_results.json
-
-# Plans
-plan.md
+server/tests/ab_*_results.json
 
 # Claude Code
 .claude/

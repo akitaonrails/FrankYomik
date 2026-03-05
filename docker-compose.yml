@@ -49,13 +49,16 @@ services:
     image: busybox
     volumes:
       - ./cache:/data/cache
-    command: ["sh", "-c", "chown -R 65532:65532 /data/cache"]
+    command: ["sh", "-c", "chown -R ${APP_UID:-1026}:${APP_GID:-1026} /data/cache"]
     restart: "no"
 
   api:
     build:
       context: .
       dockerfile: Dockerfile.api
+      args:
+        APP_UID: ${APP_UID:-1026}
+        APP_GID: ${APP_GID:-1026}
     ports:
       - "8080:8080"
     environment:
@@ -75,11 +78,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
+      args:
+        APP_UID: ${APP_UID:-1026}
+        APP_GID: ${APP_GID:-1026}
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
+      APP_UID: ${APP_UID:-1026}
+      APP_GID: ${APP_GID:-1026}
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
     volumes:
-      - ./cache:/app/cache
+      - ./cache:/app/server/cache
       - mangaocr-cache:/home/worker/.cache/manga_ocr
       - huggingface-cache:/home/worker/.cache/huggingface
       - easyocr-cache:/home/worker/.EasyOCR

@@ -15,7 +15,7 @@ WORKDIR /build
 RUN python3.12 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt .
+COPY server/requirements.txt .
 # Install deps excluding simple-lama-inpainting (its pinned deps conflict),
 # then install it separately with --no-deps
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -24,6 +24,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Stage 2: Runtime
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+ARG APP_UID=1026
+ARG APP_GID=1026
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,27 +49,20 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Copy application code — paths must match _PROJECT_ROOT resolution
-# pipeline/config.py:9 resolves _PROJECT_ROOT = parent of pipeline/ = /app/
-WORKDIR /app
-COPY config.yaml .
-COPY fonts/genei_antique/ fonts/genei_antique/
-COPY fonts/KomikaText-Regular.ttf fonts/KomikaText-Bold.ttf fonts/
-COPY fonts/BadaBoomBB.ttf fonts/
-COPY pipeline/ pipeline/
-COPY webtoon/ webtoon/
-COPY worker/ worker/
+# Copy application code
+# kindle/config.py resolves _PROJECT_ROOT = parent of kindle/ = /app/server/
+WORKDIR /app/server
+COPY server/ .
 
-# Create worker user with UID 65532 (matches distroless:nonroot used by the
-# API, so both can read/write the shared cache volume).  The passwd entry is
-# required so that gosu can resolve HOME correctly.
-RUN echo "worker:x:65532:65532:worker:/home/worker:/usr/sbin/nologin" >> /etc/passwd \
-    && echo "worker:x:65532:" >> /etc/group \
+# Create worker user with host UID/GID so both API and worker can
+# read/write the shared cache volume.
+RUN echo "worker:x:${APP_UID}:${APP_GID}:worker:/home/worker:/usr/sbin/nologin" >> /etc/passwd \
+    && echo "worker:x:${APP_GID}:" >> /etc/group \
     && mkdir -p /home/worker/.cache/huggingface \
                 /home/worker/.cache/manga_ocr \
                 /home/worker/.EasyOCR/model \
-                /app/cache \
-    && chown -R 65532:65532 /home/worker /app
+                /app/server/cache \
+    && chown -R ${APP_UID}:${APP_GID} /home/worker /app
 
 COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
 RUN chmod +x /usr/local/bin/worker-entrypoint.sh
@@ -75,6 +71,6 @@ ENV HOME=/home/worker
 ENV HF_HOME=/home/worker/.cache/huggingface
 ENV EASYOCR_MODULE_PATH=/home/worker/.EasyOCR
 
-# Starts as root to fix volume permissions, then drops to 65532.
+# Starts as root to fix volume permissions, then drops to worker user.
 ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
 CMD ["--pipeline", "both"]

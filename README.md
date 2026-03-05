@@ -1,194 +1,182 @@
 # Frank Manga
 
-Translate manga and webtoon pages automatically. Detects speech bubbles, extracts text via OCR, and either adds furigana readings to kanji or translates to English — then renders the result back onto the page.
+Automatic manga and webtoon translation. Detects speech bubbles with RT-DETR-v2, extracts text via OCR, translates with a local LLM, and renders the result back onto the page.
 
-Works as a local CLI for batch processing, or as a web service for browser extensions.
+## Components
+
+| Directory | Language | Description |
+|-----------|----------|-------------|
+| `server/` | Go + Python | API server, processing pipelines (manga + webtoon), Redis worker |
+| `client/` | Dart/Flutter | Android + Linux reader app with WebView overlay |
+| `docs/` | — | Test images, deployment notes |
 
 ## How It Works
 
+**Manga pipeline** (Japanese → English or furigana):
 ```
-Image → Bubble Detection (OpenCV) → OCR → ┬→ Furigana (pykakasi) → Vertical JP Render
-                                           └→ Translation (Ollama) → English Render
+Image → RT-DETR-v2 bubble detection → manga-ocr → Ollama translation → English render
+                                                 → pykakasi furigana → Vertical JP render
 ```
 
-**Manga pipeline**: Pure OpenCV contour analysis detects speech bubbles with 7-layer false positive filtering (rejects faces, clothing, backgrounds). manga-ocr extracts Japanese text. Ollama translates or pykakasi adds furigana readings.
+**Webtoon pipeline** (Korean → English):
+```
+Image → EasyOCR text detection → cluster into bubbles → Ollama translation → color-aware render
+```
 
-**Webtoon pipeline**: EasyOCR detects Korean text, clusters it into bubbles, and uses boundary detection (contour → flood fill → padded bbox fallback). Translates to English with color-aware rendering that samples the original background.
-
-**Web service**: Go API accepts images over HTTP, deduplicates via SHA256, and queues jobs through Redis Streams. Python workers consume jobs with priority ordering (current page before prefetched pages) and push results back via Redis Pub/Sub + WebSocket.
+**Web service**: Go API accepts images over HTTP, deduplicates via SHA256, queues through Redis Streams with priority ordering. Python workers process jobs and push results via Redis Pub/Sub + WebSocket.
 
 ## Requirements
 
 - Python 3.12+
-- [Ollama](https://ollama.ai) with `qwen3:14b` pulled (~9GB VRAM)
-- Go 1.21+ (for the web service)
-- Redis (for the web service)
+- [Ollama](https://ollama.ai) with `qwen3:14b` (~9 GB VRAM)
+- Go 1.21+
+- Redis
+- Flutter 3.11+ (for the client app)
 
 ## Setup
 
 ```bash
 git clone https://github.com/akitaonrails/frank_manga.git
-cd frank_manga
+cd frank_manga/server
 
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Pull the translation model
 ollama pull qwen3:14b
 ```
 
-## Usage
+## CLI Usage
 
-### CLI — Local Processing
+Run from `server/`:
 
 ```bash
-# Manga: add furigana to adult manga pages
+# Manga: add furigana readings
 python process_manga.py furigana
 
-# Manga: translate shounen manga to English
+# Manga: translate to English
 python process_manga.py translate
 
-# Both pipelines + debug bounding box images
+# Both + debug bounding boxes
 python process_manga.py all --debug
 
 # Webtoon: download and translate a Naver Webtoon chapter
 python process_webtoon.py pipeline <URL>
 ```
 
-Input images go in `docs/` (adult*.png for furigana, shounen*.png for translation). Output appears in `output/furigana/` and `output/translate/`.
+Input: `docs/adult*.png` (furigana), `docs/shounen*.png` (translation).
+Output: `output/furigana/`, `output/translate/`.
 
-### Web Service
+## Web Service
 
-Start three processes:
+### Local
 
 ```bash
-# Terminal 1: Redis
+# Terminal 1
 redis-server
 
-# Terminal 2: Go API server
-cd cmd/server && AUTH_TOKEN=mysecret go run .
+# Terminal 2
+cd server && AUTH_TOKEN=secret go run .
 
-# Terminal 3: Python worker(s)
-python -m worker --pipeline both
+# Terminal 3
+cd server && python -m worker --pipeline both
 ```
 
-Submit a job:
+### Docker Compose
 
 ```bash
-# Upload an image for translation
-curl -X POST -H "Authorization: Bearer mysecret" \
+# Set auth token
+echo "AUTH_TOKEN=mysecret" > .env
+
+# Optionally set UID/GID to match your host user (default 1026)
+echo "APP_UID=$(id -u)" >> .env
+echo "APP_GID=$(id -g)" >> .env
+
+# Build and start
+docker compose up -d
+
+# Check status
+docker compose logs -f worker
+curl -H "Authorization: Bearer mysecret" http://localhost:8080/api/v1/health
+```
+
+### Submit a Job
+
+```bash
+curl -X POST -H "Authorization: Bearer secret" \
   -F "image=@docs/shounen.png" \
   -F "pipeline=manga_translate" \
   http://localhost:8080/api/v1/jobs
 
-# Poll for result
-curl -H "Authorization: Bearer mysecret" \
-  http://localhost:8080/api/v1/jobs/<job_id>
+# Poll status
+curl -H "Authorization: Bearer secret" http://localhost:8080/api/v1/jobs/<job_id>
 
-# Download translated image
-curl -H "Authorization: Bearer mysecret" \
-  http://localhost:8080/api/v1/jobs/<job_id>/image -o result.png
+# Download result
+curl -H "Authorization: Bearer secret" http://localhost:8080/api/v1/jobs/<job_id>/image -o result.png
 ```
 
-### API Endpoints
+## API
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/jobs` | Upload image, returns `job_id` immediately |
+| POST | `/api/v1/jobs` | Upload image, returns `job_id` |
 | GET | `/api/v1/jobs/:id` | Poll job status and metadata |
 | GET | `/api/v1/jobs/:id/image` | Download processed image |
 | DELETE | `/api/v1/jobs/:id` | Cancel/delete a job |
-| GET | `/api/v1/health` | Server, worker, and queue status |
-| WS | `/api/v1/ws` | Real-time result push via WebSocket |
+| GET | `/api/v1/health` | Server + worker + queue status |
+| WS | `/api/v1/ws` | Real-time result push |
 
 All endpoints except `/health` require `Authorization: Bearer <token>`.
 
-**Pipelines**: `manga_translate`, `manga_furigana`, `webtoon`
+Pipelines: `manga_translate`, `manga_furigana`, `webtoon`. Priority: `high` (default) or `low` (prefetch).
 
-**Priority**: `high` (default, current page) or `low` (prefetch)
+## Flutter Client
 
-### WebSocket
-
-Connect to `/api/v1/ws?token=<bearer>` and subscribe to job IDs for real-time notifications:
-
-```json
-{"type": "subscribe", "job_ids": ["job-id-1", "job-id-2"]}
-```
-
-The server pushes completion events:
-
-```json
-{"type": "job_complete", "job_id": "job-id-1", "image_url": "/api/v1/jobs/job-id-1/image"}
-```
-
-## Configuration
-
-All settings live in `config.yaml`:
-
-| Section | Controls |
-|---------|----------|
-| `ollama` | Model name, URL, temperature, think mode |
-| `fonts` | Japanese, English, and SFX font paths |
-| `ocr` | Device (cpu/cuda) for manga-ocr |
-| `text_detection` | EasyOCR for artwork text detection |
-| `manga_inpainting` | LaMa/diffusion text removal |
-| `webtoon` | Scraper, OCR, bubble detection, inpainting |
-| `worker` | Redis URL, consumer group, heartbeat, timeout |
-
-## Project Structure
-
-```
-frank_manga/
-  process_manga.py              # CLI entry point for manga
-  process_webtoon.py            # CLI entry point for webtoons
-  config.yaml                   # All configuration
-
-  pipeline/                     # Manga processing modules
-    bubble_detector.py          # OpenCV contour analysis + 7 FP filters
-    ocr.py                      # manga-ocr with Japanese validation
-    furigana.py                 # Kanji → hiragana via pykakasi
-    translator.py               # Ollama + Google Translate fallback
-    text_renderer.py            # Vertical JP, horizontal EN, SFX rendering
-    text_detector.py            # EasyOCR + stroke clustering
-    processor.py                # Pipeline orchestration
-
-  webtoon/                      # Korean webtoon modules
-    processor.py                # Webtoon pipeline orchestration
-    ocr.py                      # EasyOCR Korean
-    bubble_detector.py          # Text-first clustering
-    translator.py               # Korean-specific translation
-    scraper.py                  # Naver Webtoon downloader
-
-  worker/                       # Python Redis stream consumer
-    consumer.py                 # Two-priority-stream consumer loop
-    job.py                      # Job processing and pipeline routing
-    health.py                   # Health check utilities
-
-  cmd/server/                   # Go API server
-    handlers.go                 # REST + WebSocket route handlers
-    middleware.go               # Bearer token authentication
-    queue.go                    # Redis stream producer with dedup
-    websocket.go                # WebSocket subscribe/notify
-
-  tests/
-    unit/                       # Fast tests, no external dependencies
-    integration/                # Tests using real images
+```bash
+cd client
+flutter pub get
+flutter run -d linux       # Desktop
+flutter run -d <device>    # Android
 ```
 
 ## Testing
 
+All tests run from `server/`:
+
 ```bash
-# Python unit tests
-pytest tests/unit/ -v
+cd server
 
-# Python integration tests (requires test images in docs/)
-pytest tests/integration/ -v
+# Python unit tests (345 tests, ~8s)
+.venv/bin/pytest tests/unit/ -v
 
-# Go API tests
-go test ./cmd/server/ -v
+# Python integration tests (34 tests, ~16s, needs test images in docs/)
+.venv/bin/pytest tests/integration/ -v
+
+# All Python tests
+.venv/bin/pytest tests/ -v
+
+# Go API tests (needs Redis for full coverage, skips gracefully without it)
+go test -v .
+
+# Flutter tests
+cd ../client && flutter test
 ```
+
+## Configuration
+
+All settings in `server/config.yaml`:
+
+| Section | Controls |
+|---------|----------|
+| `ollama` | Model, URL, temperature, think mode |
+| `fonts` | Japanese, English, SFX font paths |
+| `ocr` | Device (cpu/cuda) for manga-ocr |
+| `text_detection` | EasyOCR confidence and GPU for artwork text |
+| `manga_inpainting` | LaMa text removal (off by default) |
+| `webtoon` | Scraper, OCR, bubble detection, inpainting |
+| `worker` | Redis, consumer group, heartbeat, timeout |
 
 ## License
 
-This project is a proof of concept for personal use.
+- `server/` — [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0)
+- `client/` — [GNU General Public License v3.0](client/LICENSE) (GPL-3.0)

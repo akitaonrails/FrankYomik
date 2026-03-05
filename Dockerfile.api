@@ -1,12 +1,15 @@
 # Stage 1: Build static Go binary
 FROM golang:1.25-bookworm AS builder
 
+ARG APP_UID=1026
+ARG APP_GID=1026
+
 WORKDIR /build
-COPY go.mod go.sum ./
+COPY server/go.mod server/go.sum ./
 RUN go mod download
 
-COPY cmd/ cmd/
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /frank-api ./cmd/server/
+COPY server/*.go ./
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /frank-api .
 
 # Stage 2: Minimal runtime
 FROM gcr.io/distroless/static-debian12:nonroot

@@ -1,0 +1,64 @@
+ollama:
+  url: "http://localhost:11434"
+  translate_model: "qwen3:14b"
+  translate_options:
+    temperature: 0.3
+    num_predict: 1024
+    think: false
+
+fonts:
+  jp: "fonts/genei_antique/GenEiAntiquePv5-M.ttf"
+  jp_bold: "fonts/genei_antique/GenEiAntiquePv5-M.ttf"
+  en: "fonts/KomikaText-Regular.ttf"
+  en_bold: "fonts/KomikaText-Bold.ttf"
+  sfx: "fonts/BadaBoomBB.ttf"
+
+ocr:
+  device: "cuda"   # "cuda" for GPU (~350MB); "cpu" if VRAM is tight
+
+text_detection:
+  confidence: 0.3         # EasyOCR confidence threshold
+  gpu: true
+
+manga_inpainting:
+  enabled: false          # Off by default
+  pad: 20                 # Padding around text region for inpainting
+
+webtoon:
+  data_dir: "webtoon_data"
+  output_dir: "output/webtoon"
+  scraper:
+    scroll_pause: 0.5
+    download_timeout: 30
+  easyocr:
+    gpu: true
+    confidence_threshold: 0.25
+    text_threshold: 0.5
+    low_text: 0.3
+    inverted_confidence: 0.10
+  bubble_detection:
+    cluster_gap: 40
+    pad_x: 15
+    pad_y: 10
+    flood_fill_tolerance: 15
+    contour_expand: 5
+  inpainting:
+    enabled: true
+    model: "lama"
+    erode_px: 3
+    text_pad: 24
+    text_dilate: 6
+    context_pad: 20
+    num_inference_steps: 28
+    prompt: "clean empty speech bubble interior, flat color"
+
+worker:
+  redis_url: "redis://localhost:6379"
+  consumer_group: "workers"
+  heartbeat_interval: 30
+  job_timeout: 300
+  cache_dir: "./cache"
+  result_ttl: 3600
+  heartbeat_ttl: 60
+  progress_ttl: 60
+  high_burst_before_low: 3
