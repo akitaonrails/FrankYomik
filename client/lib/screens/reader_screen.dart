@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import '../providers/connection_provider.dart';
 import '../providers/jobs_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/image_capture_service.dart';
@@ -46,7 +47,8 @@ class ReaderScreen extends ConsumerStatefulWidget {
   ConsumerState<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-class _ReaderScreenState extends ConsumerState<ReaderScreen> {
+class _ReaderScreenState extends ConsumerState<ReaderScreen>
+    with WidgetsBindingObserver {
   AppWebViewController? _webController;
   final _jsBridge = JsBridge();
   final _inspector = DomInspector();
@@ -100,23 +102,39 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// Track active listenManual subscriptions so we can cancel them.
   final Map<String, ProviderSubscription> _completionListeners = {};
   Timer? _statusClearTimer;
+  Timer? _progressSyncTimer;
   int _statusMessageVersion = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _kindlePipeline = ref.read(settingsProvider).pipeline;
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _statusClearTimer?.cancel();
+    _progressSyncTimer?.cancel();
     _cancelKindleReapplies();
     for (final sub in _completionListeners.values) {
       sub.close();
     }
     _completionListeners.clear();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('[Reader] App resumed — reconnecting');
+      ref.read(connectionProvider.notifier).connect();
+      // Sync progress for in-flight webtoon jobs
+      if (_jsBridge.activeStrategy?.siteName == 'webtoon') {
+        _updateWebtoonProgress();
+      }
+    }
   }
 
   @override
@@ -176,6 +194,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               // Sync toolbar button states after injection
               Future.delayed(const Duration(milliseconds: 500), () {
                 _syncPipelineButtonState();
+                _syncTranslateButtonState();
               });
               if (_inspectorMode) {
                 _inspector.inject(controller);
@@ -363,15 +382,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     });
 
     final settings = ref.read(settingsProvider);
+    final autoOn = settings.isLoaded && settings.autoTranslate;
+    _syncTranslateButtonState();
     final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
-    if (isKindle && settings.autoTranslate) {
+    if (isKindle && autoOn) {
       _showKindleSpinner();
     }
 
     // For spread pages (Kindle), check both left and right sub-page jobs
     final pageMode = pageInfo['pageMode'] as String?;
     if (pageMode == 'spread') {
-      if (!settings.autoTranslate) return;
+      if (!autoOn) return;
       _handleSpreadDetection(pageId, pageInfo);
       return;
     }
@@ -384,7 +405,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       if (totalFromJs > _webtoonTotalPages) _webtoonTotalPages = totalFromJs;
       _updateWebtoonProgress();
 
-      if (!settings.autoTranslate) {
+      if (!autoOn) {
         _updateInPageStatus('Auto-translate OFF');
         return;
       }
@@ -406,7 +427,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
 
     // Non-webtoon single page (Kindle single)
-    if (!settings.autoTranslate) {
+    if (!autoOn) {
       _updateInPageStatus('Auto-translate OFF');
       return;
     }
@@ -668,6 +689,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       }
 
       if (toSubmit.isEmpty) return;
+
+      // Start periodic progress sync to catch missed WS completions
+      _startProgressSyncTimer();
 
       debugPrint(
         '[Batch] Submitting ${toSubmit.length} pages: $toSubmit '
@@ -1190,6 +1214,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   bar.innerHTML =
     '<button id="__frankBack" title="Back">&#x2190;</button>' +
     '<button id="__frankPipeline" title="Switch pipeline" style="display:none;"></button>' +
+    '<button id="__frankTranslate" title="Translate current page" style="display:none;">&#x1F30D; Translate</button>' +
     '<button id="__frankReload" title="Reload page">&#x21BB; Reload</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
     '<span id="__frankStatus"></span>' +
@@ -1232,10 +1257,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   var backBtn = document.getElementById('__frankBack');
   var pipeBtn = document.getElementById('__frankPipeline');
+  var translateBtn = document.getElementById('__frankTranslate');
   var reloadBtn = document.getElementById('__frankReload');
   var copyDbgBtn = document.getElementById('__frankCopyDbg');
   if (backBtn) backBtn.style.cssText = btnStyle;
   if (pipeBtn) pipeBtn.style.cssText = btnStyle + 'display:none;';
+  if (translateBtn) translateBtn.style.cssText = btnStyle + 'display:none;';
   if (reloadBtn) reloadBtn.style.cssText = btnStyle;
   if (copyDbgBtn) copyDbgBtn.style.cssText = btnStyle + 'display:none;';
 
@@ -1260,6 +1287,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   if (pipeBtn) pipeBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_pipeline');
+  });
+  if (translateBtn) translateBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'translate');
   });
   if (reloadBtn) reloadBtn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -1306,6 +1337,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       el.style.color = '#64b5f6';
     }
   };
+  window.__frankSetTranslateBtn = function(visible) {
+    var el = document.getElementById('__frankTranslate');
+    if (el) el.style.display = visible ? '' : 'none';
+  };
   window.__frankSetDebugHud = function(text, visible) {
     var el = document.getElementById('__frankDebugHud');
     if (!el) return;
@@ -1331,6 +1366,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             break;
           case 'toggle_pipeline':
             _toggleKindlePipeline();
+            break;
+          case 'translate':
+            _translateCurrentPage();
             break;
           case 'reload':
             _reloadPage();
@@ -1374,12 +1412,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       });
     }
 
-    // Cancel all Kindle jobs and re-submit current page
+    // Cancel all Kindle jobs and re-submit current page with new pipeline
     _cancelKindleJobs();
-    if (ref.read(settingsProvider).autoTranslate &&
-        _currentKindlePageId != null &&
-        _lastKindlePageInfo != null) {
+    if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
       _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
+    }
+  }
+
+  /// Manually translate the current page (used when auto-translate is off).
+  void _translateCurrentPage() {
+    if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
+      _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
+      return;
+    }
+    if (_jsBridge.activeStrategy?.siteName == 'webtoon') {
+      _submitNextBatch();
     }
   }
 
@@ -1392,6 +1439,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     controller.evaluateJavascript(
       source:
           "if(window.__frankSetPipeline) window.__frankSetPipeline('$label', $isKindle);",
+    );
+  }
+
+  /// Show or hide the manual translate button based on auto-translate setting.
+  void _syncTranslateButtonState() {
+    final controller = _webController;
+    if (controller == null) return;
+    final settings = ref.read(settingsProvider);
+    final visible = settings.isLoaded && !settings.autoTranslate;
+    controller.evaluateJavascript(
+      source:
+          "if(window.__frankSetTranslateBtn) window.__frankSetTranslateBtn($visible);",
     );
   }
 
@@ -1458,6 +1517,31 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 
+
+  /// Periodic timer that syncs webtoon progress every 2 seconds.
+  /// Catches missed WebSocket completion events on mobile.
+  void _startProgressSyncTimer() {
+    if (_progressSyncTimer != null) return;
+    _progressSyncTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted) {
+        _progressSyncTimer?.cancel();
+        _progressSyncTimer = null;
+        return;
+      }
+      _updateWebtoonProgress();
+
+      // Auto-stop when all detected pages are complete
+      final jobs = ref.read(jobsProvider);
+      final allDone = _detectedWebtoonPages.keys.every((idx) {
+        final job = jobs['wt-$idx'];
+        return job != null && job.isComplete;
+      });
+      if (allDone && _detectedWebtoonPages.isNotEmpty) {
+        _progressSyncTimer?.cancel();
+        _progressSyncTimer = null;
+      }
+    });
+  }
 
   /// Update the webtoon progress bar (completed/total).
   void _updateWebtoonProgress() {

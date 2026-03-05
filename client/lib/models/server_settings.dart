@@ -6,12 +6,16 @@ class ServerSettings {
   final bool autoTranslate;
   final String targetLanguage;
 
+  /// True once preferences have been loaded from disk.
+  final bool isLoaded;
+
   const ServerSettings({
     this.serverUrl = 'https://localhost:8080',
     this.authToken = 'mysecrettoken',
     this.pipeline = 'manga_translate',
     this.autoTranslate = true,
     this.targetLanguage = 'en',
+    this.isLoaded = false,
   });
 
   ServerSettings copyWith({
@@ -20,6 +24,7 @@ class ServerSettings {
     String? pipeline,
     bool? autoTranslate,
     String? targetLanguage,
+    bool? isLoaded,
   }) {
     return ServerSettings(
       serverUrl: serverUrl ?? this.serverUrl,
@@ -27,6 +32,7 @@ class ServerSettings {
       pipeline: pipeline ?? this.pipeline,
       autoTranslate: autoTranslate ?? this.autoTranslate,
       targetLanguage: targetLanguage ?? this.targetLanguage,
+      isLoaded: isLoaded ?? this.isLoaded,
     );
   }
 

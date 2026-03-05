@@ -20,6 +20,7 @@ class SettingsNotifier extends StateNotifier<ServerSettings> {
       pipeline: prefs.getString('pipeline') ?? 'manga_furigana',
       autoTranslate: prefs.getBool('auto_translate') ?? true,
       targetLanguage: prefs.getString('target_language') ?? 'en',
+      isLoaded: true,
     );
   }
 
