@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/icon.png" width="128" alt="Frank Manga icon">
+</p>
+
 # Frank Manga
 
 Automatic manga and webtoon translation. Detects speech bubbles with RT-DETR-v2, extracts text via OCR, translates with a local LLM, and renders the result back onto the page.
