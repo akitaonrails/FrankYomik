@@ -17,7 +17,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama-models:/root/.ollama
+      - ./server/models:/root/.ollama
     deploy:
       resources:
         reservations:
@@ -109,9 +109,29 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  init-cloudflared:
+    image: busybox
+    volumes:
+      - ./.cloudflared:/src:ro
+      - cloudflared-config:/dest
+    command: ["sh", "-c", "cp /src/* /dest/ && chmod 644 /dest/*"]
+    restart: "no"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --config /etc/cloudflared/config.yml run yomik
+    volumes:
+      - cloudflared-config:/etc/cloudflared:ro
+    depends_on:
+      init-cloudflared:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   redis-data:
-  ollama-models:
   mangaocr-cache:
   huggingface-cache:
   easyocr-cache:
+  cloudflared-config:

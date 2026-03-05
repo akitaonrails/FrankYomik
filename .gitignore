@@ -17,6 +17,9 @@ webtoon_data/
 .vscode/
 .idea/
 
+# Ollama models (bind-mounted from docker-compose)
+server/models/
+
 # Compiled binaries
 server/server
 
@@ -34,6 +37,9 @@ client/pubspec.lock
 
 # AB test results
 server/tests/ab_*_results.json
+
+# Cloudflare tunnel credentials
+.cloudflared/
 
 # Claude Code
 .claude/

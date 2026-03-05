@@ -27,10 +27,10 @@ void main() {
   group('ServerSettings', () {
     test('defaults', () {
       const s = ServerSettings();
-      expect(s.serverUrl, 'http://localhost:8080');
+      expect(s.serverUrl, 'https://localhost:8080');
       expect(s.pipeline, 'manga_translate');
       expect(s.autoTranslate, true);
-      expect(s.isConfigured, false);
+      expect(s.isConfigured, true);
       expect(s.targetLanguage, 'en');
     });
 

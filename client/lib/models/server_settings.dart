@@ -7,8 +7,8 @@ class ServerSettings {
   final String targetLanguage;
 
   const ServerSettings({
-    this.serverUrl = 'http://localhost:8080',
-    this.authToken = '',
+    this.serverUrl = 'https://localhost:8080',
+    this.authToken = 'mysecrettoken',
     this.pipeline = 'manga_translate',
     this.autoTranslate = true,
     this.targetLanguage = 'en',
