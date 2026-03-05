@@ -1,0 +1,324 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libsqlite3-dev \
+            ninja-build \
+            pkg-config \
+            clang \
+            cmake \
+            libfuse2
+
+      - name: Build Linux release
+        working-directory: client
+        run: flutter build linux --release
+
+      - name: Create AppImage
+        working-directory: client
+        run: |
+          curl -Lo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+
+          mkdir -p AppDir
+          cp -r build/linux/x64/release/bundle/* AppDir/
+
+          cp linux/packaging/frank-yomik.desktop AppDir/
+          cp ../docs/icon.png AppDir/frank-yomik.png
+
+          cat > AppDir/AppRun << 'EOF'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/frank_client" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ -z "$VERSION" ] && VERSION="0.0.0"
+
+          ARCH=x86_64 VERSION="$VERSION" ./appimagetool AppDir \
+            "FrankYomik-${VERSION}-linux-x86_64.AppImage"
+
+      - name: GPG-sign AppImage
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "GPG key not configured, skipping signature"
+            exit 0
+          fi
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          for f in client/FrankYomik-*.AppImage; do
+            gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+              --detach-sign --armor "$f"
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: |
+            client/FrankYomik-*.AppImage
+            client/FrankYomik-*.AppImage.asc
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Import Apple certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "Apple certificate not configured, skipping"
+            exit 0
+          fi
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode > $CERT_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import $CERT_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Build macOS release
+        working-directory: client
+        run: flutter build macos --release
+
+      - name: Codesign app bundle
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signing identity not configured, skipping codesign"
+            exit 0
+          fi
+          codesign --deep --force --verbose \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --entitlements client/macos/Runner/Release.entitlements \
+            --options runtime \
+            --timestamp \
+            "client/build/macos/Build/Products/Release/frank_client.app"
+
+      - name: Create DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ -z "$VERSION" ] && VERSION="0.0.0"
+
+          hdiutil create -volname "Frank Yomik" \
+            -srcfolder "client/build/macos/Build/Products/Release/frank_client.app" \
+            -ov -format UDZO \
+            "FrankYomik-${VERSION}-macos.dmg"
+
+      - name: Notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_ID" ]; then
+            echo "Apple ID not configured, skipping notarization"
+            exit 0
+          fi
+          xcrun notarytool submit FrankYomik-*.dmg \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          xcrun stapler staple FrankYomik-*.dmg
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: FrankYomik-*.dmg
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build Windows release
+        working-directory: client
+        run: flutter build windows --release
+
+      - name: Build installer
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          if (-not $version) { $version = "0.0.0" }
+          iscc /DAppVersion="$version" client\windows\packaging\installer.iss
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: client/windows/packaging/Output/FrankYomik-*-windows-x64-setup.exe
+
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Decode keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Android keystore not configured, will use debug signing"
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > client/android/app/keystore.jks
+          cat > client/android/key.properties << PROPS
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=keystore.jks
+          PROPS
+
+      - name: Build APK
+        working-directory: client
+        run: flutter build apk --release
+
+      - name: Rename APK
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ -z "$VERSION" ] && VERSION="0.0.0"
+          cp client/build/app/outputs/flutter-apk/app-release.apk \
+            "FrankYomik-${VERSION}-android.apk"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: FrankYomik-*-android.apk
+
+  create-release:
+    needs: [build-linux, build-macos, build-windows, build-android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Load release notes
+        id: release-notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES_FILE="releases/${TAG}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            BODY=$(cat "$NOTES_FILE")
+          else
+            BODY="Release ${TAG}"
+          fi
+
+          BODY="${BODY}
+
+          ## Install
+
+          | Platform | File |
+          |----------|------|
+          | Linux (AppImage) | \`FrankYomik-*-linux-x86_64.AppImage\` |
+          | macOS | \`FrankYomik-*-macos.dmg\` |
+          | Windows | \`FrankYomik-*-windows-x64-setup.exe\` |
+          | Android | \`FrankYomik-*-android.apk\` |
+
+          ### Prerequisites
+          - A running [Frank Yomik server](https://github.com/akitaonrails/FrankYomik) (Go API + Redis + Python worker)
+          - Configure the server URL and auth token in the app's Settings screen
+
+          ### Windows first launch
+          The installer is not code-signed. Windows SmartScreen may show a warning — click **More info** then **Run anyway**.
+          "
+
+          echo "body<<RELEASE_EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Frank Yomik ${{ github.ref_name }}"
+          body: ${{ steps.release-notes.outputs.body }}
+          draft: true
+          prerelease: false
+          files: artifacts/*

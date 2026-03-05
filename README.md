@@ -199,10 +199,20 @@ flutter run -d linux       # Desktop
 flutter run -d <device>    # Android
 
 # Build release APK
-flutter build apk
+flutter build apk --release
 ```
 
 The client defaults to `http://localhost:8080`. Configure the server URL and auth token in the Settings screen.
+
+### Android Sideloading
+
+The APK is distributed directly (not via Google Play) because the app requires a locally-running server with GPU access — it's not a standalone app. To install on Android:
+
+1. Transfer the APK to your phone
+2. Enable **Install from unknown sources** for your file manager (Settings → Apps → Special access → Install unknown apps)
+3. On Samsung devices, also disable **Auto Blocker** (Settings → Security → Auto Blocker)
+
+This is a one-time setup. Future updates signed with the same key install without prompts.
 
 ## Testing
 

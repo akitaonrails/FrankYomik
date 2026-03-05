@@ -35,6 +35,11 @@ client/.flutter-plugins-dependencies
 client/.packages
 client/pubspec.lock
 
+# Android signing
+client/android/key.properties
+client/android/app/*.jks
+client/android/app/*.keystore
+
 # AB test results
 server/tests/ab_*_results.json
 

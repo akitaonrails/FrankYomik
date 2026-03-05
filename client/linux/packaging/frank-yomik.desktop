@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Frank Yomik
+Comment=Manga and webtoon translation reader
+Exec=frank_client
+Icon=frank-yomik
+Categories=Graphics;Viewer;
+StartupWMClass=frank_client

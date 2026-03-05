@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flutter-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libsqlite3-dev \
+            ninja-build \
+            pkg-config \
+            clang \
+            cmake
+
+      - name: Install dependencies
+        working-directory: client
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: client
+        run: flutter analyze
+
+      - name: Run tests
+        working-directory: client
+        run: flutter test
+
+  server-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Install Python dependencies
+        working-directory: server
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Run Python unit tests
+        working-directory: server
+        run: |
+          source .venv/bin/activate
+          PYTHONPATH=. pytest tests/unit/ -v
+
+      - name: Run Go tests
+        working-directory: server
+        run: go test -v .
