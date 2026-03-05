@@ -193,6 +193,7 @@ def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
                    mask: 'np.ndarray | None' = None) -> None:
     """Render English text inside a bubble, choosing the best layout.
 
+    Font size is determined by binary search to fill the bubble area.
     When `mask` is provided, the rendered text is clipped to the bubble
     shape using an RGBA overlay + mask-clip pattern.  The bbox is first
     tightened to the mask's interior so text is sized to the actual bubble
@@ -214,7 +215,7 @@ def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
     if layout == "vertical_sfx":
         _render_vertical_sfx(img, bbox, text, mask=mask)
     else:
-        _render_horizontal_english(img, bbox, text, base_font_size, mask=mask)
+        _render_horizontal_english(img, bbox, text, mask=mask)
 
 
 # --- Vertical sound effect rendering ---
@@ -301,18 +302,19 @@ def _fit_vertical_chars(chars: list[str], bw: int, bh: int) -> int:
 
 def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int],
                                text: str,
-                               base_font_size: int | None = None,
                                mask: 'np.ndarray | None' = None) -> None:
     """Render horizontal English text centered inside a bubble region.
 
-    Words are only hyphenated during word wrap when they don't fit on a line.
+    Font size scales with bubble dimensions — larger bubbles (from higher
+    resolution screens) produce proportionally larger text.  Words are
+    hyphenated during word wrap when they don't fit on a line.
     When `mask` is provided, renders to an RGBA overlay and clips to mask.
     """
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
 
-    font_size = _fit_horizontal_english_size(text, bw, bh, base_font_size)
+    font_size = _fit_horizontal_english_size(text, bw, bh)
     font = _load_font(FONT_EN, font_size)
 
     if mask is not None:
@@ -356,10 +358,14 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
         img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 
 
-def _fit_horizontal_english_size(text: str, bw: int, bh: int,
-                                 base_font_size: int | None = None) -> int:
-    """Binary search for the largest horizontal English font size."""
-    lo, hi = MIN_FONT_SIZE, min(MAX_FONT_SIZE, bh)
+def _fit_horizontal_english_size(text: str, bw: int, bh: int) -> int:
+    """Binary search for the largest English font that fits the bubble.
+
+    No artificial cap — font size scales proportionally with bubble
+    dimensions, so high-resolution screens (e.g. Galaxy Z Fold) get
+    proportionally larger text.
+    """
+    lo, hi = MIN_FONT_SIZE, bh
     best = lo
 
     for _ in range(15):
@@ -618,8 +624,7 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
 # --- Artwork text rendering ---
 
 def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
-                               text: str, base_font_size: int | None = None,
-                               inpainted: bool = False) -> None:
+                               text: str, inpainted: bool = False) -> None:
     """Render English text on artwork with background for readability.
 
     When inpainted=True (AI cleaned the background), uses a semi-transparent
@@ -639,7 +644,7 @@ def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
         _render_vertical_sfx(img, bbox, text)
         return
 
-    font_size = _fit_horizontal_english_size(text, bw, bh, base_font_size)
+    font_size = _fit_horizontal_english_size(text, bw, bh)
     font = _load_font(FONT_EN, font_size)
     draw = ImageDraw.Draw(img)
 

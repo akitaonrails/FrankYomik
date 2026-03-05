@@ -10,7 +10,6 @@ from typing import Any, Callable
 
 from kindle.bubble_detector import detect_bubbles, extract_bubble_mask_manga
 from kindle.furigana import annotate as furigana_annotate
-from kindle.config import EN_BASE_FONT_DIVISOR, EN_BASE_FONT_MAX, EN_BASE_FONT_MIN
 from kindle.image_utils import (
     clear_text_in_region,
     clear_text_strokes,
@@ -240,12 +239,6 @@ def _rerender_from_metadata(job: ProcessingJob,
 
     _report(progress_cb, "rerender", "drawing edits", 50)
 
-    # Calculate base font size the same way the fresh pipeline does.
-    base_font_size = None
-    if job.pipeline != "manga_furigana":
-        base_font_size = max(EN_BASE_FONT_MIN,
-                             min(EN_BASE_FONT_MAX, img_h // EN_BASE_FONT_DIVISOR))
-
     # Two-pass rendering: clear all regions first, then render text.
     # Prevents overlapping bubbles from erasing each other's rendered text.
 
@@ -302,7 +295,7 @@ def _rerender_from_metadata(job: ProcessingJob,
                                      mask=item["mask"])
         else:
             render_english(img_out, item["bbox"], item["value"],
-                           base_font_size=base_font_size, mask=item["mask"])
+                           mask=item["mask"])
         applied += 1
 
     _report(progress_cb, "rerender", "encoding", 95)

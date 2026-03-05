@@ -497,9 +497,8 @@ class TestRerenderFromMetadata:
         assert result.status == "completed"
         assert result.bubble_count == 1
 
-    def test_rerender_base_font_size_calculated(self):
-        """Rerender should cap font size via base_font_size, not use MAX_FONT_SIZE."""
-        # Create a tall image — base_font_size = max(14, min(24, 800//55)) = 14
+    def test_rerender_large_bubble_scales_font(self):
+        """Rerender should scale font to fill large bubbles on high-res screens."""
         img_bytes = _make_test_image_bytes(600, 800)
         job = ProcessingJob(
             job_id="rr-font",
@@ -520,8 +519,6 @@ class TestRerenderFromMetadata:
         )
         result = process_job(job)
         assert result.status == "completed"
-        # If font was uncapped (MAX=60), the render would still succeed
-        # but we verify the result exists (no crash from giant text)
         assert result.image_bytes is not None
         assert result.bubble_count == 1
 

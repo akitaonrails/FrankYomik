@@ -9,10 +9,7 @@ import numpy as np
 from PIL import Image
 
 from .bubble_detector import detect_bubbles, extract_bubble_mask_manga
-from .config import (
-    EN_BASE_FONT_DIVISOR, EN_BASE_FONT_MAX, EN_BASE_FONT_MIN,
-    MANGA_INPAINT_ENABLED,
-)
+from .config import MANGA_INPAINT_ENABLED
 from .furigana import annotate as furigana_annotate
 from .image_utils import (
     clear_text_strokes,
@@ -187,14 +184,6 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
 
     page.output_img = page.img_pil.copy()
 
-    base_font_size = None
-    if mode == PipelineMode.TRANSLATE:
-        page_height = page.img_pil.height
-        base_font_size = max(EN_BASE_FONT_MIN,
-                             min(EN_BASE_FONT_MAX, page_height // EN_BASE_FONT_DIVISOR))
-        log.info("Base English font size: %d (page height=%d)",
-                 base_font_size, page_height)
-
     # Two-pass rendering: clear all bubbles first, then render all text.
     # This prevents overlapping bubbles from erasing each other's rendered text.
 
@@ -218,7 +207,6 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
         if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
             render_english_on_artwork(page.output_img, br.bbox,
                                       br.transformed,
-                                      base_font_size=base_font_size,
                                       inpainted=i in artwork_inpainted)
             continue
         if mode == PipelineMode.FURIGANA:
@@ -226,7 +214,7 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
                                      mask=br.mask)
         else:
             render_english(page.output_img, br.bbox, br.transformed,
-                           base_font_size=base_font_size, mask=br.mask)
+                           mask=br.mask)
 
     # Save
     suffix = "-furigana.png" if mode == PipelineMode.FURIGANA else "-en.png"
@@ -249,12 +237,6 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
 
     page.output_img = page.img_pil.copy()
 
-    base_font_size = None
-    if mode == PipelineMode.TRANSLATE:
-        page_height = page.img_pil.height
-        base_font_size = max(EN_BASE_FONT_MIN,
-                             min(EN_BASE_FONT_MAX, page_height // EN_BASE_FONT_DIVISOR))
-
     # Two-pass rendering (same as render_page)
     artwork_inpainted: set[int] = set()
     for i, br in enumerate(page.bubble_results):
@@ -274,7 +256,6 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
         if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
             render_english_on_artwork(page.output_img, br.bbox,
                                       br.transformed,
-                                      base_font_size=base_font_size,
                                       inpainted=i in artwork_inpainted)
             continue
         if mode == PipelineMode.FURIGANA:
@@ -282,6 +263,6 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
                                      mask=br.mask)
         else:
             render_english(page.output_img, br.bbox, br.transformed,
-                           base_font_size=base_font_size, mask=br.mask)
+                           mask=br.mask)
 
     return encode_image_pil(page.output_img)
