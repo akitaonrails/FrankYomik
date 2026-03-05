@@ -15,7 +15,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late TextEditingController _urlController;
   late TextEditingController _tokenController;
   late String _pipeline;
-  late int _prefetchPages;
   late bool _autoTranslate;
   late String _targetLanguage;
 
@@ -26,7 +25,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _urlController = TextEditingController(text: s.serverUrl);
     _tokenController = TextEditingController(text: s.authToken);
     _pipeline = s.pipeline;
-    _prefetchPages = s.prefetchPages;
     _autoTranslate = s.autoTranslate;
     _targetLanguage = s.targetLanguage;
   }
@@ -43,7 +41,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       serverUrl: _urlController.text.trim(),
       authToken: _tokenController.text.trim(),
       pipeline: _pipeline,
-      prefetchPages: _prefetchPages,
       autoTranslate: _autoTranslate,
       targetLanguage: _targetLanguage,
     );
@@ -131,23 +128,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 .toList(),
             onChanged: (v) =>
                 setState(() => _targetLanguage = v ?? _targetLanguage),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: Text('Prefetch pages: $_prefetchPages'),
-              ),
-              Slider(
-                value: _prefetchPages.toDouble(),
-                min: 0,
-                max: 5,
-                divisions: 5,
-                label: '$_prefetchPages',
-                onChanged: (v) =>
-                    setState(() => _prefetchPages = v.toInt()),
-              ),
-            ],
           ),
           SwitchListTile(
             title: const Text('Auto-translate'),

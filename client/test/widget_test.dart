@@ -7,7 +7,6 @@ import 'package:frank_client/models/page_job.dart';
 import 'package:frank_client/models/site_config.dart';
 import 'package:frank_client/webview/strategies/naver_webtoon_strategy.dart';
 import 'package:frank_client/webview/strategies/kindle_strategy.dart';
-import 'package:frank_client/webview/kindle_prefetch_manager.dart';
 import 'package:frank_client/services/image_capture_service.dart';
 import 'package:frank_client/webview/dom_inspector.dart';
 import 'package:image/image.dart' as img;
@@ -308,21 +307,6 @@ void main() {
       final script = KindleStrategy().detectionScript;
       expect(script.contains('overlapAreaInViewport'), true);
       expect(script.contains('overlap < 2000'), true);
-    });
-  });
-
-  group('KindlePrefetchManager JS selectors', () {
-    test('blob URL script uses viewport-overlap area threshold', () {
-      final script = KindlePrefetchManager.debugGetBlobUrlScript;
-      expect(script.contains('overlapAreaInViewport'), true);
-      expect(script.contains('area < 2000'), true);
-    });
-
-    test('page mode script uses viewport-overlap area threshold', () {
-      final script = KindlePrefetchManager.debugPageModeScript;
-      expect(script.contains('overlapAreaInViewport'), true);
-      expect(script.contains('area < 2000'), true);
-      expect(script.contains('1.3'), true);
     });
   });
 
