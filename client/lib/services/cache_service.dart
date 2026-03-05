@@ -121,6 +121,23 @@ class CacheService {
     return bytes;
   }
 
+  /// Look up the image hash for a cached entry by metadata (title/chapter/page).
+  /// Returns the hash string, or null if no entry exists.
+  Future<String?> lookupHashByMetadata(
+      String pipeline, String title, String chapter, String pageNumber) async {
+    await ready;
+    final rows = await _db?.query(
+      'pages',
+      columns: ['image_hash'],
+      where:
+          'pipeline = ? AND title = ? AND chapter = ? AND page_number = ?',
+      whereArgs: [pipeline, title, chapter, pageNumber],
+      limit: 1,
+    );
+    if (rows == null || rows.isEmpty) return null;
+    return rows.first['image_hash'] as String?;
+  }
+
   /// Look up by metadata (title/chapter/page).
   Future<Uint8List?> lookupByMetadata(
       String pipeline, String title, String chapter, String pageNumber) async {

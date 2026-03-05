@@ -96,41 +96,46 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         return;
       }
 
-      // Also check by metadata (title/chapter/page)
+      // Also check by metadata (title/chapter/page) — but only if the
+      // source hash matches.  The Kindle reader loads different resolution
+      // images depending on window size; a metadata hit from a smaller
+      // screenshot would serve a worse translation for the larger image.
       if (title != null && chapter != null && pageNumber != null) {
-        final metaCached = await _cache.lookupByMetadata(
+        final metaHash = await _cache.lookupHashByMetadata(
           cachePipeline,
           title,
           chapter,
           pageNumber,
         );
-        if (metaCached != null) {
-          state = {
-            ...state,
-            pageId: PageJob(
-              pageId: pageId,
+        if (metaHash != null && metaHash == hash) {
+          final metaCached = await _cache.lookupByHash(hash, cachePipeline);
+          if (metaCached != null) {
+            state = {
+              ...state,
+              pageId: PageJob(
+                pageId: pageId,
+                title: title,
+                chapter: chapter,
+                pageNumber: pageNumber,
+                pipeline: effectivePipeline,
+                status: PageJobStatus.completed,
+                translatedImage: metaCached,
+                cached: true,
+                sourceHash: hash,
+              ),
+            };
+            unawaited(_backfillMetadataIfMissing(
+              hash: hash,
+              pipeline: cachePipeline,
+              imageBytes: imageBytes,
               title: title,
               chapter: chapter,
               pageNumber: pageNumber,
-              pipeline: effectivePipeline,
-              status: PageJobStatus.completed,
-              translatedImage: metaCached,
-              cached: true,
-              sourceHash: hash,
-            ),
-          };
-          // Backfill metadata for pages cached before metadata storage existed.
-          unawaited(_backfillMetadataIfMissing(
-            hash: hash,
-            pipeline: cachePipeline,
-            imageBytes: imageBytes,
-            title: title,
-            chapter: chapter,
-            pageNumber: pageNumber,
-            sourceUrl: sourceUrl,
-            priority: 'low',
-          ));
-          return;
+              sourceUrl: sourceUrl,
+              priority: 'low',
+            ));
+            return;
+          }
         }
       }
     }
