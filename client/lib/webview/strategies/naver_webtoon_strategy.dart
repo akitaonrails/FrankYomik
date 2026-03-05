@@ -47,6 +47,7 @@ class NaverWebtoonStrategy extends SiteStrategy {
   function reportPage(img, index) {
     // Skip tiny/placeholder images (must be at least 200px wide and 200px tall)
     if (img.naturalWidth < 200 || img.naturalHeight < 200) return;
+    img.dataset.frankIndex = String(index);
     var pageId = 'wt-' + index;
     if (window.__frankDetectedPages.has(pageId)) return;
     window.__frankDetectedPages.add(pageId);

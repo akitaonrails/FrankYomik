@@ -467,9 +467,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final index = (pageInfo['index'] as num?)?.toInt();
     if (index != null && pageId.startsWith('wt-')) {
       _detectedWebtoonPages[index] = pageInfo;
-      final detected = _detectedWebtoonPages.length;
-      final submitted = _submittedWebtoonIndices.length;
-      _updateInPageStatus('Page $pageId ($submitted/$detected queued)');
+      _updateWebtoonProgress();
 
       if (!settings.autoTranslate) {
         _updateInPageStatus('Auto-translate OFF');
@@ -698,7 +696,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final pipeline = _jsBridge.activeStrategy?.siteName == 'kindle'
         ? _kindlePipeline
         : _jsBridge.activeStrategy?.defaultPipeline;
-    _updateInPageStatus('Submitting $pageId...');
+    final isWebtoon = _jsBridge.activeStrategy?.siteName == 'webtoon';
+    if (!isWebtoon) _updateInPageStatus('Submitting $pageId...');
 
     // Extract metadata from URL
     final meta = _jsBridge.parseCurrentUrl(_currentUrl);
@@ -728,7 +727,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       'ms=${submitSw.elapsedMilliseconds}',
     );
 
-    _updateInPageStatus('Queued $pageId');
+    if (isWebtoon) {
+      _updateWebtoonProgress();
+    } else {
+      _updateInPageStatus('Queued $pageId');
+    }
 
     // Watch for completion to apply overlay
     _watchForCompletion(pageId);
@@ -760,7 +763,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         '[Batch] Submitting ${toSubmit.length} pages: $toSubmit '
         '(detected=${_detectedWebtoonPages.length}, submitted=${_submittedWebtoonIndices.length})',
       );
-      _updateInPageStatus('Batch: submitting ${toSubmit.length} pages...');
+      _updateWebtoonProgress();
 
       // Submit all pages in parallel for faster throughput
       await Future.wait(
@@ -777,9 +780,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         }),
       );
 
-      final total = _detectedWebtoonPages.length;
-      final done = _submittedWebtoonIndices.length;
-      _updateInPageStatus('Queued $done/$total pages');
+      _updateWebtoonProgress();
     } finally {
       _batchInProgress = false;
       // Check if more pages are waiting — schedule next batch
@@ -807,7 +808,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         existingJob.isComplete &&
         existingJob.translatedImage != null) {
       _ensureMetadataForPage(pageId);
-      _updateInPageStatus('$pageId done (cached)!');
+      if (_jsBridge.activeStrategy?.siteName == 'webtoon') {
+        _updateWebtoonProgress();
+      } else {
+        _updateInPageStatus('$pageId done (cached)!');
+      }
       // For Kindle, only overlay if the user is still viewing this page
       final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
       if (_showOverlay && (!isKindle || pageId == _currentKindlePageId)) {
@@ -820,12 +825,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final job = next[pageId];
       if (job == null) return;
       final prevJob = previous?[pageId];
-      if (prevJob?.status != job.status) {
+      final isWebtoonSite = _jsBridge.activeStrategy?.siteName == 'webtoon';
+      if (prevJob?.status != job.status && !isWebtoonSite) {
         _updateInPageStatus('$pageId: ${job.status.name}');
       }
       if (job.isComplete && job.translatedImage != null) {
         _ensureMetadataForPage(pageId);
-        _updateInPageStatus('$pageId done!');
+        if (isWebtoonSite) {
+          _updateWebtoonProgress();
+        } else {
+          _updateInPageStatus('$pageId done!');
+        }
         // Cancel this listener — job is done
         _completionListeners[pageId]?.close();
         _completionListeners.remove(pageId);
@@ -841,7 +851,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           }
         }
       } else if (job.isFailed) {
-        _updateInPageStatus('$pageId failed');
+        if (!isWebtoonSite) _updateInPageStatus('$pageId failed');
         _completionListeners[pageId]?.close();
         _completionListeners.remove(pageId);
         if (_jsBridge.activeStrategy?.siteName == 'kindle' &&
@@ -1341,7 +1351,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     '<button id="__frankReload" title="Reload page">&#x21BB; Reload</button>' +
     '<button id="__frankClearCache" title="Clear all cached translations">&#x1F5D1; Clear Cache</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
-    '<span id="__frankStatus"></span>';
+    '<span id="__frankStatus"></span>' +
+    '<div id="__frankProgress" style="display:none;align-items:center;gap:6px;">' +
+      '<div style="width:120px;height:8px;background:rgba(255,255,255,0.2);border-radius:4px;overflow:hidden;">' +
+        '<div id="__frankProgressFill" style="width:0%;height:100%;background:#4caf50;border-radius:4px;transition:width 0.3s;"></div>' +
+      '</div>' +
+      '<span id="__frankProgressText" style="font-size:11px;color:rgba(255,255,255,0.7);"></span>' +
+    '</div>';
   bar.style.cssText =
     'position:fixed; top:8px; left:48px; z-index:999999;' +
     'display:flex; align-items:center; gap:6px;' +
@@ -1755,6 +1771,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   window.__frankSetStatus = function(text) {
     var el = document.getElementById('__frankStatus');
     if (el) el.textContent = text;
+  };
+  window.__frankSetProgress = function(completed, total) {
+    var prog = document.getElementById('__frankProgress');
+    var fill = document.getElementById('__frankProgressFill');
+    var text = document.getElementById('__frankProgressText');
+    if (!prog || !fill || !text) return;
+    if (total <= 0) { prog.style.display = 'none'; return; }
+    prog.style.display = 'flex';
+    var pct = Math.round((completed / total) * 100);
+    fill.style.width = pct + '%';
+    text.textContent = completed + '/' + total;
+    if (completed >= total) {
+      setTimeout(function() { prog.style.display = 'none'; }, 3000);
+    }
   };
   window.__frankSetAutoState = function(on) {
     var el = document.getElementById('__frankAuto');
@@ -3061,6 +3091,25 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     // Force-submit the next batch of webtoon pages
     _submitNextBatch(force: force);
+  }
+
+  /// Update the webtoon progress bar (completed/total).
+  void _updateWebtoonProgress() {
+    if (_jsBridge.activeStrategy?.siteName != 'webtoon') return;
+    final controller = _webController;
+    if (controller == null) return;
+    final total = _detectedWebtoonPages.length;
+    if (total == 0) return;
+    final jobs = ref.read(jobsProvider);
+    int completed = 0;
+    for (final idx in _detectedWebtoonPages.keys) {
+      final job = jobs['wt-$idx'];
+      if (job != null && job.isComplete) completed++;
+    }
+    controller.evaluateJavascript(
+      source:
+          'if(window.__frankSetProgress) window.__frankSetProgress($completed, $total);',
+    );
   }
 
   /// Push a status message into the in-page toolbar.

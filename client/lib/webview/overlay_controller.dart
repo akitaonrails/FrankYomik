@@ -40,6 +40,23 @@ class OverlayController {
       break;
     }
   }
+  // Fallback 1: match by data-frank-index (set during webtoon detection)
+  if (!img && '${pageId ?? ''}'.startsWith('wt-')) {
+    var wtIdx = '${pageId ?? ''}'.replace('wt-', '');
+    for (var i = 0; i < allImgs.length; i++) {
+      if (allImgs[i].dataset.frankIndex === wtIdx) {
+        img = allImgs[i]; matchType = 'frank-index'; break;
+      }
+    }
+  }
+  // Fallback 2: match by DOM position among toon_image elements
+  if (!img && '${pageId ?? ''}'.startsWith('wt-')) {
+    var wtIdx = parseInt('${pageId ?? ''}'.replace('wt-', ''));
+    var toonImgs = document.querySelectorAll('img.toon_image');
+    if (wtIdx >= 0 && wtIdx < toonImgs.length) {
+      img = toonImgs[wtIdx]; matchType = 'dom-index';
+    }
+  }
   if (!img) {
     console.log('[Frank] No img found for src: ' + targetSrc);
     console.log('[Frank] Available srcs:');
