@@ -69,14 +69,11 @@ jobs:
         working-directory: server
         run: |
           python -m venv .venv
-          source .venv/bin/activate
-          pip install -r requirements.txt
+          .venv/bin/pip install -r requirements.txt
 
       - name: Run Python unit tests
         working-directory: server
-        run: |
-          source .venv/bin/activate
-          PYTHONPATH=. .venv/bin/pytest tests/unit/ -v
+        run: PYTHONPATH=. .venv/bin/pytest tests/unit/ -v
 
       - name: Run Go tests
         working-directory: server
