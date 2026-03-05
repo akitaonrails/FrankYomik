@@ -142,10 +142,10 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     """Compute a tighter bbox that fits inside the bubble mask.
 
     For each row in the mask, find the horizontal extent of filled pixels.
-    Return the intersection (max left-edge, min right-edge) across the
-    middle ~70% of rows — the region where text will actually be rendered.
-    This avoids sizing text to the full detector bbox when the bubble is
-    curved/oval, which would cause clipping at the edges.
+    Return the median left/right edges across the middle ~84% of rows.
+    Using median instead of intersection (narrowest row) recovers ~20% more
+    width for oval bubbles — text is mask-clipped at render so minor edge
+    overflow on a few outer rows is invisible.
     """
     x1, y1, x2, y2 = bbox
     crop = mask[y1:y2, x1:x2]
@@ -162,28 +162,35 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     mask_top, mask_bot = int(filled[0]), int(filled[-1])
     mask_h = mask_bot - mask_top + 1
 
-    # Vertical: inset 15% from top/bottom of the mask to stay away from
+    # Vertical: inset 8% from top/bottom of the mask to stay away from
     # the pointed/narrow tips of the bubble.
-    v_inset = max(1, mask_h * 15 // 100)
+    v_inset = max(1, mask_h * 8 // 100)
     safe_top = mask_top + v_inset
     safe_bot = mask_bot - v_inset
     if safe_top >= safe_bot:
         return bbox
 
-    # Horizontal: across the safe vertical range, find the narrowest
-    # horizontal span (intersection of all row spans).
-    max_left = 0
-    min_right = w
+    # Horizontal: across the safe vertical range, use median left/right
+    # edges rather than the narrowest row.  Text is mask-clipped at render
+    # so minor edge overflow on a few rows is invisible.
+    lefts = []
+    rights = []
     for r in range(safe_top, safe_bot + 1):
         cols = np.where(crop[r] > 0)[0]
         if len(cols) > 0:
-            max_left = max(max_left, int(cols[0]))
-            min_right = min(min_right, int(cols[-1]))
+            lefts.append(int(cols[0]))
+            rights.append(int(cols[-1]))
 
-    if max_left >= min_right:
+    if not lefts:
         return bbox
 
-    return (x1 + max_left, y1 + safe_top, x1 + min_right + 1, y1 + safe_bot + 1)
+    med_left = int(np.median(lefts))
+    med_right = int(np.median(rights))
+
+    if med_left >= med_right:
+        return bbox
+
+    return (x1 + med_left, y1 + safe_top, x1 + med_right + 1, y1 + safe_bot + 1)
 
 
 # --- English rendering entry point ---
