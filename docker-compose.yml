@@ -59,6 +59,7 @@ services:
       args:
         APP_UID: ${APP_UID:-1026}
         APP_GID: ${APP_GID:-1026}
+    user: "${APP_UID:-1026}:${APP_GID:-1026}"
     ports:
       - "8080:8080"
     environment:
