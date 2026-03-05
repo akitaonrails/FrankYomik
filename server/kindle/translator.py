@@ -19,8 +19,14 @@ def translate(japanese_text: str, target_lang: str = "en") -> str:
     """Translate Japanese text to the target language using Ollama."""
     _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
     prompt = (
-        f"Translate this Japanese manga dialogue to natural {lang_name}.\n"
-        "Keep it concise and suitable for a speech bubble.\n"
+        f"Translate this Japanese manga dialogue to natural, fluent {lang_name}.\n"
+        "Guidelines:\n"
+        "- Convey the MEANING and TONE, not a word-for-word literal translation.\n"
+        f"- Use natural spoken {lang_name} that fits a manga speech bubble.\n"
+        "- Keep Japanese names exactly as-is (e.g. Katsuki, Deku, Sensei).\n"
+        "- Preserve Japanese nicknames and honorific-based names (e.g. Kacchan, "
+        "Onee-chan) — do NOT translate or replace them.\n"
+        "- Keep it concise — speech bubbles have limited space.\n"
         f"Output ONLY the {lang_name} translation, nothing else.\n"
         f"\nJapanese: {japanese_text}"
     )

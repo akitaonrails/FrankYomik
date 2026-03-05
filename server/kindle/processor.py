@@ -19,8 +19,8 @@ from .image_utils import (
 )
 from .ocr import extract_text_from_region, is_valid_japanese
 from .text_renderer import (
-    draw_debug_boxes, render_english, render_english_on_artwork,
-    render_furigana_vertical,
+    compute_bubble_font_size, draw_debug_boxes, render_english,
+    render_english_on_artwork, render_furigana_vertical,
 )
 from .translator import translate
 
@@ -175,6 +175,38 @@ def transform_translate(br: BubbleResult, target_lang: str = "en") -> None:
         log.info("  Translation empty for '%s', skipping", br.ocr_text)
 
 
+def _compute_normalized_font_sizes(
+    bubble_results: list, base_font_size: int | None,
+) -> dict[int, int]:
+    """Pre-compute and normalize font sizes for English bubbles.
+
+    Uses mask-safe height (prevents clipping) with raw width (maximizes
+    space).  Caps outliers at median * 1.4 so sizes stay consistent
+    across the page while still allowing natural variation.
+    """
+    font_sizes: dict[int, int] = {}
+    for i, br in enumerate(bubble_results):
+        if br.transformed is None or br.is_artwork_text:
+            continue
+        size = compute_bubble_font_size(
+            br.bbox, br.transformed, base_font_size, br.mask)
+        if size is not None:
+            font_sizes[i] = size
+
+    # Cap outliers: need at least 3 bubbles for a meaningful median
+    if len(font_sizes) >= 3:
+        sizes = sorted(font_sizes.values())
+        median = sizes[len(sizes) // 2]
+        cap = int(median * 1.4)
+        for i in font_sizes:
+            if font_sizes[i] > cap:
+                log.debug("  Capping bubble %d font %d→%d (median=%d)",
+                          i, font_sizes[i], cap, median)
+                font_sizes[i] = cap
+
+    return font_sizes
+
+
 def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
                 debug: bool = False) -> None:
     """Stage 5: Clear bubbles, render transformed text, save output."""
@@ -187,11 +219,14 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
     # Page-wide font target for consistent sizing across all bubbles.
     # Proportional to image height so high-DPI screens get larger text.
     base_font_size = None
+    font_sizes: dict[int, int] = {}
     if mode == PipelineMode.TRANSLATE:
         page_height = page.img_pil.height
         base_font_size = max(MIN_FONT_SIZE, page_height // EN_PAGE_FONT_DIVISOR)
         log.info("Page font target: %dpx (page height=%d)",
                  base_font_size, page_height)
+        font_sizes = _compute_normalized_font_sizes(
+            page.bubble_results, base_font_size)
 
     # Two-pass rendering: clear all bubbles first, then render all text.
     # This prevents overlapping bubbles from erasing each other's rendered text.
@@ -209,7 +244,7 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
             continue
         clear_text_strokes(page.output_img, br.bbox, mask=br.mask)
 
-    # Pass 2: Render text
+    # Pass 2: Render text (using normalized font sizes for English)
     for i, br in enumerate(page.bubble_results):
         if br.transformed is None:
             continue
@@ -223,8 +258,9 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
             render_furigana_vertical(page.output_img, br.bbox, br.transformed,
                                      mask=br.mask)
         else:
+            size = font_sizes.get(i, base_font_size)
             render_english(page.output_img, br.bbox, br.transformed,
-                           base_font_size=base_font_size, mask=br.mask)
+                           base_font_size=size, mask=br.mask)
 
     # Save
     suffix = "-furigana.png" if mode == PipelineMode.FURIGANA else "-en.png"
@@ -248,9 +284,12 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
     page.output_img = page.img_pil.copy()
 
     base_font_size = None
+    font_sizes: dict[int, int] = {}
     if mode == PipelineMode.TRANSLATE:
         page_height = page.img_pil.height
         base_font_size = max(MIN_FONT_SIZE, page_height // EN_PAGE_FONT_DIVISOR)
+        font_sizes = _compute_normalized_font_sizes(
+            page.bubble_results, base_font_size)
 
     # Two-pass rendering (same as render_page)
     artwork_inpainted: set[int] = set()
@@ -278,7 +317,8 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
             render_furigana_vertical(page.output_img, br.bbox, br.transformed,
                                      mask=br.mask)
         else:
+            size = font_sizes.get(i, base_font_size)
             render_english(page.output_img, br.bbox, br.transformed,
-                           base_font_size=base_font_size, mask=br.mask)
+                           base_font_size=size, mask=br.mask)
 
     return encode_image_pil(page.output_img)

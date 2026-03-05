@@ -194,6 +194,37 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     return (x1 + med_left, y1 + safe_top, x1 + med_right + 1, y1 + safe_bot + 1)
 
 
+# --- Font size pre-computation for page-level normalization ---
+
+def compute_bubble_font_size(bbox: tuple[int, int, int, int],
+                              text: str,
+                              base_font_size: int | None = None,
+                              mask: 'np.ndarray | None' = None) -> int | None:
+    """Compute the fitted font size for horizontal English text in a bubble.
+
+    Uses raw bbox width (maximizes horizontal space) but mask-safe height
+    (prevents vertical clipping by the oval mask).  Returns None for
+    SFX/vertical layout so the caller can skip normalization for those.
+    """
+    if _choose_layout(text) == "vertical_sfx":
+        return None
+
+    x1, y1, x2, y2 = bbox
+    bw = x2 - x1 - 2 * TEXT_MARGIN
+
+    # Use mask-safe height to prevent clipping, raw width for max space
+    if mask is not None:
+        safe = _mask_safe_bbox(bbox, mask)
+        bh = safe[3] - safe[1] - 2 * TEXT_MARGIN
+    else:
+        bh = y2 - y1 - 2 * TEXT_MARGIN
+
+    if bw < 10 or bh < 10:
+        return None
+
+    return _fit_horizontal_english_size(text, bw, bh, base_font_size)
+
+
 # --- English rendering entry point ---
 
 def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
