@@ -58,6 +58,7 @@ class NaverWebtoonStrategy extends SiteStrategy {
       src: img.src || img.dataset.src || '',
       width: img.naturalWidth,
       height: img.naturalHeight,
+      totalPages: window.__frankTotalPages || 0,
     });
   }
 

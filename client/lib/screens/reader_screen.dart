@@ -104,6 +104,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// All detected webtoon page infos, keyed by index.
   final Map<int, Map<String, dynamic>> _detectedWebtoonPages = {};
 
+  /// Total webtoon images reported by JS (includes unloaded ones).
+  int _webtoonTotalPages = 0;
+
   /// Webtoon page indices that were successfully captured and submitted.
   final Set<int> _submittedWebtoonIndices = {};
 
@@ -203,6 +206,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               if (!preserveKindleSessionState) {
                 _detectedWebtoonPages.clear();
                 _submittedWebtoonIndices.clear();
+                _webtoonTotalPages = 0;
                 _batchInProgress = false;
                 // Reset JS detection state so re-injection can re-detect pages
                 controller.evaluateJavascript(
@@ -467,6 +471,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final index = (pageInfo['index'] as num?)?.toInt();
     if (index != null && pageId.startsWith('wt-')) {
       _detectedWebtoonPages[index] = pageInfo;
+      final totalFromJs = (pageInfo['totalPages'] as num?)?.toInt() ?? 0;
+      if (totalFromJs > _webtoonTotalPages) _webtoonTotalPages = totalFromJs;
       _updateWebtoonProgress();
 
       if (!settings.autoTranslate) {
@@ -3098,7 +3104,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (_jsBridge.activeStrategy?.siteName != 'webtoon') return;
     final controller = _webController;
     if (controller == null) return;
-    final total = _detectedWebtoonPages.length;
+    // Use JS-reported total (includes unloaded images) so the bar doesn't
+    // show 1/1 while only the first image has loaded.
+    final detected = _detectedWebtoonPages.length;
+    final total = _webtoonTotalPages > detected ? _webtoonTotalPages : detected;
     if (total == 0) return;
     final jobs = ref.read(jobsProvider);
     int completed = 0;
