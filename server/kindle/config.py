@@ -64,8 +64,14 @@ MANGA_OCR_DEVICE = _ocr.get("device", "cpu")  # Force CPU to avoid VRAM conflict
 # --- Text rendering ---
 FURIGANA_SIZE_RATIO = 0.45   # Furigana font size relative to main text
 MIN_FONT_SIZE = 10
-MAX_FONT_SIZE = 60           # Cap for vertical JP/SFX (English uses bubble size directly)
+MAX_FONT_SIZE = 60           # Cap for vertical JP/SFX
 TEXT_MARGIN = 8               # Margin inside bubble for text placement
+
+# English page-wide font target: page_height / divisor.
+# Scales proportionally with screen resolution (e.g. ~54px for 1345px desktop,
+# ~106px for 2640px Galaxy Z Fold).  All bubbles on a page use this as the
+# target; smaller bubbles shrink as needed for text to fit.
+EN_PAGE_FONT_DIVISOR = 25
 
 # --- Text detection (EasyOCR for artwork text outside bubbles) ---
 TEXT_DETECTION_CONFIDENCE = _text_det.get("confidence", 0.3)

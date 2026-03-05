@@ -7,7 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable
-
+from kindle.config import EN_PAGE_FONT_DIVISOR, MIN_FONT_SIZE
 from kindle.bubble_detector import detect_bubbles, extract_bubble_mask_manga
 from kindle.furigana import annotate as furigana_annotate
 from kindle.image_utils import (
@@ -239,6 +239,11 @@ def _rerender_from_metadata(job: ProcessingJob,
 
     _report(progress_cb, "rerender", "drawing edits", 50)
 
+    # Page-wide font target for consistent sizing.
+    base_font_size = None
+    if job.pipeline != "manga_furigana":
+        base_font_size = max(MIN_FONT_SIZE, img_h // EN_PAGE_FONT_DIVISOR)
+
     # Two-pass rendering: clear all regions first, then render text.
     # Prevents overlapping bubbles from erasing each other's rendered text.
 
@@ -295,7 +300,7 @@ def _rerender_from_metadata(job: ProcessingJob,
                                      mask=item["mask"])
         else:
             render_english(img_out, item["bbox"], item["value"],
-                           mask=item["mask"])
+                           base_font_size=base_font_size, mask=item["mask"])
         applied += 1
 
     _report(progress_cb, "rerender", "encoding", 95)
