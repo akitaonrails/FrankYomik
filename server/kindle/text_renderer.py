@@ -522,8 +522,8 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         text_fill = "black"
         furi_bg_fill = "white"
 
-    col_width = font_size + furi_size + 4
-    char_height = int(font_size * 1.15)
+    col_width = font_size + furi_size + 2
+    char_height = int(font_size * 1.05)
 
     furi_space = furi_size + 2 if any(c["furigana"] for c in chars) else 0
 
@@ -611,7 +611,7 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
 
     for _ in range(15):
         mid = (lo + hi) // 2
-        furi_extra = int(mid * FURIGANA_SIZE_RATIO) + 4 if has_furigana else 0
+        furi_extra = int(mid * FURIGANA_SIZE_RATIO) + 2 if has_furigana else 0
         col_width = mid + furi_extra
         char_height = int(mid * 1.15)
 
