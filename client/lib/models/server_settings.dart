@@ -10,7 +10,7 @@ class ServerSettings {
   final bool isLoaded;
 
   const ServerSettings({
-    this.serverUrl = 'https://localhost:8080',
+    this.serverUrl = 'http://localhost:8080',
     this.authToken = 'mysecrettoken',
     this.pipeline = 'manga_translate',
     this.autoTranslate = true,

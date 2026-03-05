@@ -15,7 +15,7 @@ class SettingsNotifier extends StateNotifier<ServerSettings> {
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     state = ServerSettings(
-      serverUrl: prefs.getString('server_url') ?? 'https://localhost:8080',
+      serverUrl: prefs.getString('server_url') ?? 'http://localhost:8080',
       authToken: prefs.getString('auth_token') ?? 'mysecrettoken',
       pipeline: prefs.getString('pipeline') ?? 'manga_furigana',
       autoTranslate: prefs.getBool('auto_translate') ?? true,

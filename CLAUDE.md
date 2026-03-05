@@ -203,9 +203,9 @@ Model detections are trusted — no user-facing false-positive marking UI. Users
 Remote access is provided via Cloudflare Tunnel (`cloudflared`), configured in `docker-compose.yml`:
 
 - **`init-cloudflared`**: Busybox init container that copies `.cloudflared/` credentials into a Docker named volume (`cloudflared-config`). This avoids permission issues with NFS or restrictive host mounts.
-- **`cloudflared`**: Runs the tunnel using config from the volume, routes `localhost:8080` → `http://api:8080`.
-- **Setup**: Requires `cloudflared tunnel login`, `cloudflared tunnel create yomik`, and DNS routing. Credentials (tunnel UUID JSON + `config.yml`) go in `.cloudflared/` (gitignored).
-- **Client default**: Flutter client defaults to `https://localhost:8080` with auth token `mysecrettoken`.
+- **`cloudflared`**: Runs the tunnel using config from the volume, routes `<your-hostname>` → `http://api:8080`.
+- **Setup**: Requires `cloudflared tunnel login`, `cloudflared tunnel create <name>`, and DNS routing. Credentials (tunnel UUID JSON + `config.yml`) go in `.cloudflared/` (gitignored).
+- **Client default**: Flutter client defaults to `http://localhost:8080` with auth token `mysecrettoken`. Configure the server URL in Settings when using a remote tunnel.
 
 ### Text Rendering (text_renderer.py)
 

@@ -179,7 +179,7 @@ The `docker-compose.yml` includes `init-cloudflared` and `cloudflared` services.
 docker compose up -d
 ```
 
-The API is now reachable at `https://yomik.example.com`. The Flutter client defaults to this URL — configure it in Settings.
+The API is now reachable at `https://yomik.example.com`. Configure this URL in the Flutter client's Settings screen.
 
 ## Flutter Client
 

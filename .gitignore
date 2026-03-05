@@ -38,6 +38,10 @@ client/pubspec.lock
 # AB test results
 server/tests/ab_*_results.json
 
+# Environment and secrets
+.env
+.kamal/
+
 # Cloudflare tunnel credentials
 .cloudflared/
 
