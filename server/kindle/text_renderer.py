@@ -3,6 +3,7 @@
 import logging
 import re
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import (
@@ -134,6 +135,57 @@ def _load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
+# --- Mask-aware bounding box ---
+
+def _mask_safe_bbox(bbox: tuple[int, int, int, int],
+                    mask: np.ndarray) -> tuple[int, int, int, int]:
+    """Compute a tighter bbox that fits inside the bubble mask.
+
+    For each row in the mask, find the horizontal extent of filled pixels.
+    Return the intersection (max left-edge, min right-edge) across the
+    middle ~70% of rows — the region where text will actually be rendered.
+    This avoids sizing text to the full detector bbox when the bubble is
+    curved/oval, which would cause clipping at the edges.
+    """
+    x1, y1, x2, y2 = bbox
+    crop = mask[y1:y2, x1:x2]
+    h, w = crop.shape[:2]
+    if h < 4 or w < 4:
+        return bbox
+
+    # Per-row: does the row have any mask pixels?
+    row_any = np.any(crop > 0, axis=1)
+    filled = np.where(row_any)[0]
+    if len(filled) < 4:
+        return bbox
+
+    mask_top, mask_bot = int(filled[0]), int(filled[-1])
+    mask_h = mask_bot - mask_top + 1
+
+    # Vertical: inset 15% from top/bottom of the mask to stay away from
+    # the pointed/narrow tips of the bubble.
+    v_inset = max(1, mask_h * 15 // 100)
+    safe_top = mask_top + v_inset
+    safe_bot = mask_bot - v_inset
+    if safe_top >= safe_bot:
+        return bbox
+
+    # Horizontal: across the safe vertical range, find the narrowest
+    # horizontal span (intersection of all row spans).
+    max_left = 0
+    min_right = w
+    for r in range(safe_top, safe_bot + 1):
+        cols = np.where(crop[r] > 0)[0]
+        if len(cols) > 0:
+            max_left = max(max_left, int(cols[0]))
+            min_right = min(min_right, int(cols[-1]))
+
+    if max_left >= min_right:
+        return bbox
+
+    return (x1 + max_left, y1 + safe_top, x1 + min_right + 1, y1 + safe_bot + 1)
+
+
 # --- English rendering entry point ---
 
 def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
@@ -142,8 +194,13 @@ def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
     """Render English text inside a bubble, choosing the best layout.
 
     When `mask` is provided, the rendered text is clipped to the bubble
-    shape using an RGBA overlay + mask-clip pattern.
+    shape using an RGBA overlay + mask-clip pattern.  The bbox is first
+    tightened to the mask's interior so text is sized to the actual bubble
+    shape rather than the detector bounding box.
     """
+    if mask is not None:
+        bbox = _mask_safe_bbox(bbox, mask)
+
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
@@ -166,8 +223,6 @@ def _render_vertical_sfx(img: Image.Image, bbox: tuple[int, int, int, int],
                          text: str,
                          mask: 'np.ndarray | None' = None) -> None:
     """Render a sound effect / short exclamation vertically with large font."""
-    import numpy as np
-
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
@@ -253,8 +308,6 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
     Words are only hyphenated during word wrap when they don't fit on a line.
     When `mask` is provided, renders to an RGBA overlay and clips to mask.
     """
-    import numpy as np
-
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
@@ -407,8 +460,6 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
 
     When `mask` is provided, renders to an RGBA overlay and clips to mask.
     """
-    import numpy as np
-
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
