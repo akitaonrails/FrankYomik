@@ -31,5 +31,10 @@ abstract class SiteStrategy {
   PageMetadata? parseUrl(String url);
 
   /// Whether this strategy matches the given URL.
-  bool matches(String url) => RegExp(urlPattern).hasMatch(url);
+  bool matches(String url) {
+    final uri = Uri.tryParse(url);
+    final host = uri?.host.toLowerCase();
+    if (host == null || host.isEmpty) return false;
+    return RegExp(urlPattern).hasMatch(host);
+  }
 }

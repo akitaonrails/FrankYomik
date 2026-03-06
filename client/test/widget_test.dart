@@ -18,7 +18,9 @@ String _readOverlaySource() {
   // Find project root (test runs from frank_client/)
   final file = File('lib/webview/overlay_controller.dart');
   if (!file.existsSync()) {
-    throw StateError('overlay_controller.dart not found at ${file.absolute.path}');
+    throw StateError(
+      'overlay_controller.dart not found at ${file.absolute.path}',
+    );
   }
   return file.readAsStringSync();
 }
@@ -108,8 +110,37 @@ void main() {
         true,
       );
       expect(s.matches('https://m.comic.naver.com/webtoon'), true);
+      expect(
+        s.matches('https://evil.example/?next=https://comic.naver.com/webtoon'),
+        false,
+      );
       expect(s.matches('https://www.webtoons.com/en/action/tower'), false);
       expect(s.matches('https://example.com'), false);
+    });
+
+    test('allows only expected webtoon image hosts', () {
+      expect(
+        NaverWebtoonStrategy.isAllowedImageUrl(
+          'https://image-comic.pstatic.net/foo/bar.jpg',
+        ),
+        true,
+      );
+      expect(
+        NaverWebtoonStrategy.isAllowedImageUrl(
+          'https://webtoon-phinf.pstatic.net/foo/bar.jpg',
+        ),
+        true,
+      );
+      expect(
+        NaverWebtoonStrategy.isAllowedImageUrl(
+          'https://evil.example/image-comic.pstatic.net.jpg',
+        ),
+        false,
+      );
+      expect(
+        NaverWebtoonStrategy.isAllowedImageUrl('file:///etc/passwd'),
+        false,
+      );
     });
 
     test('parseUrl extracts titleId and episode number', () {
@@ -148,6 +179,10 @@ void main() {
     test('matches kindle URLs', () {
       final s = KindleStrategy();
       expect(s.matches('https://read.amazon.co.jp/manga/B0ABC12345'), true);
+      expect(
+        s.matches('https://evil.example/?next=https://read.amazon.co.jp/manga'),
+        false,
+      );
       expect(s.matches('https://www.amazon.com'), false);
     });
 
@@ -431,13 +466,19 @@ void main() {
       source = _readOverlaySource();
     });
 
-    test('uses only synchronous IIFEs — no async (WebKitGTK cannot resolve Promises)', () {
-      // The source should contain "(function()" but never "(async function()"
-      // async IIFEs cause PlatformException(JS_ERROR, Unsupported result type)
-      expect(source.contains('(function()'), true);
-      expect(source.contains('(async function()'), false,
-          reason: 'async IIFEs break WebKitGTK evaluate_javascript');
-    });
+    test(
+      'uses only synchronous IIFEs — no async (WebKitGTK cannot resolve Promises)',
+      () {
+        // The source should contain "(function()" but never "(async function()"
+        // async IIFEs cause PlatformException(JS_ERROR, Unsupported result type)
+        expect(source.contains('(function()'), true);
+        expect(
+          source.contains('(async function()'),
+          false,
+          reason: 'async IIFEs break WebKitGTK evaluate_javascript',
+        );
+      },
+    );
 
     test('webtoon overlay uses decode().then() for GPU compositor nudge', () {
       expect(source.contains('img.decode().then(function()'), true);
@@ -516,5 +557,4 @@ void main() {
       expect(job.cached, true);
     });
   });
-
 }

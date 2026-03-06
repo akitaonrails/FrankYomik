@@ -5,6 +5,14 @@ import 'base_strategy.dart';
 /// Image selector: `img.toon_image` (same as the Python scraper).
 /// URL pattern: /webtoon/detail?titleId=xxx&no=yyy
 class NaverWebtoonStrategy extends SiteStrategy {
+  static const Set<String> _allowedHosts = {
+    'comic.naver.com',
+    'm.comic.naver.com',
+    'image-comic.pstatic.net',
+    'webtoon-phinf.pstatic.net',
+    'swebtoon-phinf.pstatic.net',
+  };
+
   @override
   String get siteName => 'webtoon';
 
@@ -136,7 +144,8 @@ class NaverWebtoonStrategy extends SiteStrategy {
 ''';
 
   @override
-  String captureScript(String pageId) => '''
+  String captureScript(String pageId) =>
+      '''
 (async function() {
   var index = parseInt('$pageId'.replace('wt-', ''));
 
@@ -196,5 +205,16 @@ class NaverWebtoonStrategy extends SiteStrategy {
       pageNumber: '0', // Webtoons are single long pages
       sourceUrl: url,
     );
+  }
+
+  static bool isAllowedImageUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return false;
+    if (uri.scheme != 'http' && uri.scheme != 'https') return false;
+
+    final host = uri.host.toLowerCase();
+    if (_allowedHosts.contains(host)) return true;
+    if (host.endsWith('.pstatic.net')) return true;
+    return false;
   }
 }

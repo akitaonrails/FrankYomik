@@ -19,6 +19,8 @@ from typing import Any
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9\-]")
+_PATH_COMPONENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
 class PageCache:
@@ -39,6 +41,17 @@ class PageCache:
         return hashlib.sha256(data).hexdigest()
 
     @staticmethod
+    def _safe_component(value: str) -> str:
+        value = (value or "").strip()
+        if not value or value in {".", ".."}:
+            return ""
+        if "/" in value or "\\" in value:
+            return ""
+        if not _PATH_COMPONENT_RE.fullmatch(value):
+            return ""
+        return value
+
+    @staticmethod
     def _canonical_json_bytes(payload: Any) -> bytes:
         if payload is None:
             payload = {}
@@ -52,18 +65,27 @@ class PageCache:
         return os.path.join(self.v2_root, "objects", sha256_hex[:2], sha256_hex[2:4], sha256_hex)
 
     def _manifest_path(self, pipeline: str, source_hash: str) -> str:
+        pipeline = self._safe_component(pipeline)
+        if not pipeline or not _SHA256_RE.fullmatch(source_hash or ""):
+            return ""
         return os.path.join(self.v2_root, "pages", "by-hash", pipeline, source_hash, "manifest.json")
 
     def _ref_path(self, pipeline: str, title: str, chapter: str,
                   page_number: str) -> str:
         if not (pipeline and title and chapter and page_number):
             return ""
+        pipeline = self._safe_component(pipeline)
+        title_slug = self._safe_component(self._slugify(title))
+        chapter = self._safe_component(chapter)
+        page_number = self._safe_component(page_number)
+        if not (pipeline and title_slug and chapter and page_number):
+            return ""
         return os.path.join(
             self.v2_root,
             "pages",
             "by-ref",
             pipeline,
-            self._slugify(title),
+            title_slug,
             chapter,
             f"{page_number}.json",
         )
@@ -104,6 +126,8 @@ class PageCache:
     def load_manifest_by_hash(self, pipeline: str,
                               source_hash: str) -> dict[str, Any] | None:
         path = self._manifest_path(pipeline, source_hash)
+        if not path:
+            return None
         try:
             with open(path, "rb") as f:
                 manifest = json.load(f)
@@ -205,6 +229,8 @@ class PageCache:
             raise ValueError("missing pipeline")
         if self._hash_bytes(source_image_bytes) != source_hash:
             raise ValueError("source hash mismatch")
+        if not self._manifest_path(pipeline, source_hash):
+            raise ValueError("invalid cache key")
 
         metadata_bytes = self._canonical_json_bytes(metadata_payload)
         source_obj_sha, source_obj_size = self._store_object(source_image_bytes)

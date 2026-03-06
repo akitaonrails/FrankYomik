@@ -9,9 +9,11 @@ import (
 	"image/color"
 	"image/png"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +163,40 @@ func TestAuthMiddlewareErrorFormat(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "missing authorization") {
 		t.Errorf("expected JSON error message, got: %s", body)
+	}
+}
+
+func TestCacheRejectsUnsafePathComponents(t *testing.T) {
+	root := t.TempDir()
+	cache := NewCache(root)
+	hash := strings.Repeat("a", 64)
+
+	if got := cache.refPath("manga_translate", "One Piece", "../../etc", "003"); got != "" {
+		t.Fatalf("refPath should reject unsafe chapter, got %q", got)
+	}
+	if got := cache.legacyImagePath("manga_translate", "One Piece", "1084", "../003"); got != "" {
+		t.Fatalf("legacyImagePath should reject unsafe page, got %q", got)
+	}
+	if got := cache.manifestByHashPath("../escape", hash); got != "" {
+		t.Fatalf("manifestByHashPath should reject unsafe pipeline, got %q", got)
+	}
+
+	if err := cache.LinkRef("manga_translate", "One Piece", "../../etc", "003", hash); err != nil {
+		t.Fatalf("LinkRef should fail closed without writing, got %v", err)
+	}
+
+	var found bool
+	_ = filepath.Walk(root, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if path != root {
+			found = true
+		}
+		return nil
+	})
+	if found {
+		t.Fatal("unexpected write outside cache path guard")
 	}
 }
 

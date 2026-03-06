@@ -76,6 +76,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   int _kindleOverlayOk = 0;
   int _kindleOverlayFail = 0;
   int _kindleOverlayFallback = 0;
+
   /// Selected pipeline for Kindle pages (furigana vs english translation).
   /// Initialized from global settings in initState, overridden per-volume.
   late String _kindlePipeline;
@@ -143,82 +144,81 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       body: SafeArea(
         bottom: false,
         child: AppWebView(
-            initialUrl: widget.initialUrl,
-            userAgent:
-                'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-            onWebViewCreated: (controller) {
-              _webController = controller;
-              _jsBridge.attach(controller);
-              _inspector.attach(controller);
-              _registerToolbarHandler(controller);
-              _jsBridge.onPageDetected = _onPageDetected;
-            },
-            onLoadStop: (controller, url) {
-              final urlStr = url ?? '';
-              setState(() => _currentUrl = urlStr);
-              final isKindleNow = urlStr.contains('read.amazon.co.jp');
-              final preserveKindleSessionState =
-                  isKindleNow && _lastLoadStopUrl == urlStr;
+          initialUrl: widget.initialUrl,
+          userAgent:
+              'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+          onWebViewCreated: (controller) {
+            _webController = controller;
+            _jsBridge.attach(controller);
+            _inspector.attach(controller);
+            _registerToolbarHandler(controller);
+            _jsBridge.onPageDetected = _onPageDetected;
+          },
+          onLoadStop: (controller, url) {
+            final urlStr = url ?? '';
+            setState(() => _currentUrl = urlStr);
+            final isKindleNow = urlStr.contains('read.amazon.co.jp');
+            final preserveKindleSessionState =
+                isKindleNow && _lastLoadStopUrl == urlStr;
 
-              // Reset state on true page load/navigation. Kindle often emits
-              // same-URL load stops while paging; avoid wiping runtime state.
-              if (!preserveKindleSessionState) {
-                _detectedWebtoonPages.clear();
-                _submittedWebtoonIndices.clear();
-                _webtoonTotalPages = 0;
-                _batchInProgress = false;
-                // Reset JS detection state so re-injection can re-detect pages
-                controller.evaluateJavascript(
-                  source:
-                      'window.__frankDetectorActive = false; '
-                      'if(window.__frankDetectedPages) window.__frankDetectedPages.clear();',
-                );
-                _currentKindlePageId = null;
-                _currentAsin = null;
-                _kindleBlobByPageId.clear();
-                _kindleRectByPageId.clear();
-                _cancelKindleReapplies();
-                _kindleNavIntent = 'forward';
-                _kindleOverlayOk = 0;
-                _kindleOverlayFail = 0;
-                _kindleOverlayFallback = 0;
-                // Cancel all completion listeners from previous page
-                for (final sub in _completionListeners.values) {
-                  sub.close();
-                }
-                _completionListeners.clear();
+            // Reset state on true page load/navigation. Kindle often emits
+            // same-URL load stops while paging; avoid wiping runtime state.
+            if (!preserveKindleSessionState) {
+              _detectedWebtoonPages.clear();
+              _submittedWebtoonIndices.clear();
+              _webtoonTotalPages = 0;
+              _batchInProgress = false;
+              // Reset JS detection state so re-injection can re-detect pages
+              controller.evaluateJavascript(
+                source:
+                    'window.__frankDetectorActive = false; '
+                    'if(window.__frankDetectedPages) window.__frankDetectedPages.clear();',
+              );
+              _currentKindlePageId = null;
+              _currentAsin = null;
+              _kindleBlobByPageId.clear();
+              _kindleRectByPageId.clear();
+              _cancelKindleReapplies();
+              _kindleNavIntent = 'forward';
+              _kindleOverlayOk = 0;
+              _kindleOverlayFail = 0;
+              _kindleOverlayFallback = 0;
+              // Cancel all completion listeners from previous page
+              for (final sub in _completionListeners.values) {
+                sub.close();
               }
-              _lastLoadStopUrl = urlStr;
-              _jsBridge.onUrlChanged(controller, urlStr);
-              _injectDesktopViewportFit(controller);
-              // Sync toolbar button states after injection
-              Future.delayed(const Duration(milliseconds: 500), () {
-                _syncPipelineButtonState();
-                _syncTranslateButtonState();
-              });
-              if (_inspectorMode) {
-                _inspector.inject(controller);
-                _injectKindleDiagnosticIfNeeded(controller);
-                _injectKindleDomExplorerIfNeeded(controller);
-              }
-              Future.delayed(const Duration(milliseconds: 700), () {
-                if (!mounted) return;
-                _pushKindleDebugHudToPage();
-              });
-            },
-            onUpdateVisitedHistory: (controller, url, isReload) {
-              final urlStr = url ?? '';
-              setState(() => _currentUrl = urlStr);
-              _jsBridge.onUrlChanged(controller, urlStr);
-            },
+              _completionListeners.clear();
+            }
+            _lastLoadStopUrl = urlStr;
+            _jsBridge.onUrlChanged(controller, urlStr);
+            _injectDesktopViewportFit(controller);
+            // Sync toolbar button states after injection
+            Future.delayed(const Duration(milliseconds: 500), () {
+              _syncPipelineButtonState();
+              _syncTranslateButtonState();
+            });
+            if (_inspectorMode) {
+              _inspector.inject(controller);
+              _injectKindleDiagnosticIfNeeded(controller);
+              _injectKindleDomExplorerIfNeeded(controller);
+            }
+            Future.delayed(const Duration(milliseconds: 700), () {
+              if (!mounted) return;
+              _pushKindleDebugHudToPage();
+            });
+          },
+          onUpdateVisitedHistory: (controller, url, isReload) {
+            final urlStr = url ?? '';
+            setState(() => _currentUrl = urlStr);
+            _jsBridge.onUrlChanged(controller, urlStr);
+          },
         ),
       ),
     );
   }
 
   String _kindleDebugHudText() {
-    final line1 =
-        'kindle=${_currentKindlePageId ?? '-'} nav=$_kindleNavIntent';
+    final line1 = 'kindle=${_currentKindlePageId ?? '-'} nav=$_kindleNavIntent';
     final line2 =
         'overlay ok=$_kindleOverlayOk fail=$_kindleOverlayFail fallback=$_kindleOverlayFallback';
     return '$line1\n$line2';
@@ -588,7 +588,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       // Fallback: direct HTTP download if JS capture failed
       if (imageBytes == null) {
         final src = pageInfo['src'] as String?;
-        if (src != null && src.isNotEmpty) {
+        if (src != null &&
+            src.isNotEmpty &&
+            NaverWebtoonStrategy.isAllowedImageUrl(src)) {
           try {
             final response = await http.get(
               Uri.parse(src),
@@ -604,6 +606,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           } catch (e) {
             debugPrint('[Reader] Download error $pageId: $e');
           }
+        } else if (src != null && src.isNotEmpty) {
+          debugPrint('[Reader] Blocked fallback fetch for $pageId: $src');
         }
       }
     }
@@ -1392,7 +1396,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         return null;
       },
     );
-
   }
 
   /// Toggle Kindle pipeline between furigana and english translation.
@@ -1496,7 +1499,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       notifier.removeJob(pageId);
     }
   }
-
 
   /// Periodic timer that syncs webtoon progress every 2 seconds.
   /// Catches missed WebSocket completion events on mobile.

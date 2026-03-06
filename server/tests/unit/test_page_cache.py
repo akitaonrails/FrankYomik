@@ -123,3 +123,28 @@ def test_metadata_canonicalization_stable(tmp_path):
     b = {"a": 1, "b": 2}
     assert cache._canonical_json_bytes(a) == cache._canonical_json_bytes(b)
     assert json.loads(cache._canonical_json_bytes(a).decode("utf-8")) == a
+
+
+def test_store_rejects_invalid_pipeline(tmp_path):
+    cache = PageCache(str(tmp_path))
+    src = _png_like(11)
+    rendered = _png_like(12)
+
+    with pytest.raises(ValueError, match="invalid cache key"):
+        cache.store_page(
+            pipeline="../escape",
+            source_hash=cache._hash_bytes(src),
+            source_image_bytes=src,
+            rendered_image_bytes=rendered,
+            metadata_payload={"schema_version": 1, "regions": []},
+        )
+
+
+def test_resolve_source_hash_rejects_unsafe_components(tmp_path):
+    cache = PageCache(str(tmp_path))
+    assert cache.resolve_source_hash(
+        "manga_translate",
+        "one-piece",
+        "../../etc",
+        "003",
+    ) is None

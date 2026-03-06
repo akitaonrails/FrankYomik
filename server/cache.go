@@ -73,6 +73,7 @@ func NewCache(dir string) *Cache {
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9\-]`)
+var pathComponentRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // slugify converts a string to a lowercase, hyphen-separated slug.
 func slugify(s string) string {
@@ -88,6 +89,20 @@ func slugify(s string) string {
 func hashHex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func safePathComponent(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "." || s == ".." {
+		return "", false
+	}
+	if strings.ContainsAny(s, `/\`) {
+		return "", false
+	}
+	if !pathComponentRe.MatchString(s) {
+		return "", false
+	}
+	return s, true
 }
 
 func isValidSHA256Hex(s string) bool {
@@ -130,6 +145,10 @@ func (c *Cache) objectPath(sha string) string {
 }
 
 func (c *Cache) manifestByHashPath(pipeline, sourceHash string) string {
+	pipeline, ok := safePathComponent(pipeline)
+	if !ok || !isValidSHA256Hex(sourceHash) {
+		return ""
+	}
 	return filepath.Join(c.v2Root(), "pages", "by-hash", pipeline, sourceHash, "manifest.json")
 }
 
@@ -137,14 +156,46 @@ func (c *Cache) refPath(pipeline, title, chapter, page string) string {
 	if pipeline == "" || title == "" || chapter == "" || page == "" {
 		return ""
 	}
-	return filepath.Join(c.v2Root(), "pages", "by-ref", pipeline, slugify(title), chapter, page+".json")
+	pipeline, ok := safePathComponent(pipeline)
+	if !ok {
+		return ""
+	}
+	titleSlug, ok := safePathComponent(slugify(title))
+	if !ok {
+		return ""
+	}
+	chapter, ok = safePathComponent(chapter)
+	if !ok {
+		return ""
+	}
+	page, ok = safePathComponent(page)
+	if !ok {
+		return ""
+	}
+	return filepath.Join(c.v2Root(), "pages", "by-ref", pipeline, titleSlug, chapter, page+".json")
 }
 
 func (c *Cache) legacyImagePath(pipeline, title, chapter, page string) string {
 	if pipeline == "" || title == "" || chapter == "" || page == "" {
 		return ""
 	}
-	return filepath.Join(c.dir, pipeline, slugify(title), chapter, page+".png")
+	pipeline, ok := safePathComponent(pipeline)
+	if !ok {
+		return ""
+	}
+	titleSlug, ok := safePathComponent(slugify(title))
+	if !ok {
+		return ""
+	}
+	chapter, ok = safePathComponent(chapter)
+	if !ok {
+		return ""
+	}
+	page, ok = safePathComponent(page)
+	if !ok {
+		return ""
+	}
+	return filepath.Join(c.dir, pipeline, titleSlug, chapter, page+".png")
 }
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
@@ -199,10 +250,10 @@ func (c *Cache) readObjectVerified(sha string) ([]byte, error) {
 }
 
 func (c *Cache) loadManifestByHash(pipeline, sourceHash string) (*CacheManifest, error) {
-	if pipeline == "" || !isValidSHA256Hex(sourceHash) {
+	path := c.manifestByHashPath(pipeline, sourceHash)
+	if path == "" {
 		return nil, os.ErrNotExist
 	}
-	path := c.manifestByHashPath(pipeline, sourceHash)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -225,6 +276,9 @@ func (c *Cache) writeManifestByHash(m *CacheManifest) error {
 	if m.Pipeline == "" || !isValidSHA256Hex(m.SourceHash) {
 		return errors.New("invalid manifest key")
 	}
+	if _, ok := safePathComponent(m.Pipeline); !ok {
+		return errors.New("invalid manifest pipeline")
+	}
 	if !isValidSHA256Hex(m.SourceObjectSHA256) || !isValidSHA256Hex(m.ImageObjectSHA256) ||
 		!isValidSHA256Hex(m.MetadataObjectSHA256) {
 		return errors.New("invalid manifest objects")
@@ -245,7 +299,11 @@ func (c *Cache) writeManifestByHash(m *CacheManifest) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(c.manifestByHashPath(m.Pipeline, m.SourceHash), data, 0o644)
+	path := c.manifestByHashPath(m.Pipeline, m.SourceHash)
+	if path == "" {
+		return errors.New("invalid manifest path")
+	}
+	return writeFileAtomic(path, data, 0o644)
 }
 
 func (c *Cache) writeRef(pipeline, title, chapter, page, sourceHash string) error {
