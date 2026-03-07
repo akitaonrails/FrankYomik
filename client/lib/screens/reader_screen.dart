@@ -1349,6 +1349,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       setTimeout(function() { prog.style.display = 'none'; }, 3000);
     }
   };
+  window.__frankZoomActive = false;
   window.__frankSetZoom = function(active, visible) {
     var btn = document.getElementById('__frankZoom');
     if (btn) {
@@ -1356,30 +1357,51 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       btn.style.borderColor = active ? '#64b5f6' : 'rgba(255,255,255,0.3)';
       btn.style.color = active ? '#64b5f6' : '#fff';
     }
-    var styleId = '__frankFitWidth';
-    var existing = document.getElementById(styleId);
-    if (active) {
-      if (!existing) {
-        var s = document.createElement('style');
-        s.id = styleId;
-        s.textContent =
-          '#kr-renderer img[src^="blob:"],' +
-          '.reader-content img[src^="blob:"],' +
-          '[id*="kindle-reader"] img[src^="blob:"] {' +
-          '  width: 100vw !important;' +
-          '  height: auto !important;' +
-          '  max-width: none !important;' +
-          '  object-fit: contain !important;' +
-          '}' +
-          '#kr-renderer, .reader-content, [id*="kindle-reader"] {' +
-          '  overflow-y: auto !important;' +
-          '  overflow-x: hidden !important;' +
-          '  scroll-snap-type: none !important;' +
-          '}';
-        document.head.appendChild(s);
+    window.__frankZoomActive = active;
+    window.__frankApplyZoom();
+  };
+  window.__frankApplyZoom = function() {
+    var active = window.__frankZoomActive;
+    // Find blob images the same way the detection script does
+    var root = document.querySelector(
+      '#kr-renderer, #kindle-reader-content, .reader-content, ' +
+      '[id*="kindle-reader"], [id*="kr-renderer"], [class*="reader-content"]'
+    ) || document.body;
+    var imgs = root.querySelectorAll('img');
+    if (!imgs || imgs.length === 0) imgs = document.querySelectorAll('img');
+    for (var i = 0; i < imgs.length; i++) {
+      if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
+      var r = imgs[i].getBoundingClientRect();
+      if (r.width < 100 || r.height < 100) continue;
+      if (active) {
+        imgs[i].style.setProperty('width', '100vw', 'important');
+        imgs[i].style.setProperty('height', 'auto', 'important');
+        imgs[i].style.setProperty('max-width', 'none', 'important');
+        imgs[i].style.setProperty('max-height', 'none', 'important');
+        imgs[i].style.setProperty('object-fit', 'contain', 'important');
+      } else {
+        imgs[i].style.removeProperty('width');
+        imgs[i].style.removeProperty('height');
+        imgs[i].style.removeProperty('max-width');
+        imgs[i].style.removeProperty('max-height');
+        imgs[i].style.removeProperty('object-fit');
       }
-    } else {
-      if (existing) existing.remove();
+    }
+    // Walk up from root and fix overflow on ancestors
+    var el = root;
+    var depth = 0;
+    while (el && el !== document.documentElement && depth < 10) {
+      if (active) {
+        el.style.setProperty('overflow-y', 'auto', 'important');
+        el.style.setProperty('overflow-x', 'hidden', 'important');
+        el.style.setProperty('scroll-snap-type', 'none', 'important');
+      } else {
+        el.style.removeProperty('overflow-y');
+        el.style.removeProperty('overflow-x');
+        el.style.removeProperty('scroll-snap-type');
+      }
+      el = el.parentElement;
+      depth++;
     }
   };
   window.__frankSetPipeline = function(label, visible) {
@@ -1489,6 +1511,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   }
 
   /// Sync the in-page zoom button with current state.
+  /// Also re-applies zoom CSS to the current blob image (needed after page turns
+  /// since Kindle replaces the img element).
   void _syncZoomButtonState() {
     final controller = _webController;
     if (controller == null) return;
@@ -1497,6 +1521,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       source:
           "if(window.__frankSetZoom) window.__frankSetZoom($_kindleFitWidth, $isKindle);",
     );
+    // Re-apply after a short delay so the new blob image is in the DOM
+    if (_kindleFitWidth && isKindle) {
+      Future.delayed(const Duration(milliseconds: 300), () {
+        controller.evaluateJavascript(
+          source: "if(window.__frankApplyZoom) window.__frankApplyZoom();",
+        );
+      });
+    }
   }
 
   /// Manually translate the current page (used when auto-translate is off).
