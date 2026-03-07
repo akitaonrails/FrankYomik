@@ -15,6 +15,7 @@ import '../webview/overlay_controller.dart';
 import '../webview/platform/app_webview.dart';
 import '../webview/platform/app_webview_controller.dart';
 import '../webview/strategies/kindle_strategy.dart';
+import '../webview/strategies/naver_webtoon_strategy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Anti-bot JS injected at document-start to mask WebView fingerprints.
