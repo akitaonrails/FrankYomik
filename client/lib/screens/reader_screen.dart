@@ -1375,7 +1375,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       var img = imgs[i];
       if (!img.src || !img.src.startsWith('blob:')) continue;
       if (active) {
-        img.style.setProperty('width', '100vw', 'important');
+        img.style.setProperty('width', '100%', 'important');
         img.style.setProperty('height', 'auto', 'important');
         img.style.setProperty('max-width', 'none', 'important');
         img.style.setProperty('max-height', 'none', 'important');
@@ -1388,12 +1388,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         img.style.removeProperty('object-fit');
       }
     }
-    // Fix #kr-renderer: release the fixed height so the taller image can show
+    // Fix #kr-renderer: release fixed dimensions, fill container width
     if (active) {
+      root.style.setProperty('width', '100%', 'important');
       root.style.setProperty('height', 'auto', 'important');
       root.style.setProperty('min-height', '100vh', 'important');
       root.style.setProperty('overflow', 'visible', 'important');
     } else {
+      root.style.removeProperty('width');
       root.style.removeProperty('height');
       root.style.removeProperty('min-height');
       root.style.removeProperty('overflow');
@@ -1402,9 +1404,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     var container = document.querySelector('.kr-renderer-container');
     if (container) {
       if (active) {
+        container.style.setProperty('width', '100%', 'important');
         container.style.setProperty('overflow-y', 'auto', 'important');
         container.style.setProperty('overflow-x', 'hidden', 'important');
       } else {
+        container.style.removeProperty('width');
         container.style.removeProperty('overflow-y');
         container.style.removeProperty('overflow-x');
       }
