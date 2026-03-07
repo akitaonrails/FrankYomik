@@ -15,7 +15,6 @@ import '../webview/overlay_controller.dart';
 import '../webview/platform/app_webview.dart';
 import '../webview/platform/app_webview_controller.dart';
 import '../webview/strategies/kindle_strategy.dart';
-import '../webview/strategies/naver_webtoon_strategy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Anti-bot JS injected at document-start to mask WebView fingerprints.
@@ -84,9 +83,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   /// Current Kindle ASIN for per-title pipeline persistence.
   String? _currentAsin;
-
-  /// Whether Kindle fit-width zoom mode is active (persisted per-ASIN).
-  bool _kindleFitWidth = false;
 
   // --- Webtoon batching state ---
   static const _batchSize = 5;
@@ -200,7 +196,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             Future.delayed(const Duration(milliseconds: 500), () {
               _syncPipelineButtonState();
               _syncTranslateButtonState();
-              _syncZoomButtonState();
             });
             if (_inspectorMode) {
               _inspector.inject(controller);
@@ -376,11 +371,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           });
           _syncPipelineButtonState();
         }
-        final savedZoom = prefs.getBool('kindle_zoom_$asin') ?? false;
-        if (savedZoom != _kindleFitWidth) {
-          _kindleFitWidth = savedZoom;
-          _syncZoomButtonState();
-        }
       }
       _pushKindleDebugHudToPage();
     }
@@ -394,7 +384,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final settings = ref.read(settingsProvider);
     final autoOn = settings.isLoaded && settings.autoTranslate;
     _syncTranslateButtonState();
-    _syncZoomButtonState();
     final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
     if (isKindle && autoOn) {
       _showKindleSpinner();
@@ -1228,7 +1217,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   bar.innerHTML =
     '<button id="__frankBack" title="Back">&#x2190;</button>' +
     '<button id="__frankPipeline" title="Switch pipeline" style="display:none;"></button>' +
-    '<button id="__frankZoom" title="Fit width" style="display:none;">Fit W</button>' +
     '<button id="__frankTranslate" title="Translate current page" style="display:none;">&#x1F30D; Translate</button>' +
     '<button id="__frankReload" title="Reload page">&#x21BB; Reload</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
@@ -1272,13 +1260,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   var backBtn = document.getElementById('__frankBack');
   var pipeBtn = document.getElementById('__frankPipeline');
-  var zoomBtn = document.getElementById('__frankZoom');
   var translateBtn = document.getElementById('__frankTranslate');
   var reloadBtn = document.getElementById('__frankReload');
   var copyDbgBtn = document.getElementById('__frankCopyDbg');
   if (backBtn) backBtn.style.cssText = btnStyle;
   if (pipeBtn) pipeBtn.style.cssText = btnStyle + 'display:none;';
-  if (zoomBtn) zoomBtn.style.cssText = btnStyle + 'display:none;';
   if (translateBtn) translateBtn.style.cssText = btnStyle + 'display:none;';
   if (reloadBtn) reloadBtn.style.cssText = btnStyle;
   if (copyDbgBtn) copyDbgBtn.style.cssText = btnStyle + 'display:none;';
@@ -1304,10 +1290,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   if (pipeBtn) pipeBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_pipeline');
-  });
-  if (zoomBtn) zoomBtn.addEventListener('click', function(e) {
-    e.stopPropagation();
-    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_zoom');
   });
   if (translateBtn) translateBtn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -1349,91 +1331,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       setTimeout(function() { prog.style.display = 'none'; }, 3000);
     }
   };
-  window.__frankZoomActive = false;
-  window.__frankSetZoom = function(active, visible) {
-    var btn = document.getElementById('__frankZoom');
-    if (btn) {
-      btn.style.display = visible ? '' : 'none';
-      btn.style.borderColor = active ? '#64b5f6' : 'rgba(255,255,255,0.3)';
-      btn.style.color = active ? '#64b5f6' : '#fff';
-    }
-    window.__frankZoomActive = active;
-    window.__frankApplyZoom();
-  };
-  window.__frankApplyZoom = function() {
-    var active = window.__frankZoomActive;
-    // Kindle DOM hierarchy (from actual page inspection):
-    //   .kr-renderer-container (overflow:hidden — clips everything)
-    //     #kr-renderer (fixed width/height)
-    //       .kg-view (position:absolute, current page at left:0)
-    //         div (display:flex)
-    //           .kg-full-page-img (pointer-events:none)
-    //             img[src^="blob:"] (inline width/height, object-fit:cover)
-    var root = document.getElementById('kr-renderer') || document.body;
-    var imgs = root.querySelectorAll('img');
-    for (var i = 0; i < imgs.length; i++) {
-      var img = imgs[i];
-      if (!img.src || !img.src.startsWith('blob:')) continue;
-      if (active) {
-        img.style.setProperty('width', '100%', 'important');
-        img.style.setProperty('height', 'auto', 'important');
-        img.style.setProperty('max-width', 'none', 'important');
-        img.style.setProperty('max-height', 'none', 'important');
-        img.style.setProperty('object-fit', 'contain', 'important');
-      } else {
-        img.style.removeProperty('width');
-        img.style.removeProperty('height');
-        img.style.removeProperty('max-width');
-        img.style.removeProperty('max-height');
-        img.style.removeProperty('object-fit');
-      }
-    }
-    // Fix #kr-renderer: release fixed dimensions, fill container width
-    if (active) {
-      root.style.setProperty('width', '100%', 'important');
-      root.style.setProperty('height', 'auto', 'important');
-      root.style.setProperty('min-height', '100vh', 'important');
-      root.style.setProperty('overflow', 'visible', 'important');
-    } else {
-      root.style.removeProperty('width');
-      root.style.removeProperty('height');
-      root.style.removeProperty('min-height');
-      root.style.removeProperty('overflow');
-    }
-    // Fix .kr-renderer-container: this has overflow:hidden that clips the page
-    var container = document.querySelector('.kr-renderer-container');
-    if (container) {
-      if (active) {
-        container.style.setProperty('width', '100%', 'important');
-        container.style.setProperty('overflow-y', 'auto', 'important');
-        container.style.setProperty('overflow-x', 'hidden', 'important');
-      } else {
-        container.style.removeProperty('width');
-        container.style.removeProperty('overflow-y');
-        container.style.removeProperty('overflow-x');
-      }
-    }
-    // Fix .kg-view: release absolute positioning height constraint
-    var views = root.querySelectorAll('.kg-view');
-    for (var v = 0; v < views.length; v++) {
-      if (active) {
-        views[v].style.setProperty('height', 'auto', 'important');
-      } else {
-        views[v].style.removeProperty('height');
-      }
-    }
-    // Fix the interaction layer and pagination container heights
-    var interactionLayer = document.querySelector('.kr-interaction-layer');
-    if (interactionLayer) {
-      if (active) {
-        interactionLayer.style.setProperty('height', 'auto', 'important');
-        interactionLayer.style.setProperty('min-height', '100vh', 'important');
-      } else {
-        interactionLayer.style.removeProperty('height');
-        interactionLayer.style.removeProperty('min-height');
-      }
-    }
-  };
   window.__frankSetPipeline = function(label, visible) {
     var el = document.getElementById('__frankPipeline');
     if (el) {
@@ -1472,9 +1369,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             break;
           case 'toggle_pipeline':
             _toggleKindlePipeline();
-            break;
-          case 'toggle_zoom':
-            _toggleKindleFitWidth();
             break;
           case 'translate':
             _translateCurrentPage();
@@ -1524,40 +1418,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _cancelKindleJobs();
     if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
       _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
-    }
-  }
-
-  /// Toggle Kindle fit-width zoom mode and persist per-ASIN.
-  void _toggleKindleFitWidth() {
-    _kindleFitWidth = !_kindleFitWidth;
-    _syncZoomButtonState();
-
-    final asin = _currentAsin;
-    if (asin != null && asin.isNotEmpty) {
-      SharedPreferences.getInstance().then((prefs) {
-        prefs.setBool('kindle_zoom_$asin', _kindleFitWidth);
-      });
-    }
-  }
-
-  /// Sync the in-page zoom button with current state.
-  /// Also re-applies zoom CSS to the current blob image (needed after page turns
-  /// since Kindle replaces the img element).
-  void _syncZoomButtonState() {
-    final controller = _webController;
-    if (controller == null) return;
-    final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
-    controller.evaluateJavascript(
-      source:
-          "if(window.__frankSetZoom) window.__frankSetZoom($_kindleFitWidth, $isKindle);",
-    );
-    // Re-apply after a short delay so the new blob image is in the DOM
-    if (_kindleFitWidth && isKindle) {
-      Future.delayed(const Duration(milliseconds: 300), () {
-        controller.evaluateJavascript(
-          source: "if(window.__frankApplyZoom) window.__frankApplyZoom();",
-        );
-      });
     }
   }
 
