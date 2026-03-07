@@ -84,6 +84,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   /// Current Kindle ASIN for per-title pipeline persistence.
   String? _currentAsin;
 
+  /// Whether Kindle fit-width zoom mode is active (persisted per-ASIN).
+  bool _kindleFitWidth = false;
+
   // --- Webtoon batching state ---
   static const _batchSize = 5;
   static const _prefetchThreshold = 2;
@@ -196,6 +199,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             Future.delayed(const Duration(milliseconds: 500), () {
               _syncPipelineButtonState();
               _syncTranslateButtonState();
+              _syncZoomButtonState();
             });
             if (_inspectorMode) {
               _inspector.inject(controller);
@@ -371,6 +375,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           });
           _syncPipelineButtonState();
         }
+        final savedZoom = prefs.getBool('kindle_zoom_$asin') ?? false;
+        if (savedZoom != _kindleFitWidth) {
+          _kindleFitWidth = savedZoom;
+          _syncZoomButtonState();
+        }
       }
       _pushKindleDebugHudToPage();
     }
@@ -384,6 +393,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final settings = ref.read(settingsProvider);
     final autoOn = settings.isLoaded && settings.autoTranslate;
     _syncTranslateButtonState();
+    _syncZoomButtonState();
     final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
     if (isKindle && autoOn) {
       _showKindleSpinner();
@@ -1217,6 +1227,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   bar.innerHTML =
     '<button id="__frankBack" title="Back">&#x2190;</button>' +
     '<button id="__frankPipeline" title="Switch pipeline" style="display:none;"></button>' +
+    '<button id="__frankZoom" title="Fit width" style="display:none;">Fit W</button>' +
     '<button id="__frankTranslate" title="Translate current page" style="display:none;">&#x1F30D; Translate</button>' +
     '<button id="__frankReload" title="Reload page">&#x21BB; Reload</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
@@ -1260,11 +1271,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   var backBtn = document.getElementById('__frankBack');
   var pipeBtn = document.getElementById('__frankPipeline');
+  var zoomBtn = document.getElementById('__frankZoom');
   var translateBtn = document.getElementById('__frankTranslate');
   var reloadBtn = document.getElementById('__frankReload');
   var copyDbgBtn = document.getElementById('__frankCopyDbg');
   if (backBtn) backBtn.style.cssText = btnStyle;
   if (pipeBtn) pipeBtn.style.cssText = btnStyle + 'display:none;';
+  if (zoomBtn) zoomBtn.style.cssText = btnStyle + 'display:none;';
   if (translateBtn) translateBtn.style.cssText = btnStyle + 'display:none;';
   if (reloadBtn) reloadBtn.style.cssText = btnStyle;
   if (copyDbgBtn) copyDbgBtn.style.cssText = btnStyle + 'display:none;';
@@ -1290,6 +1303,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   if (pipeBtn) pipeBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_pipeline');
+  });
+  if (zoomBtn) zoomBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_zoom');
   });
   if (translateBtn) translateBtn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -1331,6 +1348,39 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       setTimeout(function() { prog.style.display = 'none'; }, 3000);
     }
   };
+  window.__frankSetZoom = function(active, visible) {
+    var btn = document.getElementById('__frankZoom');
+    if (btn) {
+      btn.style.display = visible ? '' : 'none';
+      btn.style.borderColor = active ? '#64b5f6' : 'rgba(255,255,255,0.3)';
+      btn.style.color = active ? '#64b5f6' : '#fff';
+    }
+    var styleId = '__frankFitWidth';
+    var existing = document.getElementById(styleId);
+    if (active) {
+      if (!existing) {
+        var s = document.createElement('style');
+        s.id = styleId;
+        s.textContent =
+          '#kr-renderer img[src^="blob:"],' +
+          '.reader-content img[src^="blob:"],' +
+          '[id*="kindle-reader"] img[src^="blob:"] {' +
+          '  width: 100vw !important;' +
+          '  height: auto !important;' +
+          '  max-width: none !important;' +
+          '  object-fit: contain !important;' +
+          '}' +
+          '#kr-renderer, .reader-content, [id*="kindle-reader"] {' +
+          '  overflow-y: auto !important;' +
+          '  overflow-x: hidden !important;' +
+          '  scroll-snap-type: none !important;' +
+          '}';
+        document.head.appendChild(s);
+      }
+    } else {
+      if (existing) existing.remove();
+    }
+  };
   window.__frankSetPipeline = function(label, visible) {
     var el = document.getElementById('__frankPipeline');
     if (el) {
@@ -1369,6 +1419,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             break;
           case 'toggle_pipeline':
             _toggleKindlePipeline();
+            break;
+          case 'toggle_zoom':
+            _toggleKindleFitWidth();
             break;
           case 'translate':
             _translateCurrentPage();
@@ -1419,6 +1472,30 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
       _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
     }
+  }
+
+  /// Toggle Kindle fit-width zoom mode and persist per-ASIN.
+  void _toggleKindleFitWidth() {
+    _kindleFitWidth = !_kindleFitWidth;
+    _syncZoomButtonState();
+
+    final asin = _currentAsin;
+    if (asin != null && asin.isNotEmpty) {
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setBool('kindle_zoom_$asin', _kindleFitWidth);
+      });
+    }
+  }
+
+  /// Sync the in-page zoom button with current state.
+  void _syncZoomButtonState() {
+    final controller = _webController;
+    if (controller == null) return;
+    final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
+    controller.evaluateJavascript(
+      source:
+          "if(window.__frankSetZoom) window.__frankSetZoom($_kindleFitWidth, $isKindle);",
+    );
   }
 
   /// Manually translate the current page (used when auto-translate is off).
