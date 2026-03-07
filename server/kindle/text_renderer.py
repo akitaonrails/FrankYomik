@@ -138,14 +138,16 @@ def _load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
 # --- Mask-aware bounding box ---
 
 def _mask_safe_bbox(bbox: tuple[int, int, int, int],
-                    mask: np.ndarray) -> tuple[int, int, int, int]:
+                    mask: np.ndarray,
+                    vertical: bool = False) -> tuple[int, int, int, int]:
     """Compute a tighter bbox that fits inside the bubble mask.
 
     For each row in the mask, find the horizontal extent of filled pixels.
-    Uses 15% vertical inset (keeps text in the wider middle 70% of the
-    bubble) and 30th-percentile width (safe for ~60% of rows).  This
-    prevents lines near the top/bottom of the text block from overflowing
-    the narrow edges of oval bubbles.
+    In horizontal mode (default): uses 15% vertical inset and 30th-percentile
+    width — conservative to prevent lines near the top/bottom from overflowing
+    oval bubbles.  In vertical mode: uses 8% vertical inset and median width,
+    since vertical Japanese text stacks characters individually and mask-clips
+    per-character.
     """
     x1, y1, x2, y2 = bbox
     crop = mask[y1:y2, x1:x2]
@@ -162,10 +164,10 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     mask_top, mask_bot = int(filled[0]), int(filled[-1])
     mask_h = mask_bot - mask_top + 1
 
-    # Vertical: inset 15% from top/bottom to keep text in the wider
-    # center of oval bubbles.  At 15% the bubble is typically ~70% of
-    # its max width — much safer for horizontal text.
-    v_inset = max(2, mask_h * 15 // 100)
+    # Vertical inset: 8% for vertical Japanese (characters clip individually),
+    # 15% for horizontal English (lines can overflow narrow oval edges).
+    v_pct = 8 if vertical else 15
+    v_inset = max(2, mask_h * v_pct // 100)
     safe_top = mask_top + v_inset
     safe_bot = mask_bot - v_inset
     if safe_top >= safe_bot:
@@ -185,10 +187,11 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     if not lefts:
         return bbox
 
-    # 70th percentile of lefts = further right (conservative)
-    # 30th percentile of rights = further left (conservative)
-    safe_left = int(np.percentile(lefts, 70))
-    safe_right = int(np.percentile(rights, 30))
+    # Vertical text uses median (50th pct) — less conservative since
+    # characters are individually mask-clipped.  Horizontal uses 30th pct.
+    width_pct = 50 if vertical else 30
+    safe_left = int(np.percentile(lefts, 100 - width_pct))
+    safe_right = int(np.percentile(rights, width_pct))
 
     if safe_left >= safe_right:
         return bbox
@@ -510,7 +513,8 @@ def _break_word_to_fit(word: str, font: ImageFont.FreeTypeFont,
     return fragments if fragments else [word]
 
 
-# --- Vertical Japanese with furigana ---
+# Characters that need 90° CW rotation in vertical text
+_VERTICAL_ROTATE_CHARS = frozenset("ー～—")
 
 def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                              segments: list[dict],
@@ -522,7 +526,7 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     bubble shape, then renders to an RGBA overlay and clips to mask.
     """
     if mask is not None:
-        bbox = _mask_safe_bbox(bbox, mask)
+        bbox = _mask_safe_bbox(bbox, mask, vertical=True)
 
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
@@ -534,15 +538,21 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     chars = []
     for seg in segments:
         furigana_text = seg.get("furigana")
-        for i, ch in enumerate(seg["text"]):
+        seg_text = seg["text"]
+        for i, ch in enumerate(seg_text):
             ch_furi = None
             if furigana_text and seg["needs_furigana"]:
-                seg_len = len(seg["text"])
+                seg_len = len(seg_text)
                 furi_len = len(furigana_text)
                 start = int(i * furi_len / seg_len)
                 end = int((i + 1) * furi_len / seg_len)
                 ch_furi = furigana_text[start:end] if end > start else None
-            chars.append({"char": ch, "furigana": ch_furi})
+            chars.append({
+                "char": ch,
+                "furigana": ch_furi,
+                "seg_start": i == 0,
+                "seg_len": len(seg_text),
+            })
 
     if not chars:
         return
@@ -584,25 +594,62 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     col_x = start_x
     char_y = start_y
 
-    for ch_info in chars:
+    for idx, ch_info in enumerate(chars):
+        # Column overflow — move to next column
         if char_y + char_height > y2 - TEXT_MARGIN:
             col_x -= col_width
             char_y = start_y
             if col_x < x1 + TEXT_MARGIN:
                 break
 
-        main_bbox = draw.textbbox((0, 0), ch_info["char"], font=font)
-        main_w = main_bbox[2] - main_bbox[0]
-        main_h = main_bbox[3] - main_bbox[1]
-        # Offset background by bbox origin (font ascender shifts ink down/right)
-        mbg_x = col_x + main_bbox[0]
-        mbg_y = char_y + main_bbox[1]
-        draw.rectangle(
-            (mbg_x - _TEXT_BG_PAD, mbg_y - _TEXT_BG_PAD,
-             mbg_x + main_w + _TEXT_BG_PAD, mbg_y + main_h + _TEXT_BG_PAD),
-            fill=bg_fill,
-        )
-        draw.text((col_x, char_y), ch_info["char"], fill=text_fill, font=font)
+        # Segment-aware column break: if this is the start of a new segment,
+        # check if the whole segment fits in the remaining column space.
+        # If not (and we're not already at the column top, and the segment
+        # is small enough to fit in a full column), start a new column.
+        if ch_info["seg_start"] and char_y > start_y:
+            seg_len = ch_info["seg_len"]
+            remaining_slots = max(1, (y2 - TEXT_MARGIN - char_y) // char_height)
+            if seg_len > remaining_slots and seg_len <= chars_per_col:
+                col_x -= col_width
+                char_y = start_y
+                if col_x < x1 + TEXT_MARGIN:
+                    break
+
+        ch = ch_info["char"]
+
+        # Characters like ー ～ — must be rotated 90° CW for vertical text
+        if ch in _VERTICAL_ROTATE_CHARS:
+            main_bbox = draw.textbbox((0, 0), ch, font=font)
+            main_w = main_bbox[2] - main_bbox[0]
+            main_h = main_bbox[3] - main_bbox[1]
+            # Render to a small RGBA temp image, then rotate
+            pad = 4
+            tmp = Image.new("RGBA", (main_w + pad * 2, main_h + pad * 2), (0, 0, 0, 0))
+            tmp_draw = ImageDraw.Draw(tmp)
+            tmp_draw.rectangle((0, 0, tmp.width, tmp.height), fill=bg_fill)
+            tmp_draw.text((pad - main_bbox[0], pad - main_bbox[1]), ch,
+                          fill=text_fill, font=font)
+            rotated = tmp.rotate(-90, expand=True)
+            # Center the rotated glyph in the char cell
+            rx = col_x + (font_size - rotated.width) // 2
+            ry = char_y + (char_height - rotated.height) // 2
+            if mask is not None:
+                overlay.paste(rotated, (rx, ry), rotated)
+            else:
+                img.paste(rotated, (rx, ry), rotated)
+        else:
+            main_bbox = draw.textbbox((0, 0), ch, font=font)
+            main_w = main_bbox[2] - main_bbox[0]
+            main_h = main_bbox[3] - main_bbox[1]
+            # Offset background by bbox origin (font ascender shifts ink down/right)
+            mbg_x = col_x + main_bbox[0]
+            mbg_y = char_y + main_bbox[1]
+            draw.rectangle(
+                (mbg_x - _TEXT_BG_PAD, mbg_y - _TEXT_BG_PAD,
+                 mbg_x + main_w + _TEXT_BG_PAD, mbg_y + main_h + _TEXT_BG_PAD),
+                fill=bg_fill,
+            )
+            draw.text((col_x, char_y), ch, fill=text_fill, font=font)
 
         if ch_info["furigana"]:
             furi_x = col_x + font_size + 1
@@ -656,7 +703,7 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
         mid = (lo + hi) // 2
         furi_extra = int(mid * FURIGANA_SIZE_RATIO) + 2 if has_furigana else 0
         col_width = mid + furi_extra
-        char_height = int(mid * 1.15)
+        char_height = int(mid * 1.05)
 
         # Reserve space for the first column's furigana extending past the rightmost kanji
         furi_offset = (int(mid * FURIGANA_SIZE_RATIO) + 2) if has_furigana else 0
