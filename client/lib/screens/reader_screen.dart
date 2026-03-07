@@ -1362,46 +1362,72 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   };
   window.__frankApplyZoom = function() {
     var active = window.__frankZoomActive;
-    // Find blob images the same way the detection script does
-    var root = document.querySelector(
-      '#kr-renderer, #kindle-reader-content, .reader-content, ' +
-      '[id*="kindle-reader"], [id*="kr-renderer"], [class*="reader-content"]'
-    ) || document.body;
+    // Kindle DOM hierarchy (from actual page inspection):
+    //   .kr-renderer-container (overflow:hidden — clips everything)
+    //     #kr-renderer (fixed width/height)
+    //       .kg-view (position:absolute, current page at left:0)
+    //         div (display:flex)
+    //           .kg-full-page-img (pointer-events:none)
+    //             img[src^="blob:"] (inline width/height, object-fit:cover)
+    var root = document.getElementById('kr-renderer') || document.body;
     var imgs = root.querySelectorAll('img');
-    if (!imgs || imgs.length === 0) imgs = document.querySelectorAll('img');
     for (var i = 0; i < imgs.length; i++) {
-      if (!imgs[i].src || !imgs[i].src.startsWith('blob:')) continue;
-      var r = imgs[i].getBoundingClientRect();
-      if (r.width < 100 || r.height < 100) continue;
+      var img = imgs[i];
+      if (!img.src || !img.src.startsWith('blob:')) continue;
       if (active) {
-        imgs[i].style.setProperty('width', '100vw', 'important');
-        imgs[i].style.setProperty('height', 'auto', 'important');
-        imgs[i].style.setProperty('max-width', 'none', 'important');
-        imgs[i].style.setProperty('max-height', 'none', 'important');
-        imgs[i].style.setProperty('object-fit', 'contain', 'important');
+        img.style.setProperty('width', '100vw', 'important');
+        img.style.setProperty('height', 'auto', 'important');
+        img.style.setProperty('max-width', 'none', 'important');
+        img.style.setProperty('max-height', 'none', 'important');
+        img.style.setProperty('object-fit', 'contain', 'important');
       } else {
-        imgs[i].style.removeProperty('width');
-        imgs[i].style.removeProperty('height');
-        imgs[i].style.removeProperty('max-width');
-        imgs[i].style.removeProperty('max-height');
-        imgs[i].style.removeProperty('object-fit');
+        img.style.removeProperty('width');
+        img.style.removeProperty('height');
+        img.style.removeProperty('max-width');
+        img.style.removeProperty('max-height');
+        img.style.removeProperty('object-fit');
       }
     }
-    // Walk up from root and fix overflow on ancestors
-    var el = root;
-    var depth = 0;
-    while (el && el !== document.documentElement && depth < 10) {
+    // Fix #kr-renderer: release the fixed height so the taller image can show
+    if (active) {
+      root.style.setProperty('height', 'auto', 'important');
+      root.style.setProperty('min-height', '100vh', 'important');
+      root.style.setProperty('overflow', 'visible', 'important');
+    } else {
+      root.style.removeProperty('height');
+      root.style.removeProperty('min-height');
+      root.style.removeProperty('overflow');
+    }
+    // Fix .kr-renderer-container: this has overflow:hidden that clips the page
+    var container = document.querySelector('.kr-renderer-container');
+    if (container) {
       if (active) {
-        el.style.setProperty('overflow-y', 'auto', 'important');
-        el.style.setProperty('overflow-x', 'hidden', 'important');
-        el.style.setProperty('scroll-snap-type', 'none', 'important');
+        container.style.setProperty('overflow-y', 'auto', 'important');
+        container.style.setProperty('overflow-x', 'hidden', 'important');
       } else {
-        el.style.removeProperty('overflow-y');
-        el.style.removeProperty('overflow-x');
-        el.style.removeProperty('scroll-snap-type');
+        container.style.removeProperty('overflow-y');
+        container.style.removeProperty('overflow-x');
       }
-      el = el.parentElement;
-      depth++;
+    }
+    // Fix .kg-view: release absolute positioning height constraint
+    var views = root.querySelectorAll('.kg-view');
+    for (var v = 0; v < views.length; v++) {
+      if (active) {
+        views[v].style.setProperty('height', 'auto', 'important');
+      } else {
+        views[v].style.removeProperty('height');
+      }
+    }
+    // Fix the interaction layer and pagination container heights
+    var interactionLayer = document.querySelector('.kr-interaction-layer');
+    if (interactionLayer) {
+      if (active) {
+        interactionLayer.style.setProperty('height', 'auto', 'important');
+        interactionLayer.style.setProperty('min-height', '100vh', 'important');
+      } else {
+        interactionLayer.style.removeProperty('height');
+        interactionLayer.style.removeProperty('min-height');
+      }
     }
   };
   window.__frankSetPipeline = function(label, visible) {
