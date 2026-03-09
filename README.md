@@ -204,6 +204,10 @@ flutter build apk --release
 
 The client defaults to `http://localhost:8080`. Configure the server URL and auth token in the Settings screen.
 
+### Versioning
+
+The Android `versionCode` is derived from `git rev-list --count HEAD` (in `build.gradle.kts`), so every commit automatically produces a higher build number. You only need to bump the display version (`version: X.Y.Z` in `pubspec.yaml`) for releases — the build number takes care of itself.
+
 ### Android Sideloading
 
 The APK is distributed directly (not via Google Play) because the app requires a locally-running server with GPU access — it's not a standalone app. To install on Android:

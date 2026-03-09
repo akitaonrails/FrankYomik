@@ -236,6 +236,30 @@ $_findVisibleBlobFn
 ''';
   }
 
+  /// Shared JS capture logic: given a target img element, draw it to a
+  /// canvas at the rendered viewport size and return a data URL.
+  static const String _captureFn = '''
+  function __frankCaptureImg(target) {
+    if (!target) return null;
+    var rect = target.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    var renderW = Math.max(1, Math.round(rect.width * dpr));
+    var renderH = Math.max(1, Math.round(rect.height * dpr));
+    var maxSide = 2200;
+    var side = Math.max(renderW, renderH);
+    var scale = side > maxSide ? (maxSide / side) : 1;
+    var outW = Math.max(1, Math.round(renderW * scale));
+    var outH = Math.max(1, Math.round(renderH * scale));
+    var c = document.createElement('canvas');
+    c.width = outW;
+    c.height = outH;
+    var ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(target, 0, 0, outW, outH);
+    try { return c.toDataURL('image/png'); } catch(e) { return null; }
+  }
+''';
+
   /// JS that extracts the visible blob img as a base64 PNG data URL.
   /// Synchronous — draws the img onto a canvas and calls toDataURL().
   ///
@@ -246,33 +270,36 @@ $_findVisibleBlobFn
       '''
 (function() {
 $_findVisibleBlobFn
-  var target = __frankFindVisibleBlob();
-  if (!target) return null;
-
-  var rect = target.getBoundingClientRect();
-  var dpr = window.devicePixelRatio || 1;
-  var renderW = Math.max(1, Math.round(rect.width * dpr));
-  var renderH = Math.max(1, Math.round(rect.height * dpr));
-  // Bound capture size to keep JS bridge payloads predictable on ultrawide/maximized windows.
-  var maxSide = 2200;
-  var side = Math.max(renderW, renderH);
-  var scale = side > maxSide ? (maxSide / side) : 1;
-  var outW = Math.max(1, Math.round(renderW * scale));
-  var outH = Math.max(1, Math.round(renderH * scale));
-
-  var c = document.createElement('canvas');
-  c.width = outW;
-  c.height = outH;
-  var ctx = c.getContext('2d');
-  if (!ctx) return null;
-  ctx.drawImage(target, 0, 0, outW, outH);
-  try {
-    return c.toDataURL('image/png');
-  } catch(e) {
-    return null;
-  }
+$_captureFn
+  return __frankCaptureImg(__frankFindVisibleBlob());
 })();
 ''';
+
+  /// Capture a specific blob img by its src URL. Used when rapid page flips
+  /// cause the visible blob to change before the capture JS executes.
+  /// Falls back to the visible blob if the targeted img is no longer in DOM.
+  static String captureByBlobSrcScript(String blobSrc) {
+    // JSON-encode the blob URL to safely embed it in JS.
+    final escaped = blobSrc
+        .replaceAll(r'\', r'\\')
+        .replaceAll("'", r"\'")
+        .replaceAll('\n', r'\n');
+    return '''
+(function() {
+$_findVisibleBlobFn
+$_captureFn
+  var targetSrc = '$escaped';
+  var imgs = document.querySelectorAll('img');
+  var target = null;
+  for (var i = 0; i < imgs.length; i++) {
+    if (imgs[i].src === targetSrc) { target = imgs[i]; break; }
+  }
+  if (target) return __frankCaptureImg(target);
+  // Blob URL no longer in DOM — fall back to visible blob
+  return __frankCaptureImg(__frankFindVisibleBlob());
+})();
+''';
+  }
 
   @override
   PageMetadata? parseUrl(String url) {

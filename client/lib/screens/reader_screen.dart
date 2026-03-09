@@ -384,6 +384,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     final settings = ref.read(settingsProvider);
     final autoOn = settings.isLoaded && settings.autoTranslate;
+    debugPrint('[PageFlow] $pageId autoOn=$autoOn loaded=${settings.isLoaded} autoTranslate=${settings.autoTranslate}');
     _syncTranslateButtonState();
     final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
     if (isKindle && autoOn) {
@@ -479,7 +480,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     // If not yet submitted, capture and split
     if (!jobs.containsKey(leftId) && !jobs.containsKey(rightId)) {
+      debugPrint('[PageFlow] $spreadPageId → capture');
       _capturePageImage(spreadPageId, pageInfo);
+    } else {
+      // Jobs exist but not both complete — re-establish a listener so the
+      // overlay is applied when they finish (e.g. user navigated away and back).
+      debugPrint('[PageFlow] $spreadPageId → watch L=${leftJob?.status} R=${rightJob?.status}');
+      _watchForSpreadCompletion(spreadPageId, leftId, rightId);
     }
   }
 
@@ -488,8 +495,23 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     Map<String, dynamic> pageInfo,
   ) async {
     final controller = _webController;
-    if (controller == null) return;
+    if (controller == null) {
+      debugPrint('[Capture] $pageId SKIP no controller');
+      return;
+    }
 
+    try {
+      await _capturePageImageInner(pageId, pageInfo, controller);
+    } catch (e, st) {
+      debugPrint('[Capture] $pageId ERROR: $e\n$st');
+    }
+  }
+
+  Future<void> _capturePageImageInner(
+    String pageId,
+    Map<String, dynamic> pageInfo,
+    AppWebViewController controller,
+  ) async {
     final captureSw = Stopwatch()..start();
     Uint8List? imageBytes;
     String captureMode = 'unknown';
@@ -497,9 +519,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final type = pageInfo['type'] as String?;
     if (type == 'dom') {
       captureMode = 'kindle_dom';
-      // Kindle DOM: extract visible blob img as base64 PNG via canvas
+      // Kindle DOM: capture the specific blob img from the detection event.
+      // During rapid page flips the visible blob changes before queued JS
+      // evaluations execute; targeting the known blob URL avoids capturing
+      // the wrong page.
+      final blobSrc = pageInfo['imgSrc'] as String?;
+      final captureScript =
+          blobSrc != null && blobSrc.startsWith('blob:')
+              ? KindleStrategy.captureByBlobSrcScript(blobSrc)
+              : KindleStrategy.captureCurrentPageScript;
       final dataUrl = await controller.evaluateJavascript(
-        source: KindleStrategy.captureCurrentPageScript,
+        source: captureScript,
       );
       if (dataUrl is String && dataUrl.startsWith('data:image/png;base64,')) {
         // Decode on background isolate — data URLs can be 4MB+

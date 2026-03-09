@@ -14,6 +14,22 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+// Derive versionCode from git commit count so it always increases and can
+// never regress.  The pubspec.yaml +N build number is ignored for Android.
+fun gitVersionCode(): Int {
+    return try {
+        val process = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+            .directory(rootProject.projectDir)
+            .redirectErrorStream(true)
+            .start()
+        val count = process.inputStream.bufferedReader().readText().trim().toInt()
+        process.waitFor()
+        count
+    } catch (_: Exception) {
+        flutter.versionCode  // fallback to pubspec if git unavailable
+    }
+}
+
 android {
     namespace = "com.frankmanga.frank_client"
     compileSdk = flutter.compileSdkVersion
@@ -32,7 +48,7 @@ android {
         applicationId = "com.frankmanga.frank_client"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
+        versionCode = gitVersionCode()
         versionName = flutter.versionName
     }
 

@@ -216,6 +216,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history needed for git-based versionCode
 
       - name: Setup Java
         uses: actions/setup-java@v4

@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -58,7 +60,16 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 	if !forceNew {
 		existingJobID, err := q.rdb.HGet(ctx, dedupKey, dedupField).Result()
 		if err == nil && existingJobID != "" {
-			return existingJobID, true, nil
+			// Check if the existing job is stale — if it was created more than
+			// 2 minutes ago and never completed, the stream entry was likely
+			// consumed or trimmed by a previous worker session. Clear the dedup
+			// entry and re-enqueue.
+			if jobIsStale(existingJobID, 2*time.Minute) {
+				log.Printf("INFO: stale dedup hit for %s (job %s), re-enqueuing", dedupField, existingJobID)
+				q.rdb.HDel(ctx, dedupKey, dedupField)
+			} else {
+				return existingJobID, true, nil
+			}
 		}
 	}
 
@@ -127,6 +138,22 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 	}
 
 	return jobID, false, nil
+}
+
+// jobIsStale checks if a job ID is older than the given threshold.
+// Job IDs have the format "job-<hash_prefix>-<unix_ms>".
+func jobIsStale(jobID string, threshold time.Duration) bool {
+	parts := strings.Split(jobID, "-")
+	if len(parts) < 3 {
+		return false
+	}
+	tsStr := parts[len(parts)-1]
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		return false
+	}
+	created := time.UnixMilli(ts)
+	return time.Since(created) > threshold
 }
 
 // CancelJob removes a pending job from the dedup hash.

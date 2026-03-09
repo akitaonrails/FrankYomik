@@ -77,6 +77,7 @@ class Consumer:
         log.info("Cache v2 directory: %s", os.path.abspath(cache_dir))
         self._rdb: redis.Redis | None = None
         self._last_heartbeat = 0.0
+        self._last_claim = 0.0
         self._high_streak = 0
 
     def connect(self) -> None:
@@ -110,6 +111,7 @@ class Consumer:
 
         log.info("Worker %s starting consumer loop", self.consumer_name)
         self._heartbeat()
+        self._claim_pending()
 
         while self._running:
             try:
@@ -161,10 +163,46 @@ class Consumer:
             else:
                 self._high_streak = 0
 
-        # Periodic heartbeat
+        # Periodic heartbeat and pending entry reclaim
         now = time.monotonic()
         if now - self._last_heartbeat >= self.heartbeat_interval:
             self._heartbeat()
+        if now - self._last_claim >= 30:
+            self._claim_pending()
+
+    def _claim_pending(self) -> None:
+        """Claim orphaned entries from the PEL (pending entry list).
+
+        When a consumer crashes between delivery and ACK, entries stay in the
+        PEL and are never re-delivered by XREADGROUP ... >.  XAUTOCLAIM
+        transfers entries idle for >60s to this consumer so they get processed.
+        """
+        self._last_claim = time.monotonic()
+        for stream in (STREAM_HIGH, STREAM_LOW):
+            try:
+                # XAUTOCLAIM: claim entries idle for >60 seconds
+                # Returns (next_start_id, [(msg_id, fields), ...], [deleted_ids])
+                result = self._rdb.xautoclaim(
+                    stream, self.consumer_group, self.consumer_name,
+                    min_idle_time=60_000,  # 60 seconds
+                    start_id="0-0",
+                    count=10,
+                )
+                if not result or not result[1]:
+                    continue
+                claimed = result[1]
+                log.info("Claimed %d pending entries from %s", len(claimed), stream)
+                for msg_id, fields in claimed:
+                    if fields:  # Not a deleted/trimmed entry
+                        self._process_message(stream, msg_id, fields)
+                    else:
+                        # Entry was trimmed from stream — just ACK it
+                        self._rdb.xack(stream, self.consumer_group, msg_id)
+            except redis.ResponseError as e:
+                if "NOGROUP" not in str(e):
+                    log.warning("XAUTOCLAIM error on %s: %s", stream, e)
+            except Exception:
+                log.exception("Error claiming pending entries from %s", stream)
 
     def _read_one(self, stream: str,
                   block_ms: int) -> tuple[str, bytes, dict] | None:

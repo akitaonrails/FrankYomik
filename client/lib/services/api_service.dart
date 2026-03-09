@@ -23,6 +23,7 @@ class ApiService {
     String? sourceUrl,
     String priority = 'high',
     String? targetLanguage,
+    bool force = false,
   }) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/jobs');
     final request = http.MultipartRequest('POST', uri)
@@ -38,6 +39,7 @@ class ApiService {
     if (chapter != null) request.fields['chapter'] = chapter;
     if (pageNumber != null) request.fields['page_number'] = pageNumber;
     if (sourceUrl != null) request.fields['source_url'] = sourceUrl;
+    if (force) request.fields['force'] = 'true';
 
     final result = await (() async {
       final response = await _client.send(request);

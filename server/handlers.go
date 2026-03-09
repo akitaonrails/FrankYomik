@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -202,6 +203,19 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 				log.Printf("WARN: response encode: %v", err)
 			}
 			return
+		}
+		// Dedup returned an old job ID with no result in Redis.
+		// The job was likely processed and its result expired, or the
+		// stream entry was lost.  Re-enqueue to ensure processing.
+		if jobIsStale(jobID, 60*time.Second) {
+			log.Printf("INFO: dedup job %s has no result and is stale, re-enqueuing", jobID)
+			meta.ForceReprocess = true
+			if newID, _, err2 := s.queue.SubmitJob(r.Context(), imageBytes, pipeline, priority, meta); err2 == nil {
+				jobID = newID
+				dedupHit = false
+			} else {
+				log.Printf("WARN: re-enqueue failed: %v", err2)
+			}
 		}
 	}
 
@@ -402,6 +416,7 @@ func (s *Server) handleCacheImageByHash(w http.ResponseWriter, r *http.Request) 
 	}
 	imageBytes, _, ok := s.cache.LookupBySourceHash(pipeline, sourceHash)
 	if !ok {
+		log.Printf("WARN: cache image 404: pipeline=%q sourceHash=%q", pipeline, sourceHash)
 		jsonError(w, "cached image not found", http.StatusNotFound)
 		return
 	}

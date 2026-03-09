@@ -150,14 +150,37 @@ Risks that still matter operationally:
 - The Android app allows cleartext HTTP to local addresses. Fine for a trusted home LAN, not fine for untrusted Wi-Fi.
 - The client stores the auth token in shared preferences. That is normal for this kind of side-loaded utility app, but it is not hardened secret storage.
 
+## Versioning
+
+Android `versionCode` is derived automatically from `git rev-list --count HEAD` in `client/android/app/build.gradle.kts`. This means every commit produces a higher build number — no manual bumping and no risk of version code regression (which causes "app not installed" errors on Android).
+
+- **To release**: only bump the `version: X.Y.Z+1` display version in `client/pubspec.yaml`. The `+N` part is ignored for Android builds (git count is used instead) but kept for other platforms.
+- **CI**: the release workflow uses `fetch-depth: 0` so the full git history is available for the commit count.
+- **Fallback**: if git is unavailable (e.g. extracted tarball), the pubspec `+N` value is used.
+
+Do NOT manually set `versionCode` in `build.gradle.kts` or rely on the `+N` in `pubspec.yaml` for Android.
+
 ## Where to look when something breaks
 
-- job stuck at `queued`: `server/queue.go`, Redis Streams, worker logs
+- job stuck at `queued`: `server/queue.go` (dedup returning stale job IDs), `server/handlers.go` (stale dedup re-enqueue), Redis Streams, worker logs
 - result missing but worker finished: `server/results.go`, `server/worker/consumer.py`
 - overlay wrong or stale: `client/lib/screens/reader_screen.dart`, `client/lib/webview/overlay_controller.dart`
 - cache mismatch or rerender weirdness: `server/cache.go`, `server/worker/page_cache.py`, metadata patch route in `server/handlers.go`
 - Kindle detection drift: `client/lib/webview/strategies/kindle_strategy.dart`
 - Webtoon batching issues: `client/lib/screens/reader_screen.dart`, `client/lib/webview/strategies/naver_webtoon_strategy.dart`
+- cache image 404 on download: `server/handlers.go` logs `WARN: cache image 404` with pipeline and hash; client retries with `force=true` via `jobs_provider.dart`
+
+## Job reliability
+
+Several layers protect against jobs getting stuck on high-latency or unreliable connections:
+
+- **HTTP timeouts**: `api_service.dart` — 30s submit, 10s status poll, 45s image download.
+- **Retry with backoff**: `jobs_provider.dart` — `_withRetry()` retries retryable errors up to 3 times with exponential backoff.
+- **Stale dedup re-enqueue**: `handlers.go` — if dedup returns a job ID whose result expired from Redis (>60s old, no result), the server re-enqueues with `force=true`.
+- **PEL claiming**: `consumer.py` — `XAUTOCLAIM` recovers orphaned Redis Stream entries from crashed workers every 30s.
+- **Stale job timeout**: `page_job.dart` / `jobs_provider.dart` — jobs active >5 min are marked failed so the UI spinner stops.
+- **Cache download fallback**: `jobs_provider.dart` — if a `cached-v2-*` image download fails (404), the client resubmits with `force=true` instead of failing permanently.
+- **Targeted blob capture**: `kindle_strategy.dart` — captures the specific blob URL from the detection event, not whatever is currently visible (fixes wrong-page captures during rapid flipping).
 
 ## Editing guidance
 
