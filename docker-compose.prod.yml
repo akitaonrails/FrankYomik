@@ -37,8 +37,10 @@ services:
 
   worker:
     image: 192.168.0.145:3007/akitaonrails/frank-yomik-worker:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       APP_UID: ${APP_UID:-1026}
       APP_GID: ${APP_GID:-1026}
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
