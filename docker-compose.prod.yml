@@ -1,0 +1,79 @@
+services:
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  init-perms:
+    image: busybox
+    volumes:
+      - ./data/cache:/data/cache
+    command: ["sh", "-c", "chown -R ${APP_UID:-1026}:${APP_GID:-1026} /data/cache"]
+    restart: "no"
+
+  api:
+    image: 192.168.0.145:3007/akitaonrails/frank-yomik-api:latest
+    user: "${APP_UID:-1026}:${APP_GID:-1026}"
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+      AUTH_TOKEN: ${AUTH_TOKEN:?Set AUTH_TOKEN in .env}
+      CACHE_DIR: /data/cache
+    volumes:
+      - ./data/cache:/data/cache
+    depends_on:
+      redis:
+        condition: service_healthy
+      init-perms:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    image: 192.168.0.145:3007/akitaonrails/frank-yomik-worker:latest
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
+      APP_UID: ${APP_UID:-1026}
+      APP_GID: ${APP_GID:-1026}
+    command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
+    volumes:
+      - ./data/cache:/app/server/cache
+      - ./data/mangaocr-cache:/home/worker/.cache/manga_ocr
+      - ./data/huggingface-cache:/home/worker/.cache/huggingface
+      - ./data/easyocr-cache:/home/worker/.EasyOCR
+      - ./config.prod.yaml:/app/server/config.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      init-perms:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  init-cloudflared:
+    image: busybox
+    volumes:
+      - ./.cloudflared:/src:ro
+      - cloudflared-config:/dest
+    command: ["sh", "-c", "cp /src/* /dest/ && chmod 644 /dest/*"]
+    restart: "no"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --config /etc/cloudflared/config.yml run yomik
+    volumes:
+      - cloudflared-config:/etc/cloudflared:ro
+    depends_on:
+      init-cloudflared:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  cloudflared-config:
