@@ -13,7 +13,7 @@ class WebSocketService {
   Timer? _reconnectTimer;
   Timer? _heartbeatTimer;
   int _reconnectAttempts = 0;
-  static const _maxReconnectDelay = 30;
+  static const _maxReconnectDelay = 10;
 
   ServerSettings? _settings;
   final Set<String> _subscribedJobs = {};

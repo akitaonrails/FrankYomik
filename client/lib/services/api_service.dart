@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
@@ -38,13 +39,21 @@ class ApiService {
     if (pageNumber != null) request.fields['page_number'] = pageNumber;
     if (sourceUrl != null) request.fields['source_url'] = sourceUrl;
 
-    final response = await _client.send(request);
-    final body = await response.stream.bytesToString();
+    final result = await (() async {
+      final response = await _client.send(request);
+      final body = await response.stream.bytesToString();
+      return (response.statusCode, body);
+    })()
+        .timeout(const Duration(seconds: 30));
 
-    if (response.statusCode != 201) {
-      throw ApiException('Submit failed (${response.statusCode}): $body');
+    if (result.$1 != 201) {
+      throw ApiException(
+        'Submit failed (${result.$1}): ${result.$2}',
+        statusCode: result.$1,
+        retryable: result.$1 >= 500,
+      );
     }
-    return jsonDecode(body) as Map<String, dynamic>;
+    return jsonDecode(result.$2) as Map<String, dynamic>;
   }
 
   /// Poll job status.
@@ -53,10 +62,16 @@ class ApiService {
     required String jobId,
   }) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/jobs/$jobId');
-    final response = await _client.get(uri, headers: _headers(settings));
+    final response = await _client.get(uri, headers: _headers(settings)).timeout(
+      const Duration(seconds: 10),
+    );
 
     if (response.statusCode != 200) {
-      throw ApiException('Status failed (${response.statusCode})');
+      throw ApiException(
+        'Status failed (${response.statusCode})',
+        statusCode: response.statusCode,
+        retryable: response.statusCode >= 500,
+      );
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
@@ -70,10 +85,16 @@ class ApiService {
     final uri = imageUrl.startsWith('http')
         ? Uri.parse(imageUrl)
         : Uri.parse('${settings.serverUrl}$imageUrl');
-    final response = await _client.get(uri, headers: _headers(settings));
+    final response = await _client.get(uri, headers: _headers(settings)).timeout(
+      const Duration(seconds: 45),
+    );
 
     if (response.statusCode != 200) {
-      throw ApiException('Image download failed (${response.statusCode})');
+      throw ApiException(
+        'Image download failed (${response.statusCode})',
+        statusCode: response.statusCode,
+        retryable: response.statusCode >= 500,
+      );
     }
     return response.bodyBytes;
   }
@@ -81,10 +102,16 @@ class ApiService {
   /// Check server health (no auth required).
   Future<Map<String, dynamic>> getHealth(ServerSettings settings) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/health');
-    final response = await _client.get(uri);
+    final response = await _client.get(uri).timeout(
+      const Duration(seconds: 10),
+    );
 
     if (response.statusCode != 200) {
-      throw ApiException('Health check failed (${response.statusCode})');
+      throw ApiException(
+        'Health check failed (${response.statusCode})',
+        statusCode: response.statusCode,
+        retryable: response.statusCode >= 500,
+      );
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
@@ -95,7 +122,8 @@ class ApiService {
 class ApiException implements Exception {
   final String message;
   final int? statusCode;
-  ApiException(this.message, {this.statusCode});
+  final bool retryable;
+  ApiException(this.message, {this.statusCode, this.retryable = false});
   @override
   String toString() => 'ApiException: $message';
 }

@@ -544,26 +544,23 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final spreadPipeline = _jsBridge.activeStrategy?.siteName == 'kindle'
             ? _kindlePipeline
             : _jsBridge.activeStrategy?.defaultPipeline;
-        await ref
-            .read(jobsProvider.notifier)
-            .submitPage(
-              pageId: leftId,
-              imageBytes: halves.$1,
-              pipeline: spreadPipeline,
-              title: meta?.title,
-              chapter: meta?.chapter,
-              sourceUrl: _currentUrl,
-            );
-        await ref
-            .read(jobsProvider.notifier)
-            .submitPage(
-              pageId: rightId,
-              imageBytes: halves.$2,
-              pipeline: spreadPipeline,
-              title: meta?.title,
-              chapter: meta?.chapter,
-              sourceUrl: _currentUrl,
-            );
+        final leftFuture = ref.read(jobsProvider.notifier).submitPage(
+          pageId: leftId,
+          imageBytes: halves.$1,
+          pipeline: spreadPipeline,
+          title: meta?.title,
+          chapter: meta?.chapter,
+          sourceUrl: _currentUrl,
+        );
+        final rightFuture = ref.read(jobsProvider.notifier).submitPage(
+          pageId: rightId,
+          imageBytes: halves.$2,
+          pipeline: spreadPipeline,
+          title: meta?.title,
+          chapter: meta?.chapter,
+          sourceUrl: _currentUrl,
+        );
+        await Future.wait([leftFuture, rightFuture], eagerError: false);
 
         _watchForSpreadCompletion(pageId, leftId, rightId);
         return;

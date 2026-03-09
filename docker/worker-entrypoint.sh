@@ -9,4 +9,5 @@ chown -Rf "${APP_UID}:${APP_GID}" /home/worker/.cache /home/worker/.EasyOCR /app
 # gosu with numeric UID doesn't set HOME, so EasyOCR/HuggingFace would
 # write to /.EasyOCR / /.cache instead of /home/worker/.
 export HOME=/home/worker
-exec gosu "${APP_UID}:${APP_GID}" python3.12 -m worker "$@"
+PYTHON="$(command -v python3.12 || command -v python3)"
+exec gosu "${APP_UID}:${APP_GID}" "$PYTHON" -m worker "$@"

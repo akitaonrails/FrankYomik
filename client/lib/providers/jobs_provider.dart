@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import '../models/page_job.dart';
 import '../models/server_settings.dart';
 import '../services/api_service.dart';
@@ -37,6 +40,25 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   ApiService get _api => _ref.read(apiServiceProvider);
   WebSocketService get _ws => _ref.read(wsServiceProvider);
   CacheService get _cache => _ref.read(cacheServiceProvider);
+
+  Future<T> _withRetry<T>(Future<T> Function() action, {int maxAttempts = 3}) async {
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await action();
+      } on TimeoutException {
+        if (attempt == maxAttempts) rethrow;
+      } on ApiException catch (e) {
+        if (!e.retryable || attempt == maxAttempts) rethrow;
+      } on SocketException {
+        if (attempt == maxAttempts) rethrow;
+      } on http.ClientException {
+        if (attempt == maxAttempts) rethrow;
+      }
+      debugPrint('[Jobs] Retry attempt $attempt/$maxAttempts after error');
+      await Future.delayed(Duration(seconds: min(1 << attempt, 4)));
+    }
+    throw StateError('unreachable');
+  }
 
   /// Submit a page for translation.
   Future<void> submitPage({
@@ -125,7 +147,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     state = {...state, pageId: job};
 
     try {
-      final response = await _api.submitJob(
+      final response = await _withRetry(() => _api.submitJob(
         settings: _settings,
         imageBytes: imageBytes,
         pipeline: effectivePipeline,
@@ -135,11 +157,12 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         sourceUrl: sourceUrl,
         priority: priority,
         targetLanguage: targetLanguage,
-      );
+      ));
 
       final jobId = response['job_id'] as String;
       final isCached = response['cached'] == true;
       job.jobId = jobId;
+      job.submittedAt = DateTime.now();
       job.sourceHash = (response['source_hash'] as String?) ?? hash;
 
       if (isCached) {
@@ -150,10 +173,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           job.stage = 'downloading';
           state = {...state};
 
-          final img = await _api.getJobImage(
+          final img = await _withRetry(() => _api.getJobImage(
             settings: _settings,
             imageUrl: imageUrl,
-          );
+          ));
           job.translatedImage = img;
           job.status = PageJobStatus.completed;
           job.cached = true;
@@ -230,10 +253,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     }
 
     try {
-      final img = await _api.getJobImage(
+      final img = await _withRetry(() => _api.getJobImage(
         settings: _settings,
         imageUrl: job.imageUrl!,
-      );
+      ));
       job.translatedImage = img;
       job.status = PageJobStatus.completed;
       state = {...state};
@@ -282,7 +305,18 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       final activeJobIds = activeJobs.map((j) => j.jobId!).toList();
       _ws.subscribeToJobs(activeJobIds);
 
+      // Expire stale jobs that have been active too long
       for (final job in activeJobs) {
+        if (job.isStale) {
+          debugPrint('[Jobs] ${job.pageId} timed out after 5 min');
+          job.status = PageJobStatus.failed;
+          job.error = 'Job timed out';
+          state = {...state};
+          continue;
+        }
+      }
+
+      for (final job in activeJobs.where((j) => j.isActive)) {
         try {
           final status = await _api.getJobStatus(
             settings: _settings,

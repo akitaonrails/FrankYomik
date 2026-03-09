@@ -15,6 +15,7 @@ output/
 
 # Python artifacts
 .venv/
+server/.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -36,6 +37,13 @@ server/fonts/comicneue-master/
 server/fonts/komika_text/
 server/fonts/badaboom/
 server/fonts/genei-mirror/
+
+# Ollama models (mounted at runtime, not baked into image)
+server/models/
+
+# Disk cache (mounted at runtime)
+cache/
+server/cache/
 
 # Compiled Go binaries
 server/server

@@ -20,6 +20,7 @@ class PageJob {
   String? sourceHash;
   String? error;
   bool cached;
+  DateTime? submittedAt;
 
   PageJob({
     required this.pageId,
@@ -39,12 +40,18 @@ class PageJob {
     this.sourceHash,
     this.error,
     this.cached = false,
+    this.submittedAt,
   });
 
   bool get isComplete => status == PageJobStatus.completed;
   bool get isFailed => status == PageJobStatus.failed;
   bool get isActive =>
       status == PageJobStatus.queued || status == PageJobStatus.processing;
+
+  bool get isStale =>
+      isActive &&
+      submittedAt != null &&
+      DateTime.now().difference(submittedAt!).inMinutes >= 5;
 }
 
 enum PageJobStatus { pending, queued, processing, completed, failed }
