@@ -26,6 +26,7 @@ class ConnectionNotifier extends StateNotifier<ConnectionStatus> {
 
   Future<void> connect() async {
     final settings = _ref.read(settingsProvider);
+    debugPrint('[Connection] connect: serverUrl=${settings.serverUrl} isLoaded=${settings.isLoaded} isConfigured=${settings.isConfigured}');
     if (!settings.isConfigured) {
       state = ConnectionStatus.error;
       return;
@@ -33,12 +34,22 @@ class ConnectionNotifier extends StateNotifier<ConnectionStatus> {
 
     state = ConnectionStatus.connecting;
 
-    // Test REST connectivity
-    try {
-      final api = _ref.read(apiServiceProvider);
-      await api.getHealth(settings);
-    } catch (e) {
-      debugPrint('[Connection] Health check failed: $e');
+    // Test REST connectivity with retry for transient failures
+    final api = _ref.read(apiServiceProvider);
+    var connected = false;
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await api.getHealth(settings);
+        connected = true;
+        break;
+      } catch (e) {
+        debugPrint('[Connection] Health check attempt $attempt failed: $e');
+        if (attempt < 3) {
+          await Future.delayed(Duration(seconds: attempt));
+        }
+      }
+    }
+    if (!connected) {
       state = ConnectionStatus.error;
       return;
     }

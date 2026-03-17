@@ -6,7 +6,7 @@
 AppId={{B7A3F2E1-4D5C-4E8F-9A1B-2C3D4E5F6A7B}
 AppName=Frank Yomik
 AppVersion={#AppVersion}
-AppPublisher=Frank Manga
+AppPublisher=Frank Yomik
 DefaultDirName={autopf}\FrankYomik
 DefaultGroupName=Frank Yomik
 UninstallDisplayIcon={app}\frank_client.exe

@@ -20,12 +20,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late bool _autoTranslate;
   late String _targetLanguage;
 
+  bool _initialized = false;
+
   @override
   void initState() {
     super.initState();
-    final s = ref.read(settingsProvider);
-    _urlController = TextEditingController(text: s.serverUrl);
-    _tokenController = TextEditingController(text: s.authToken);
+    _urlController = TextEditingController();
+    _tokenController = TextEditingController();
+    _pipeline = 'manga_furigana';
+    _autoTranslate = true;
+    _targetLanguage = 'en';
+  }
+
+  void _syncFromSettings(ServerSettings s) {
+    if (_initialized) return;
+    _initialized = true;
+    _urlController.text = s.serverUrl;
+    _tokenController.text = s.authToken;
     _pipeline = s.pipeline;
     _autoTranslate = s.autoTranslate;
     _targetLanguage = s.targetLanguage;
@@ -103,6 +114,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final settings = ref.watch(settingsProvider);
+    if (settings.isLoaded) _syncFromSettings(settings);
     final connStatus = ref.watch(connectionProvider);
 
     return Scaffold(

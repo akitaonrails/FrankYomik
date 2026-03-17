@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/server_settings.dart';
 
@@ -40,7 +41,8 @@ class WebSocketService {
         Uri.parse('$wsUrl/api/v1/ws?token=${settings.authToken}');
 
     try {
-      _channel = WebSocketChannel.connect(uri);
+      // IOWebSocketChannel uses the global HttpOverrides for IPv6 preference
+      _channel = IOWebSocketChannel.connect(uri);
       _subscription = _channel!.stream.listen(
         _onData,
         onError: _onError,

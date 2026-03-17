@@ -1,12 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import '../models/server_settings.dart';
 
 /// REST client for the Frank API server.
+///
+/// Uses the global HttpOverrides for IPv6-preferring connections.
+/// See [IPv6PreferringHttpOverrides] in main.dart.
 class ApiService {
-  final http.Client _client = http.Client();
+  final http.Client _client = IOClient();
 
   Map<String, String> _headers(ServerSettings settings) => {
     'Authorization': 'Bearer ${settings.authToken}',
@@ -104,10 +109,12 @@ class ApiService {
   /// Check server health (no auth required).
   Future<Map<String, dynamic>> getHealth(ServerSettings settings) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/health');
+    debugPrint('[API] getHealth: $uri');
     final response = await _client.get(uri).timeout(
       const Duration(seconds: 10),
     );
 
+    debugPrint('[API] getHealth response: ${response.statusCode}');
     if (response.statusCode != 200) {
       throw ApiException(
         'Health check failed (${response.statusCode})',
@@ -129,4 +136,3 @@ class ApiException implements Exception {
   @override
   String toString() => 'ApiException: $message';
 }
-

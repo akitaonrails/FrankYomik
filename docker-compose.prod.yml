@@ -70,7 +70,7 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: tunnel --config /etc/cloudflared/config.yml run yomik
+    command: tunnel --protocol http2 --config /etc/cloudflared/config.yml run yomik
     volumes:
       - cloudflared-config:/etc/cloudflared:ro
     depends_on:

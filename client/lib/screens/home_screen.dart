@@ -21,11 +21,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Auto-connect if settings are configured
+    // Auto-connect once settings have been loaded from disk
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final settings = ref.read(settingsProvider);
-      if (settings.isConfigured) {
+      if (settings.isLoaded && settings.isConfigured) {
         ref.read(connectionProvider.notifier).connect();
+      } else {
+        // Settings still loading — listen for the loaded state
+        ref.listenManual(settingsProvider, (prev, next) {
+          if (next.isLoaded && next.isConfigured) {
+            ref.read(connectionProvider.notifier).connect();
+          }
+        });
       }
     });
   }
@@ -51,7 +58,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Frank Manga'),
+        title: const Text('Frank Yomik'),
         actions: [
           IconButton(
             icon: const Icon(Icons.list_alt),
