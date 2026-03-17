@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -30,19 +31,61 @@ class WebSocketService {
     _doConnect();
   }
 
-  void _doConnect() {
+  Future<void> _doConnect() async {
     final settings = _settings;
     if (settings == null || !settings.isConfigured) return;
 
     final wsUrl = settings.serverUrl
         .replaceFirst('http://', 'ws://')
         .replaceFirst('https://', 'wss://');
-    final uri =
-        Uri.parse('$wsUrl/api/v1/ws?token=${settings.authToken}');
+    var uri = Uri.parse('$wsUrl/api/v1/ws?token=${settings.authToken}');
 
     try {
-      // IOWebSocketChannel uses the global HttpOverrides for IPv6 preference
-      _channel = IOWebSocketChannel.connect(uri);
+      // Resolve hostname with IPv6 preference for the WebSocket connection.
+      // IOWebSocketChannel doesn't use HttpOverrides.global, so we must
+      // resolve manually and connect via the IPv6 address with correct SNI.
+      final host = uri.host;
+      final isSecure = uri.scheme == 'wss';
+      final port = (uri.hasPort && uri.port != 0)
+          ? uri.port
+          : (isSecure ? 443 : 80);
+
+      HttpClient? customClient;
+      if (!_isLocal(host)) {
+        try {
+          final addresses = await InternetAddress.lookup(host);
+          addresses.sort((a, b) {
+            final aV6 = a.type == InternetAddressType.IPv6 ? 0 : 1;
+            final bV6 = b.type == InternetAddressType.IPv6 ? 0 : 1;
+            return aV6.compareTo(bV6);
+          });
+          final addr = addresses.first;
+          debugPrint('[WS] Resolved $host -> ${addr.address} (${addr.type})');
+
+          // Create an HttpClient that connects to the resolved address
+          // with proper TLS SNI for the original hostname.
+          customClient = HttpClient();
+          customClient.connectionFactory =
+              (Uri u, String? proxyHost, int? proxyPort) async {
+            if (isSecure) {
+              final sock = await Socket.connect(addr, port,
+                  timeout: const Duration(seconds: 10));
+              final secure =
+                  await SecureSocket.secure(sock, host: host);
+              return ConnectionTask.fromSocket(
+                  Future.value(secure), () => secure.destroy());
+            }
+            return Socket.startConnect(addr, port);
+          };
+        } catch (e) {
+          debugPrint('[WS] DNS resolve failed, using default: $e');
+        }
+      }
+
+      _channel = IOWebSocketChannel.connect(
+        uri,
+        customClient: customClient,
+      );
       _subscription = _channel!.stream.listen(
         _onData,
         onError: _onError,
@@ -57,9 +100,17 @@ class WebSocketService {
         subscribeToJobs(_subscribedJobs.toList());
       }
     } catch (e) {
+      debugPrint('[WS] Connect error: $e');
       _scheduleReconnect();
     }
   }
+
+  bool _isLocal(String host) =>
+      host == 'localhost' ||
+      host == '127.0.0.1' ||
+      host == '::1' ||
+      host.startsWith('192.168.') ||
+      host.startsWith('10.');
 
   void _onData(dynamic data) {
     try {
@@ -69,6 +120,7 @@ class WebSocketService {
   }
 
   void _onError(Object error) {
+    debugPrint('[WS] Error: $error');
     _cleanup();
     onDisconnected?.call();
     _scheduleReconnect();

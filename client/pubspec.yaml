@@ -1,7 +1,7 @@
 name: frank_client
 description: "Frank Yomik translation client — WebView reader with server-backed translation overlay"
 publish_to: 'none'
-version: 0.4.2+1
+version: 0.4.4+1
 
 environment:
   sdk: ^3.11.0
