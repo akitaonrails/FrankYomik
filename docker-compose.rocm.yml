@@ -1,0 +1,19 @@
+# ROCm override — use with:
+#   docker compose -f yomik-docker-compose.yml -f yomik-docker-compose.rocm.yml \
+#     --env-file ~/frank_yomik/.env up -d
+services:
+  worker:
+    image: 192.168.0.145:3007/akitaonrails/frank-yomik-worker-rocm:latest
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
+    security_opt:
+      - seccomp=unconfined
+    shm_size: 8g
+    environment:
+      # Set HSA_OVERRIDE_GFX_VERSION if your GPU isn't natively supported.
+      # Example for gfx1030 (RX 6800/6900): HSA_OVERRIDE_GFX_VERSION=10.3.0
+      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-}

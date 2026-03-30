@@ -1,0 +1,53 @@
+# ROCm (AMD GPU) worker — based on official ROCm PyTorch image
+# PyTorch + ROCm are pre-installed in the base image.
+#
+# Build:  docker build -f Dockerfile.worker-rocm -t frank-yomik-worker-rocm .
+# Run:    docker run --device=/dev/kfd --device=/dev/dri \
+#           --group-add video --group-add render \
+#           --security-opt seccomp=unconfined --shm-size=8g \
+#           frank-yomik-worker-rocm
+#
+FROM rocm/pytorch:rocm7.2.1_ubuntu24.04_py3.12_pytorch_release_2.9.1
+
+ARG APP_UID=1026
+ARG APP_GID=1026
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 gosu \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY server/requirements.txt .
+
+# Base image has torch pre-installed with ROCm support.
+# Install torchvision from ROCm index, then our deps (skipping torch).
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/rocm7.2 && \
+    grep -v simple-lama requirements.txt | \
+        grep -vi '^torch' | \
+        pip install --no-cache-dir -r /dev/stdin && \
+    pip install --no-cache-dir --no-deps simple-lama-inpainting
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app/server
+COPY server/ .
+
+RUN echo "worker:x:${APP_UID}:${APP_GID}:worker:/home/worker:/usr/sbin/nologin" >> /etc/passwd \
+    && echo "worker:x:${APP_GID}:" >> /etc/group \
+    && mkdir -p /home/worker/.cache/huggingface \
+                /home/worker/.cache/manga_ocr \
+                /home/worker/.EasyOCR/model \
+                /app/server/cache \
+    && chown -R ${APP_UID}:${APP_GID} /home/worker /app
+
+COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
+RUN chmod +x /usr/local/bin/worker-entrypoint.sh
+
+ENV HOME=/home/worker
+ENV HF_HOME=/home/worker/.cache/huggingface
+ENV EASYOCR_MODULE_PATH=/home/worker/.EasyOCR
+
+ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
+CMD ["--pipeline", "both"]

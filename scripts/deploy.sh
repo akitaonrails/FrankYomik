@@ -8,6 +8,7 @@ REGISTRY="192.168.0.145:3007/akitaonrails"
 COMPOSE_FILE="yomik-docker-compose.yml"
 ENV_FILE="~/frank_yomik/.env"
 TAG="${1:-latest}"
+VARIANT="${2:-cpu}"  # cpu, rocm, or cuda
 
 COMPOSE="docker compose -f ${COMPOSE_FILE} --env-file ${ENV_FILE}"
 
@@ -15,9 +16,9 @@ ssh_cmd() {
   ssh -p "${SSH_PORT}" "${SSH_USER}@${SERVER}" "$@"
 }
 
-echo "==> Building and pushing images (tag: ${TAG})"
+echo "==> Building and pushing images (tag: ${TAG}, variant: ${VARIANT})"
 cd "$(dirname "$0")/.."
-scripts/push-images.sh "${TAG}"
+scripts/push-images.sh "${TAG}" "${VARIANT}"
 
 echo ""
 echo "==> Deploying on ${SERVER}"
@@ -39,4 +40,4 @@ sleep 3
 ssh_cmd "cd ~/docker && ${COMPOSE} ps"
 
 echo ""
-echo "==> Done. Services deployed with tag: ${TAG}"
+echo "==> Done. Services deployed with tag: ${TAG} variant: ${VARIANT}"

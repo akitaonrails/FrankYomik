@@ -38,7 +38,7 @@ services:
     restart: unless-stopped
 
   worker:
-    image: 192.168.0.145:3007/akitaonrails/frank-yomik-worker:latest
+    image: ${WORKER_IMAGE:-192.168.0.145:3007/akitaonrails/frank-yomik-worker:latest}
     env_file: /home/akitaonrails/frank_yomik/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
