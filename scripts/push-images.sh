@@ -1,9 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-REGISTRY="${REGISTRY:-192.168.0.145:3007/akitaonrails}"
+# Push to Gitea registry at 192.168.0.90:3007 from dev machine.
+# On the server, Docker pulls from localhost:3007 (same host).
+REGISTRY="${REGISTRY:-192.168.0.90:3007/akitaonrails}"
 TAG="${1:-latest}"
-VARIANT="${2:-cpu}"  # cpu, rocm, or cuda
+VARIANT="${2:-rocm}"  # cpu, rocm, or cuda
 
 echo "Building and pushing to ${REGISTRY} with tag: ${TAG} variant: ${VARIANT}"
 

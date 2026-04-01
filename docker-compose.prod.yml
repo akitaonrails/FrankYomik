@@ -1,27 +1,35 @@
+name: frank_yomik
+
 services:
   redis:
     image: redis:7-alpine
+    container_name: yomik-redis
+    security_opt:
+      - label:disable
     volumes:
-      - /home/akitaonrails/frank_yomik/redis:/data
+      - /var/opt/docker/frank_yomik/data/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
-    restart: unless-stopped
+    restart: always
 
   init-perms:
     image: busybox
-    env_file: /home/akitaonrails/frank_yomik/.env
+    container_name: yomik-init-perms
+    security_opt:
+      - label:disable
     volumes:
-      - /home/akitaonrails/frank_yomik/cache:/data/cache
+      - /var/opt/docker/frank_yomik/data/cache:/data/cache
     command: ["sh", "-c", "chown -R ${APP_UID:-1026}:${APP_GID:-1026} /data/cache"]
     restart: "no"
 
   api:
-    image: 192.168.0.145:3007/akitaonrails/frank-yomik-api:latest
-    env_file: /home/akitaonrails/frank_yomik/.env
-    user: "${APP_UID:-1026}:${APP_GID:-1026}"
+    image: localhost:3007/akitaonrails/frank-yomik-api:latest
+    container_name: yomik-api
+    security_opt:
+      - label:disable
     ports:
       - "8080:8080"
     environment:
@@ -29,48 +37,59 @@ services:
       AUTH_TOKEN: ${AUTH_TOKEN:?Set AUTH_TOKEN in .env}
       CACHE_DIR: /data/cache
     volumes:
-      - /home/akitaonrails/frank_yomik/cache:/data/cache
+      - /var/opt/docker/frank_yomik/data/cache:/data/cache
     depends_on:
       redis:
         condition: service_healthy
       init-perms:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: always
 
   worker:
-    image: ${WORKER_IMAGE:-192.168.0.145:3007/akitaonrails/frank-yomik-worker:latest}
-    env_file: /home/akitaonrails/frank_yomik/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    image: localhost:3007/akitaonrails/frank-yomik-worker-rocm:latest
+    container_name: yomik-worker
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://192.168.0.90:11434}
       APP_UID: ${APP_UID:-1026}
       APP_GID: ${APP_GID:-1026}
+      HSA_OVERRIDE_GFX_VERSION: "11.5.1"
+      PYTORCH_ROCM_ARCH: "gfx1151"
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    security_opt:
+      - seccomp:unconfined
+      - label:disable
+    group_add:
+      - "485"
+      - "488"
     volumes:
-      - /home/akitaonrails/frank_yomik/cache:/app/server/cache
-      - /home/akitaonrails/frank_yomik/mangaocr-cache:/home/worker/.cache/manga_ocr
-      - /home/akitaonrails/frank_yomik/huggingface-cache:/home/worker/.cache/huggingface
-      - /home/akitaonrails/frank_yomik/easyocr-cache:/home/worker/.EasyOCR
-      - /home/akitaonrails/frank_yomik/config.prod.yaml:/app/server/config.yaml:ro
+      - /var/opt/docker/frank_yomik/data/cache:/app/server/cache
+      - /var/opt/docker/frank_yomik/data/mangaocr-cache:/home/worker/.cache/manga_ocr
+      - /var/opt/docker/frank_yomik/data/huggingface-cache:/home/worker/.cache/huggingface
+      - /var/opt/docker/frank_yomik/data/easyocr-cache:/home/worker/.EasyOCR
+      - /var/opt/docker/frank_yomik/config.prod.yaml:/app/server/config.yaml:ro
     depends_on:
       redis:
         condition: service_healthy
       init-perms:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: always
 
   init-cloudflared:
     image: busybox
+    container_name: yomik-init-cloudflared
     volumes:
-      - /home/akitaonrails/frank_yomik/.cloudflared:/src:ro
+      - /var/opt/docker/frank_yomik/.cloudflared:/src:ro
       - cloudflared-config:/dest
     command: ["sh", "-c", "cp /src/* /dest/ && chmod 644 /dest/*"]
     restart: "no"
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: tunnel --protocol http2 --edge-ip-version auto --config /etc/cloudflared/config.yml run yomik
+    container_name: yomik-cloudflared
+    command: tunnel --config /etc/cloudflared/config.yml run fdab897e-f6f9-4dee-ab84-bb1c5add5bde
     volumes:
       - cloudflared-config:/etc/cloudflared:ro
     depends_on:
@@ -78,7 +97,7 @@ services:
         condition: service_completed_successfully
       api:
         condition: service_started
-    restart: unless-stopped
+    restart: always
 
 volumes:
   cloudflared-config:
