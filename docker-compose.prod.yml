@@ -1,5 +1,18 @@
 name: frank_yomik
 
+# Log rotation for every service: without this the json-file driver grows
+# unbounded and the worker logs alone fill the disk over a few weeks.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+# Images pinned by tag are pulled/rebuilt by hand; watchtower must not touch
+# the infra containers (redis holds delivery state, the init jobs are one-shot).
+x-no-watchtower: &no-watchtower
+  - com.centurylinklabs.watchtower.enable=false
+
 services:
   redis:
     image: redis:7-alpine
@@ -7,13 +20,15 @@ services:
     security_opt:
       - label:disable
     volumes:
-      - /var/opt/docker/frank_yomik/data/redis:/data
+      - /var/opt/docker/frank/yomik/data/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
     restart: always
+    logging: *default-logging
+    labels: *no-watchtower
 
   init-perms:
     image: busybox
@@ -21,9 +36,11 @@ services:
     security_opt:
       - label:disable
     volumes:
-      - /var/opt/docker/frank_yomik/data/cache:/data/cache
+      - /var/opt/docker/frank/yomik/data/cache:/data/cache
     command: ["sh", "-c", "chown -R ${APP_UID:-1026}:${APP_GID:-1026} /data/cache"]
     restart: "no"
+    logging: *default-logging
+    labels: *no-watchtower
 
   api:
     image: localhost:3007/akitaonrails/frank-yomik-api:latest
@@ -31,20 +48,23 @@ services:
     user: "${APP_UID:-1026}:${APP_GID:-1026}"
     security_opt:
       - label:disable
+      - no-new-privileges:true
     ports:
-      - "8080:8080"
+      # Bound to the LAN address only; public access goes through cloudflared.
+      - "${API_BIND_ADDR:-192.168.0.90}:8080:8080"
     environment:
       REDIS_URL: redis://redis:6379
       AUTH_TOKEN: ${AUTH_TOKEN:?Set AUTH_TOKEN in .env}
       CACHE_DIR: /data/cache
     volumes:
-      - /var/opt/docker/frank_yomik/data/cache:/data/cache
+      - /var/opt/docker/frank/yomik/data/cache:/data/cache
     depends_on:
       redis:
         condition: service_healthy
       init-perms:
         condition: service_completed_successfully
     restart: always
+    logging: *default-logging
 
   worker:
     image: localhost:3007/akitaonrails/frank-yomik-worker-rocm:latest
@@ -70,26 +90,33 @@ services:
       - "485"
       - "488"
     volumes:
-      - /var/opt/docker/frank_yomik/data/cache:/app/server/cache
-      - /var/opt/docker/frank_yomik/data/mangaocr-cache:/home/worker/.cache/manga_ocr
-      - /var/opt/docker/frank_yomik/data/huggingface-cache:/home/worker/.cache/huggingface
-      - /var/opt/docker/frank_yomik/data/easyocr-cache:/home/worker/.EasyOCR
-      - /var/opt/docker/frank_yomik/config.prod.yaml:/app/server/config.yaml:ro
+      - /var/opt/docker/frank/yomik/data/cache:/app/server/cache
+      - /var/opt/docker/frank/yomik/data/mangaocr-cache:/home/worker/.cache/manga_ocr
+      - /var/opt/docker/frank/yomik/data/huggingface-cache:/home/worker/.cache/huggingface
+      - /var/opt/docker/frank/yomik/data/easyocr-cache:/home/worker/.EasyOCR
+      - /var/opt/docker/frank/yomik/config.prod.yaml:/app/server/config.yaml:ro
     depends_on:
       redis:
         condition: service_healthy
       init-perms:
         condition: service_completed_successfully
     restart: always
+    # Two replicas share one GPU box; caps keep a runaway page from OOM-killing
+    # the host (and with it redis and the API).
+    mem_limit: 8g
+    memswap_limit: 12g
+    logging: *default-logging
 
   init-cloudflared:
     image: busybox
     container_name: yomik-init-cloudflared
     volumes:
-      - /var/opt/docker/frank_yomik/.cloudflared:/src:ro
+      - /var/opt/docker/frank/yomik/.cloudflared:/src:ro
       - cloudflared-config:/dest
     command: ["sh", "-c", "cp /src/* /dest/ && chmod 644 /dest/*"]
     restart: "no"
+    logging: *default-logging
+    labels: *no-watchtower
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -103,6 +130,7 @@ services:
       api:
         condition: service_started
     restart: always
+    logging: *default-logging
 
 volumes:
   cloudflared-config:
