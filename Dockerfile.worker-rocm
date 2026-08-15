@@ -12,8 +12,14 @@ FROM rocm/pytorch:rocm7.2.1_ubuntu24.04_py3.12_pytorch_release_2.9.1
 ARG APP_UID=1026
 ARG APP_GID=1026
 
+# Security: upgrade kernel headers baked into the ROCm base (fixes
+# linux-libc-dev CVEs incl. CVE-2026-53215) and purge the stale ABI
+# header packages the base carries — runtime never needs them. Upstream
+# base refreshes lag Ubuntu security fixes, so plain rebuilds don't clear these.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 gosu \
+    && apt-get install -y --only-upgrade linux-libc-dev \
+    && { apt-get purge -y linux-headers-6.8.0-106 linux-headers-6.8.0-106-generic || true; } \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
