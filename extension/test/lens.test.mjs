@@ -780,3 +780,17 @@ test('unreadable pixels leave the binding alone', async () => {
 
   assert.equal(lens.has('kindle-1'), true);
 });
+
+test('a page that reads as blank is not called a mismatch', async () => {
+  // An element that has not decoded yet draws as a flat canvas, which carries
+  // no structure to compare. That is unreadable, not "a different page", and
+  // must not cost a good render.
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const env = loadContentScripts(['lens.js'], [img], {
+    pixels: { 'blob:page': 0, 'blob:frank-1': 7 },   // 0 renders flat
+  });
+
+  await env.window.FrankLens.attach(img, 'kindle-1', DATA_URL);
+
+  assert.equal(env.window.FrankLens.has('kindle-1'), true);
+});

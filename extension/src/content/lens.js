@@ -41,6 +41,7 @@
   // re-captured page (0.33) without admitting another one.
   const SIGNATURE_SIZE = 16;
   const SIGNATURE_TOLERANCE = 0.5;
+  const FLAT_IMAGE_DEVIATION = 0.02;
 
   // pageId -> { el, url }. Registrations own their object URL and revoke it,
   // so a long reading session cannot accumulate translated pages.
@@ -159,11 +160,19 @@
     const warm = new Image();
     warm.addEventListener('load', () => {
       if (warm.naturalHeight > 0) entry.aspect = warm.naturalWidth / warm.naturalHeight;
-      if (depicts(warm, target)) return;
+      const match = depicts(warm, target);
+      if (match.ok) return;
       // The render is of some other page. Showing it would be worse than
       // showing nothing: it reads as a translation of what is on screen.
+      const rect = target.getBoundingClientRect();
       release(pageId);
-      report(`Discarded a render that does not match the page it was bound to (${pageId})`);
+      report(
+        `Discarded a render that does not match its page (${pageId}): `
+        + `difference ${match.difference.toFixed(2)} of max ${SIGNATURE_TOLERANCE}, `
+        + `render ${warm.naturalWidth}x${warm.naturalHeight}, `
+        + `page ${Math.round(rect.width)}x${Math.round(rect.height)} `
+        + `natural ${target.naturalWidth || '?'}x${target.naturalHeight || '?'}`,
+      );
     });
     warm.src = url;
 
@@ -194,7 +203,10 @@
       }
       const mean = luma.reduce((a, b) => a + b, 0) / luma.length;
       const variance = luma.reduce((a, b) => a + (b - mean) ** 2, 0) / luma.length;
-      const deviation = Math.sqrt(variance) || 1e-6;
+      const deviation = Math.sqrt(variance);
+      // A flat image carries no structure to compare — an undecoded element,
+      // a blank canvas. Treat it as unreadable rather than as "different".
+      if (deviation < FLAT_IMAGE_DEVIATION) return null;
       return luma.map((value) => (value - mean) / deviation);
     } catch {
       return null;   // reading the pixels is a courtesy, not a requirement
@@ -208,10 +220,11 @@
   function depicts(render, target) {
     const a = signature(render);
     const b = signature(target);
-    if (!a || !b) return true;
+    if (!a || !b) return { ok: true, reason: 'unreadable' };
     let total = 0;
     for (let i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i]);
-    return (total / a.length) <= SIGNATURE_TOLERANCE;
+    const difference = total / a.length;
+    return { ok: difference <= SIGNATURE_TOLERANCE, difference };
   }
 
   /// Note an element as a page whose translation has not arrived yet.
