@@ -35,10 +35,14 @@ const PIPELINE_MISMATCH =
   'page does not look like typeset prose (0 text columns found); ' +
   'use a manga pipeline for this book';
 
+// A failure the page cannot fix and that names no remedy: the reader stops
+// resubmitting rather than switching anything.
+const REPEATED_ERROR = 'server unavailable';
+
 test('a single failure does not stop anything', () => {
   const { kindle, sendToContent } = setup();
 
-  sendToContent(failure(PIPELINE_MISMATCH));
+  sendToContent(failure(REPEATED_ERROR));
 
   assert.equal(kindle.state().autoSubmitPaused, false);
   assert.equal(kindle.state().consecutiveFailures, 1);
@@ -47,10 +51,10 @@ test('a single failure does not stop anything', () => {
 test('the same failure repeating stops auto-submission', () => {
   const { kindle, sendToContent } = setup();
 
-  for (let i = 0; i < 3; i++) sendToContent(failure(PIPELINE_MISMATCH));
+  for (let i = 0; i < 3; i++) sendToContent(failure(REPEATED_ERROR));
 
   assert.equal(kindle.state().autoSubmitPaused, true);
-  assert.equal(kindle.state().lastFailureError, PIPELINE_MISMATCH);
+  assert.equal(kindle.state().lastFailureError, REPEATED_ERROR);
 });
 
 test('unrelated failures do not accumulate towards the stop', () => {
@@ -68,7 +72,7 @@ test('unrelated failures do not accumulate towards the stop', () => {
 
 test('changing the pipeline resumes and re-reads the page', () => {
   const { kindle, sendToContent } = setup();
-  for (let i = 0; i < 3; i++) sendToContent(failure(PIPELINE_MISMATCH));
+  for (let i = 0; i < 3; i++) sendToContent(failure(REPEATED_ERROR));
   assert.equal(kindle.state().autoSubmitPaused, true);
 
   kindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: 'manga_furigana' });
@@ -80,7 +84,7 @@ test('changing the pipeline resumes and re-reads the page', () => {
 
 test('settings that do not change the pipeline leave the stop in place', () => {
   const { kindle, sendToContent } = setup();
-  for (let i = 0; i < 3; i++) sendToContent(failure(PIPELINE_MISMATCH));
+  for (let i = 0; i < 3; i++) sendToContent(failure(REPEATED_ERROR));
 
   kindle.updateSettings({ ...READER_SETTINGS, lensZoom: 3 });
 
@@ -135,7 +139,7 @@ test('another volume is unaffected by this one', () => {
 
 test('choosing a pipeline for this book resumes a paused reader', () => {
   const { kindle, sendToContent } = setup();
-  for (let i = 0; i < 3; i++) sendToContent(failure(PIPELINE_MISMATCH));
+  for (let i = 0; i < 3; i++) sendToContent(failure(REPEATED_ERROR));
   assert.equal(kindle.state().autoSubmitPaused, true);
 
   kindle.updateSettings({
@@ -224,7 +228,7 @@ test('detection keeps running while submission is paused', () => {
   // submissions must not stop it — otherwise a stale render survives the move
   // to another book.
   const { kindle, sendToContent } = setup();
-  for (let i = 0; i < 3; i++) sendToContent(failure(PIPELINE_MISMATCH));
+  for (let i = 0; i < 3; i++) sendToContent(failure(REPEATED_ERROR));
   assert.equal(kindle.state().autoSubmitPaused, true);
 
   assert.equal(kindle.state().pageImageFound, true,
@@ -275,4 +279,57 @@ test('a wide text-book page is one page', () => {
 test('a tall page is one page whatever the pipeline', () => {
   assert.equal(withPage(TALL, 'manga_furigana').kindle.state().pageMode, 'single');
   assert.equal(withPage(TALL, 'book_furigana').kindle.state().pageMode, 'single');
+});
+
+// --- a book that never matches its renders is on the wrong pipeline ---------
+// The manga pipeline clears balloons it thinks it found and redraws their
+// text, so run over a novel it returns a page rearranged beyond recognition.
+// The reader should not have to work that out from a setting.
+
+function withMismatches(pipeline, count) {
+  const env = setup();
+  env.window.FrankKindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: pipeline });
+  const sent = [];
+  env.sandbox.chrome.runtime.sendMessage = (message) => { sent.push(message); return Promise.resolve(); };
+  for (let i = 0; i < count; i++) env.window.FrankLens.__mismatch?.();
+  return { ...env, sent };
+}
+
+test('one mismatch is not enough to change anything', () => {
+  const env = setup();
+  const sent = [];
+  env.sandbox.chrome.runtime.sendMessage = (m) => { sent.push(m); return Promise.resolve(); };
+  env.window.FrankKindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: 'manga_furigana' });
+
+  env.window.FrankLens.__mismatch();
+
+  assert.equal(sent.filter((m) => m.type === 'SET_BOOK_PIPELINE').length, 0);
+});
+
+test('two mismatches switch the book to the text-book pipeline', () => {
+  const { sent } = withMismatches('manga_furigana', 2);
+
+  const switches = sent.filter((m) => m.type === 'SET_BOOK_PIPELINE');
+  assert.equal(switches.length, 1);
+  assert.equal(switches[0].pipeline, 'book_furigana');
+  assert.equal(switches[0].bookId, 'B0ABCDEFGH');
+});
+
+test('a book already on the text-book pipeline is left alone', () => {
+  const { sent } = withMismatches('book_furigana', 3);
+  assert.equal(sent.filter((m) => m.type === 'SET_BOOK_PIPELINE').length, 0);
+});
+
+test('the server refusing a prose page switches the book back', () => {
+  const env = setup();
+  const sent = [];
+  env.sandbox.chrome.runtime.sendMessage = (m) => { sent.push(m); return Promise.resolve(); };
+
+  env.sendToContent(failure(PIPELINE_MISMATCH));
+
+  const switches = sent.filter((m) => m.type === 'SET_BOOK_PIPELINE');
+  assert.equal(switches.length, 1);
+  assert.equal(switches[0].pipeline, 'manga_furigana');
+  assert.equal(env.kindle.state().autoSubmitPaused, false,
+    'switching is the fix; pausing would leave it stuck');
 });

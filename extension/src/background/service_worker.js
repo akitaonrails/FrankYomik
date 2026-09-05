@@ -1,4 +1,5 @@
 import {
+  ASIN_PATTERN,
   DEFAULT_SETTINGS,
   KINDLE_HOSTS,
   NAVER_WEBTOON_HOSTS,
@@ -7,6 +8,7 @@ import {
   VALID_TARGET_LANGUAGES,
   apiOriginPattern,
   normalizeSettings,
+  withPipelineChoice,
 } from '../shared/config.js';
 import {
   SIZE_LIMITS,
@@ -104,12 +106,31 @@ async function handleMessage(message, sender) {
     case 'GET_DIAGNOSTICS':
       assertExtensionPage(sender, 'GET_DIAGNOSTICS');
       return { ok: true, diagnostics: await loadDiagnostics(), jobs: await loadActiveJobs() };
+    case 'SET_BOOK_PIPELINE':
+      // Content scripts may set the pipeline for the book they are reading,
+      // and nothing else: the value is checked against the allowlist and the
+      // key against the shape of an ASIN. Credentials stay out of reach.
+      return setBookPipeline(message.bookId, message.pipeline);
     case 'RUN_ACTIVE_TAB_ACTION':
       assertExtensionPage(sender, 'RUN_ACTIVE_TAB_ACTION');
       return runActiveTabAction(message.action);
     default:
       throw new Error(`unknown message type: ${message.type}`);
   }
+}
+
+async function setBookPipeline(bookId, pipeline) {
+  if (!ASIN_PATTERN.test(String(bookId || ''))) throw new Error('invalid book id');
+  if (!VALID_MANGA_PIPELINES.has(pipeline)) throw new Error('invalid pipeline');
+  const settings = await loadSettings();
+  const next = withPipelineChoice(settings, bookId, pipeline);
+  await chrome.storage.local.set({ [STORAGE_KEYS.settings]: normalizeSettings(next) });
+  await recordEvent({
+    site: 'kindle',
+    level: 'info',
+    message: `Pipeline for ${bookId} set to ${pipeline}`,
+  });
+  return { ok: true, bookId, pipeline };
 }
 
 async function runActiveTabAction(action) {

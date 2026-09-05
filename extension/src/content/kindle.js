@@ -28,6 +28,7 @@
   const LOADER_VISIBLE_OVERLAP_PX2 = 1600;
   const NO_TARGET_REPORT_INTERVAL_MS = 15000;
   const MAX_CONSECUTIVE_FAILURES = 3;
+  const MISMATCHES_BEFORE_SWITCH = 2;
   // A loader that never goes away is not a loader. The selector below is loose
   // enough to match unrelated furniture, and a false match used to disable
   // detection for the life of the page without saying so.
@@ -54,6 +55,9 @@
   let consecutiveFailures = 0;
   let lastFailureError = '';
   let autoSubmitPaused = false;
+  // Renders that came back describing something other than the page they were
+  // bound to. Two in a row on a manga pipeline means the book is prose.
+  let renderMismatches = 0;
   let detectTimer = null;
   let lastHref = location.href;
   let loaderSince = 0;
@@ -83,6 +87,7 @@
     settings = nextSettings || {};
     if (effectivePipeline() === previous) return;
     resumeAutoSubmit();
+    renderMismatches = 0;
     // Re-detect the page in front of the reader under the new pipeline, and
     // drop what the old one produced: it answers a different question.
     lastBlob = '';
@@ -130,6 +135,27 @@
     report('info', 'Navigated; cleared translations from the previous book');
   }
 
+  /// A render that does not depict its page usually means the wrong pipeline.
+  ///
+  /// The manga pipeline clears balloons it thinks it found and redraws their
+  /// text, so run over a novel it returns a page rearranged beyond recognition.
+  /// Rather than leave the reader to notice and fix a setting, switch the book
+  /// once the evidence repeats.
+  function noteRenderMismatch() {
+    renderMismatches += 1;
+    if (renderMismatches < MISMATCHES_BEFORE_SWITCH) return;
+    const pipeline = effectivePipeline();
+    const book = bookId();
+    if (!book || !pipeline.startsWith('manga_')) return;
+    renderMismatches = 0;
+    report('info',
+      `Pages of ${book} do not survive the ${pipeline} pipeline; switching this `
+      + 'book to the text-book pipeline.');
+    chrome.runtime.sendMessage({
+      type: 'SET_BOOK_PIPELINE', bookId: book, pipeline: 'book_furigana',
+    })?.catch?.(() => {});
+  }
+
   function resumeAutoSubmit() {
     consecutiveFailures = 0;
     lastFailureError = '';
@@ -143,6 +169,7 @@
     // Kindle begins selecting from the press itself, so the lens has to take
     // mouse presses before the reader sees them and hand back the taps.
     window.FrankLens?.setPressCapture?.(true);
+    window.FrankLens?.onRenderMismatch?.(noteRenderMismatch);
     installListeners();
     detectTimer = window.setInterval(detectPageChange, DETECT_INTERVAL_MS);
     window.setTimeout(detectPageChange, 400);
@@ -414,6 +441,13 @@
   /// Kindle's blob churn would keep sending it. Changing a setting or forcing
   /// a reprocess resumes.
   function noteFailure(error) {
+    if (/use a manga pipeline/i.test(error) && bookId()) {
+      report('info', `${bookId()} is not a text book; switching it back.`);
+      chrome.runtime.sendMessage({
+        type: 'SET_BOOK_PIPELINE', bookId: bookId(), pipeline: 'manga_furigana',
+      })?.catch?.(() => {});
+      return;
+    }
     consecutiveFailures = error === lastFailureError ? consecutiveFailures + 1 : 1;
     lastFailureError = error;
     if (autoSubmitPaused || consecutiveFailures < MAX_CONSECUTIVE_FAILURES) return;

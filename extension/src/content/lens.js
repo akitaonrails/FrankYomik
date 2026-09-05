@@ -80,9 +80,16 @@
     pressCapture: false,
   };
 
+  let onMismatch = null;
+
   const api = {
     alive: runtimeAlive,
     destroy,
+    /// Called when a render turns out not to depict the page it was bound to,
+    /// so a strategy can decide what that means for the book being read.
+    onRenderMismatch(handler) { onMismatch = handler; },
+    /// Test seam: the same call the render check makes when it discards one.
+    __mismatch(detail = {}) { onMismatch?.({ pageId: 'test', ...detail }); },
     attach,
     release,
     markPending,
@@ -180,6 +187,7 @@
         + `render ${warm.naturalWidth}x${warm.naturalHeight}, `
         + `page ${Math.round(rect.width)}x${Math.round(rect.height)}]`,
       );
+      onMismatch?.({ pageId, difference: match.difference, inverted: match.inverted });
     });
     warm.src = url;
 

@@ -232,6 +232,22 @@ The global setting is the default for volumes that have not been given one.
 Without per-volume memory, moving from a novel to a manga left the manga on the
 book pipeline, and the server refused every page of it.
 
+## Getting the pipeline wrong is self-correcting
+
+A book on the wrong pipeline used to be silent and confusing: the manga
+pipeline clears balloons it thinks it found and redraws their text, so run over
+a novel it returns a page rearranged beyond recognition, which the render check
+then refuses. Both directions now fix themselves, per book:
+
+- Two renders in a row that do not depict their page, while a manga pipeline is
+  in use, switch that book to `book_furigana`.
+- The server refusing a page as "not typeset prose" switches that book back to
+  a manga pipeline instead of counting towards the failure stop.
+
+Content scripts can set the pipeline for the book they are reading through
+`SET_BOOK_PIPELINE`, which validates the ASIN shape and the pipeline name;
+everything else in settings, credentials included, stays out of their reach.
+
 ## When a page keeps failing
 
 Kindle regenerates blob URLs on its own, so a page that fails for a reason the
