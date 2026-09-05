@@ -150,6 +150,9 @@ const String _moduleScript = r'''
   // Webtoon keeps many pages on screen, so nothing calls setActivePage there;
   // retention is bounded by count instead.
   var MAX_REGISTRATIONS = 8;
+  // A render and the page it belongs to have the same shape. Beyond this the
+  // registration belongs to something the reader has since replaced.
+  var ASPECT_TOLERANCE = 0.08;
 
   var state = {
     enabled: true,
@@ -160,6 +163,7 @@ const String _moduleScript = r'''
     // is still our gesture: it shows nothing, but it must not fall through and
     // turn the page while the reader waits for the render.
     pending: [],
+    aspects: {},      // pageId -> render aspect, for spotting stale bindings
     el: null,
     open: false,        // the magnifier is on screen
     holding: false,     // the press became a peek; the reader is locked
@@ -300,6 +304,7 @@ const String _moduleScript = r'''
     releaseSource(pageId);
     unmarkPending(target);
     state.sources[pageId] = blobUrl;
+    state.aspects[pageId] = null;
     var registered = Object.keys(state.sources);
     while (registered.length > MAX_REGISTRATIONS) {
       releaseSource(registered.shift());
@@ -310,8 +315,14 @@ const String _moduleScript = r'''
       target.dataset.frankOriginalSrc = target.src;
     }
 
-    // Warm the decode so the first peek does not stutter.
+    // Warm the decode so the first peek does not stutter, and record the
+    // render's shape while we are at it.
     var warm = new Image();
+    warm.addEventListener('load', function() {
+      if (warm.naturalHeight > 0) {
+        state.aspects[pageId] = warm.naturalWidth / warm.naturalHeight;
+      }
+    });
     warm.src = blobUrl;
 
     // The reader may already be holding on this page, waiting for it.
@@ -345,6 +356,7 @@ const String _moduleScript = r'''
 
   function releaseSource(pageId) {
     var url = state.sources[pageId];
+    delete state.aspects[pageId];
     if (!url) return;
     try { URL.revokeObjectURL(url); } catch (e) { /* already gone */ }
     delete state.sources[pageId];
@@ -387,7 +399,7 @@ const String _moduleScript = r'''
     el.id = '__frankLens';
     el.style.cssText =
       'position:fixed; z-index:2147483646; display:none; pointer-events:none;' +
-      'border-radius:50%; background-repeat:no-repeat; background-color:#fff;' +
+      'border-radius:50%; background-repeat:no-repeat; background-color:transparent;' +
       'box-shadow:0 6px 24px rgba(0,0,0,0.45), 0 0 0 3px rgba(255,255,255,0.9),' +
       ' 0 0 0 5px rgba(0,0,0,0.35); will-change:left,top,background-position;';
     document.body.appendChild(el);
@@ -412,6 +424,15 @@ const String _moduleScript = r'''
   }
 
   // The page under the pointer, and whether its translation is ready.
+  // Whether a registration still describes the page it is bound to.
+  function stillMatches(el) {
+    var aspect = state.aspects[el.dataset.frankLensPageId];
+    if (!aspect) return true;                 // unknown shape: trust it
+    var r = el.getBoundingClientRect();
+    if (r.height <= 0) return true;
+    return Math.abs((r.width / r.height) - aspect) / aspect <= ASPECT_TOLERANCE;
+  }
+
   function candidateAt(x, y) {
     var els = document.querySelectorAll('img[data-frank-lens-src]');
     var registered = [];
@@ -419,6 +440,10 @@ const String _moduleScript = r'''
       // Kindle reuses the same <img> across page turns; without this gate a
       // stale registration would magnify the page the reader already left.
       if (state.activePage && els[i].dataset.frankLensPageId !== state.activePage) continue;
+      if (!stillMatches(els[i])) {
+        releaseSource(els[i].dataset.frankLensPageId);
+        continue;
+      }
       registered.push(els[i]);
     }
     var ready = smallestCovering(registered, x, y);
@@ -495,10 +520,14 @@ const String _moduleScript = r'''
 
     // The translated render is scaled to the original's on-screen box, so a
     // point in the page maps to the same point in the translation.
-    el.style.backgroundSize = (rect.width * z) + 'px ' + (rect.height * z) + 'px';
-    var px = (x - rect.left) * z;
-    var py = (y - rect.top) * z;
-    el.style.backgroundPosition = (r - px) + 'px ' + (r - py) + 'px';
+    var bgW = rect.width * z;
+    var bgH = rect.height * z;
+    el.style.backgroundSize = bgW + 'px ' + bgH + 'px';
+    // Clamp to the render: near an edge the lens stops panning instead of
+    // showing empty space beside the page.
+    var offsetX = Math.min(0, Math.max(r - ((x - rect.left) * z), (r * 2) - bgW));
+    var offsetY = Math.min(0, Math.max(r - ((y - rect.top) * z), (r * 2) - bgH));
+    el.style.backgroundPosition = offsetX + 'px ' + offsetY + 'px';
 
     var lift = state.pointerType === 'touch' ? (r + TOUCH_LIFT_PX) : 0;
     var cx = Math.max(r + 4, Math.min(window.innerWidth - r - 4, x));

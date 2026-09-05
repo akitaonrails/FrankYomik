@@ -141,7 +141,21 @@ export function loadContentScripts(scripts, images, options = {}) {
     console,
     setTimeout,
     clearTimeout,
-    Image: class { set src(v) { this._src = v; } get src() { return this._src; } },
+    // Enough of an Image for the decode warm-up, including the load event the
+    // lens uses to learn a render's shape.
+    Image: class {
+      constructor() {
+        this._handlers = [];
+        this.naturalWidth = options.renderNatural?.width ?? 400;
+        this.naturalHeight = options.renderNatural?.height ?? 600;
+      }
+      addEventListener(type, fn) { if (type === 'load') this._handlers.push(fn); }
+      set src(value) {
+        this._src = value;
+        for (const fn of this._handlers) fn();
+      }
+      get src() { return this._src; }
+    },
     fetch: async () => ({ blob: async () => ({ type: 'image/png' }) }),
     URL: {
       createObjectURL: () => `blob:frank-${++urlCounter}`,

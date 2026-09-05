@@ -16,6 +16,9 @@
   // Webtoon keeps many pages on screen, so nothing calls setActivePage there;
   // retention is bounded by count instead.
   const MAX_REGISTRATIONS = 8;
+  // A render and the page it belongs to have the same shape. Beyond this the
+  // registration belongs to something else the reader has since replaced.
+  const ASPECT_TOLERANCE = 0.08;
 
   // pageId -> { el, url }. Registrations own their object URL and revoke it,
   // so a long reading session cannot accumulate translated pages.
@@ -99,15 +102,20 @@
 
     release(pageId);
     pending.delete(target);
-    entries.set(pageId, { el: target, url });
+    const entry = { el: target, url, aspect: null };
+    entries.set(pageId, entry);
     while (entries.size > MAX_REGISTRATIONS) {
       release(entries.keys().next().value);
     }
     target.dataset.frankLensPageId = pageId;
     target.dataset.frankLensSrc = url;
 
-    // Warm the decode so the first peek does not stutter.
+    // Warm the decode so the first peek does not stutter, and record the
+    // render's shape while we are at it.
     const warm = new Image();
+    warm.addEventListener('load', () => {
+      if (warm.naturalHeight > 0) entry.aspect = warm.naturalWidth / warm.naturalHeight;
+    });
     warm.src = url;
 
     // The reader may already be holding on this page, waiting for it.
@@ -233,7 +241,7 @@
       'pointer-events:none',
       'border-radius:50%',
       'background-repeat:no-repeat',
-      'background-color:#fff',
+      'background-color:transparent',
       'box-shadow:0 6px 24px rgba(0,0,0,0.45), 0 0 0 3px rgba(255,255,255,0.9), 0 0 0 5px rgba(0,0,0,0.35)',
       'will-change:left,top,background-position',
     ].join(';');
@@ -272,11 +280,25 @@
     return best;
   }
 
+  /// Whether a registration still describes the page it is bound to.
+  function stillMatches(entry) {
+    if (!entry.aspect || !entry.el) return true;   // unknown shape: trust it
+    const rect = entry.el.getBoundingClientRect();
+    if (rect.height <= 0) return true;
+    return Math.abs((rect.width / rect.height) - entry.aspect) / entry.aspect
+      <= ASPECT_TOLERANCE;
+  }
+
   /// The page under the pointer, and whether its translation is ready.
   function candidateAt(x, y) {
     const registered = [];
     for (const [pageId, entry] of entries) {
       if (state.activePage && pageId !== state.activePage) continue;
+      if (!stillMatches(entry)) {
+        // The reader put a different page in this element.
+        release(pageId);
+        continue;
+      }
       registered.push(entry.el);
     }
     const ready = smallestCovering(registered, x, y);
@@ -353,8 +375,15 @@
 
     // The translated render is scaled to the original's on-screen box, so the
     // point under the pointer maps to the same point in the translation.
-    el.style.backgroundSize = `${rect.width * zoom}px ${rect.height * zoom}px`;
-    el.style.backgroundPosition = `${radius - (x - rect.left) * zoom}px ${radius - (y - rect.top) * zoom}px`;
+    const width = rect.width * zoom;
+    const height = rect.height * zoom;
+    el.style.backgroundSize = `${width}px ${height}px`;
+    // Clamp to the render: near an edge the lens stops panning instead of
+    // showing empty space beside the page.
+    const diameter = radius * 2;
+    const offsetX = Math.min(0, Math.max(radius - (x - rect.left) * zoom, diameter - width));
+    const offsetY = Math.min(0, Math.max(radius - (y - rect.top) * zoom, diameter - height));
+    el.style.backgroundPosition = `${offsetX}px ${offsetY}px`;
 
     const lift = state.pointerType === 'touch' ? radius + TOUCH_LIFT_PX : 0;
     const minX = radius + LENS_EDGE_MARGIN_PX;

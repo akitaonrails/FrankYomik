@@ -116,7 +116,21 @@ function buildSandbox(images) {
     clearTimeout,
     atob: (b64) => Buffer.from(b64, 'base64').toString('binary'),
     Blob: class { constructor(parts, opts) { this.parts = parts; this.type = opts?.type; } },
-    Image: class { set src(v) { this._src = v; } get src() { return this._src; } },
+    // Enough of an Image for the decode warm-up, including the load event the
+    // lens uses to learn a render's shape.
+    Image: class {
+      constructor() {
+        this._handlers = [];
+        this.naturalWidth = 400;
+        this.naturalHeight = 600;
+      }
+      addEventListener(type, fn) { if (type === 'load') this._handlers.push(fn); }
+      set src(value) {
+        this._src = value;
+        for (const fn of this._handlers) fn();
+      }
+      get src() { return this._src; }
+    },
     PointerEvent: class {
       constructor(type, init = {}) {
         this.type = type;
@@ -540,4 +554,33 @@ test('the cancel dispatched at the reader does not end our own peek', async () =
   const [bgX] = el.style.backgroundPosition.split(' ').map(parseFloat);
   assert.equal(bgX, r - (320 - 100) * 2, 'the lens must still track the pointer');
   assert.equal(move.propagationStopped, true, 'and still take moves from the page');
+});
+
+// --- a render belongs to one page ------------------------------------------
+
+test('a render whose page has been replaced is dropped, not shown', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+  assert.equal(lens.has('kindle-1'), true);
+
+  img._rect = { left: 0, top: 0, width: 900, height: 600 };  // another book
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+
+  assert.equal(lens.isOpen(), false);
+  assert.equal(lens.has('kindle-1'), false);
+});
+
+test('the magnifier stops at the edge of the page', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  fire('pointerdown', pointer('pointerdown', 5, 5));
+  await wait(260);
+
+  const [bgX, bgY] = lensEl(document).style.backgroundPosition.split(' ').map(parseFloat);
+  assert.equal(bgX, 0);
+  assert.equal(bgY, 0);
 });

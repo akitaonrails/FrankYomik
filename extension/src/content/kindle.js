@@ -43,6 +43,7 @@
   let consecutiveFailures = 0;
   let lastFailureError = '';
   let autoSubmitPaused = false;
+  let lastHref = location.href;
   let loaderSince = 0;
   let loaderOverriddenAt = 0;
   const processedBlobs = new Set();
@@ -90,6 +91,18 @@
       pagesDetected: pageCounter,
       pagesSubmitted: processedBlobs.size,
     };
+  }
+
+  /// Opening a different book leaves nothing of the last one behind.
+  function noteNavigation() {
+    if (location.href === lastHref) return;
+    lastHref = location.href;
+    lastBlob = '';
+    lastRect = null;
+    processedBlobs.clear();
+    window.FrankLens?.clear();
+    resumeAutoSubmit();
+    report('info', 'Navigated; cleared translations from the previous book');
   }
 
   function resumeAutoSubmit() {
@@ -183,7 +196,7 @@
 
   function detectPageChange() {
     if (!settings.configured || settings.kindleEnabled === false) return;
-    if (autoSubmitPaused) return;
+    noteNavigation();
     if (loaderVisible()) return;
     const target = findVisibleBlob();
     if (!target) {
@@ -222,10 +235,13 @@
       kindlePage: findKindlePage(),
     };
     report('info', `Detected Kindle ${pageMode} page ${pageCounter}`);
+    // Detection still runs while submission is paused, because this is also
+    // what releases the page the reader has left.
     // Kindle reuses the same <img> across turns: retarget before the new
     // page's translation lands, so a peek cannot magnify the page just left,
     // and the previous render is released instead of accumulating.
     window.FrankOverlay?.releasePagesExcept(pageId, target);
+    if (autoSubmitPaused) return;
     scheduleSubmit(detection);
   }
 

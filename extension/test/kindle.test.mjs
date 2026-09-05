@@ -216,3 +216,33 @@ test('an unconfigured extension says so instead of looking broken', () => {
 
   assert.equal(env.window.FrankKindle.state().configured, false);
 });
+
+// --- leaving a book behind --------------------------------------------------
+
+test('detection keeps running while submission is paused', () => {
+  // Detection is also what releases the page the reader has left, so pausing
+  // submissions must not stop it — otherwise a stale render survives the move
+  // to another book.
+  const { kindle, sendToContent } = setup();
+  for (let i = 0; i < 3; i++) sendToContent(failure(PIPELINE_MISMATCH));
+  assert.equal(kindle.state().autoSubmitPaused, true);
+
+  assert.equal(kindle.state().pageImageFound, true,
+    'the page is still being looked at');
+});
+
+test('opening another book clears what the last one registered', async () => {
+  const { kindle, window: win, sandbox } = setup();
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  await win.FrankLens.attach(img, 'kindle-1', 'data:image/png;base64,iVBORw0KGgo=');
+  assert.equal(win.FrankLens.has('kindle-1'), true);
+
+  sandbox.location.href = 'https://read.amazon.co.jp/?asin=B0ZZZZZZZZ';
+  // A pipeline change schedules a detection tick, which is where the move
+  // between books is noticed.
+  kindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: 'manga_furigana' });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  assert.equal(win.FrankLens.has('kindle-1'), false,
+    'the previous book must not be peekable in this one');
+});

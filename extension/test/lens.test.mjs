@@ -3,7 +3,12 @@
 // page, and the retention rules that keep translated pages from piling up.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { loadContentScripts, makeImage, wait, lensElement, DATA_URL } from './helpers/dom-stub.mjs';
+
+function readLensSource() {
+  return readFileSync(new URL('../src/content/lens.js', import.meta.url), 'utf8');
+}
 
 function setup(images) {
   const env = loadContentScripts(['lens.js'], images);
@@ -224,8 +229,10 @@ test('disabling the lens disarms the gesture', async () => {
 });
 
 test('the smallest page under the pointer wins when they overlap', async () => {
-  const spread = makeImage({ left: 0, top: 0, width: 800, height: 600 });
-  const inset = makeImage({ left: 100, top: 100, width: 200, height: 200 });
+  // Both share the render's 2:3 shape; a page whose shape no longer matches
+  // its render is covered separately.
+  const spread = makeImage({ left: 0, top: 0, width: 800, height: 1200 });
+  const inset = makeImage({ left: 100, top: 100, width: 200, height: 300 });
   const { lens, document, fire, pointer } = setup([spread, inset]);
   await lens.attach(spread, 'wt-0', DATA_URL);
   await lens.attach(inset, 'wt-1', DATA_URL);
@@ -233,7 +240,7 @@ test('the smallest page under the pointer wins when they overlap', async () => {
   fire('pointerdown', pointer('pointerdown', 150, 150));
   await wait(260);
 
-  assert.equal(lensElement(document).style.backgroundSize, '400px 400px');
+  assert.equal(lensElement(document).style.backgroundSize, '400px 600px');
 });
 
 test('touch peeks lift the lens clear of the fingertip', async () => {
@@ -594,4 +601,61 @@ test('without the opt-in the press is untouched', async () => {
   fire('pointerdown', down);
 
   assert.equal(down.propagationStopped, undefined);
+});
+
+// --- a render belongs to one page ------------------------------------------
+// Kindle reuses a single <img> across books. A registration left over from the
+// last book magnified that book's page over this one — white slab and all.
+
+test('a render whose page has been replaced is dropped, not shown', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+  assert.equal(lens.has('kindle-1'), true);
+
+  // The reader loads a different book into the same element.
+  img._rect = { left: 0, top: 0, width: 900, height: 600 };
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+
+  assert.equal(lens.isOpen(), false, 'another book must not be peekable here');
+  assert.equal(lens.has('kindle-1'), false, 'and the render is released');
+});
+
+test('a page that merely resized keeps its render', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  img._rect = { left: 0, top: 0, width: 360, height: 540 };  // same shape
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+
+  assert.equal(lens.isOpen(), true);
+});
+
+test('the magnifier stops at the edge of the page instead of showing nothing', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  // Press in the top-left corner: without clamping the render would be pulled
+  // clear of the lens and leave a blank slab beside it.
+  fire('pointerdown', pointer('pointerdown', 5, 5));
+  await wait(260);
+
+  const el = lensElement(document);
+  const [bgX, bgY] = el.style.backgroundPosition.split(' ').map(Number.parseFloat);
+  assert.equal(bgX, 0, 'never past the left edge');
+  assert.equal(bgY, 0, 'never past the top edge');
+});
+
+test('the lens does not paint its own background over the page', () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens } = setup([img]);
+  assert.equal(typeof lens.attach, 'function');
+  // A backing colour is what turned a misaligned render into a white slab.
+  const source = readLensSource();
+  assert.ok(source.includes('background-color:transparent'));
+  assert.ok(!source.includes('background-color:#fff'));
 });

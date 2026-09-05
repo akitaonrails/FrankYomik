@@ -117,9 +117,13 @@ Gesture rules that keep the reader usable:
   back as a synthetic click, so pages still turn — mouse only, since a touch
   press is also how the reader scrolls and swipes, and that cannot be handed
   back. Only the Kindle strategy opts in; webtoon presses are untouched.
-- Kindle reuses the same `<img>` across page turns, so `setActivePage` releases
-  the previous page's translation on every detection. Without it a peek could
-  magnify the page the reader already left.
+- Kindle reuses the same `<img>` across page turns *and across books*, so
+  `setActivePage` releases the previous page's translation on every detection,
+  navigation clears every registration, and a render whose page no longer has
+  its shape is dropped rather than shown. Without those, a peek in a novel
+  magnified a page of the manga read before it.
+- Detection keeps running while submission is paused, because detection is also
+  what releases the page the reader has left.
 
 The pipeline is unchanged: pages are still captured, queued and rendered the
 same way. Only the presentation differs.
