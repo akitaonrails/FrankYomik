@@ -57,6 +57,17 @@
     has,
     isOpen: () => state.open,
     registeredPages: () => Array.from(entries.keys()),
+    /// Why a hold did or did not open the lens. Read from the extension's
+    /// console context, not the page's.
+    state: () => ({
+      enabled: state.enabled,
+      zoom: state.zoom,
+      activePage: state.activePage,
+      registered: Array.from(entries.keys()),
+      awaitingTranslation: pending.size,
+      holding: state.holding,
+      open: state.open,
+    }),
   };
 
   window.addEventListener('pagehide', clear);

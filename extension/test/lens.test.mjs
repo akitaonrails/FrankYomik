@@ -396,3 +396,21 @@ test('a page turn clears pages that were waiting on the previous one', async () 
 
   assert.equal(click.defaultPrevented, false, 'a stale page must not swallow taps');
 });
+
+test('state reports why a hold did or did not open the lens', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens } = setup([img]);
+
+  const idle = lens.state();
+  assert.deepEqual({ ...idle, registered: [...idle.registered] }, {
+    enabled: true, zoom: 2, activePage: '', registered: [],
+    awaitingTranslation: 0, holding: false, open: false,
+  });
+
+  lens.markPending(img);
+  assert.equal(lens.state().awaitingTranslation, 1);
+
+  await lens.attach(img, 'kindle-1', DATA_URL);
+  assert.equal(lens.state().awaitingTranslation, 0, 'no longer waiting once it lands');
+  assert.deepEqual([...lens.state().registered], ['kindle-1']);
+});
