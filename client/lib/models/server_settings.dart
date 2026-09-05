@@ -40,7 +40,12 @@ class ServerSettings {
 
   Uri get baseUri => Uri.parse(serverUrl);
 
-  static const pipelines = ['manga_translate', 'manga_furigana', 'webtoon'];
+  static const pipelines = [
+    'manga_translate',
+    'manga_furigana',
+    'book_furigana',
+    'webtoon',
+  ];
 
   static const targetLanguages = {
     'en': 'English',

@@ -7,7 +7,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable
-from kindle.config import EN_PAGE_FONT_DIVISOR, MIN_FONT_SIZE
+from kindle.config import BOOK_RENDER_SCALE, EN_PAGE_FONT_DIVISOR, MIN_FONT_SIZE
+from kindle.book_layout import analyze as analyze_book_layout
+from kindle.book_processor import read_columns as read_book_columns
+from kindle.book_renderer import render as render_book_furigana
 from kindle.bubble_detector import extract_bubble_mask_manga
 from kindle.furigana import annotate as furigana_annotate
 from kindle.image_utils import (
@@ -16,6 +19,7 @@ from kindle.image_utils import (
     decode_image_bytes,
     encode_image_pil,
 )
+from kindle.ocr import extract_text as ocr_image
 from kindle.processor import (
     PipelineMode,
     detect_page_bubbles,
@@ -37,13 +41,13 @@ log = logging.getLogger(__name__)
 # Type for progress callback: (stage, detail, percent)
 ProgressCallback = Callable[[str, str, int], None]
 
-VALID_PIPELINES = {"manga_translate", "manga_furigana", "webtoon"}
+VALID_PIPELINES = {"manga_translate", "manga_furigana", "book_furigana", "webtoon"}
 
 
 @dataclass
 class ProcessingJob:
     job_id: str
-    pipeline: str  # manga_translate, manga_furigana, webtoon
+    pipeline: str  # manga_translate, manga_furigana, book_furigana, webtoon
     image_bytes: bytes
     priority: str = "high"
     title: str = ""
@@ -88,6 +92,8 @@ def process_job(job: ProcessingJob,
 
         if job.rerender_from_metadata:
             result = _rerender_from_metadata(job, progress_cb)
+        elif job.pipeline == "book_furigana":
+            result = _process_book(job, progress_cb)
         elif job.pipeline.startswith("manga_"):
             result = _process_manga(job, progress_cb)
         else:
@@ -237,7 +243,19 @@ def _build_metadata_payload(
 def _rerender_from_metadata(job: ProcessingJob,
                             progress_cb: ProgressCallback | None = None,
                             ) -> ProcessingResult:
-    """Re-render using metadata only (skip detection/OCR/translation)."""
+    """Re-render using metadata only (skip detection/OCR/translation).
+
+    Only the manga and webtoon pipelines render editable regions; a book page
+    is annotated in the gutters and has nothing to replay.
+    """
+    if job.pipeline == "book_furigana":
+        return ProcessingResult(
+            job_id=job.job_id,
+            status="failed",
+            error="book_furigana pages cannot be re-rendered from metadata",
+            pipeline=job.pipeline,
+            source_hash=job.source_hash,
+        )
     _report(progress_cb, "rerender", "loading metadata", 15)
     payload = job.metadata_payload
     if not payload or not isinstance(payload.get("regions"), list):
@@ -448,6 +466,78 @@ def _process_manga(job: ProcessingJob,
         status="completed",
         image_bytes=output_bytes,
         bubble_count=bubble_count,
+        pipeline=job.pipeline,
+        source_hash=job.source_hash,
+        metadata_payload=_build_metadata_payload(job, regions, img_w, img_h),
+    )
+
+
+def _process_book(job: ProcessingJob,
+                  progress_cb: ProgressCallback | None = None) -> ProcessingResult:
+    """Annotate a rasterised prose page with furigana.
+
+    Nothing on the page is redrawn: the columns are read, MeCab supplies the
+    readings, and the kana are added in the gutters where vertical Japanese
+    puts ruby anyway.
+    """
+    _, img_pil = decode_image_bytes(job.image_bytes)
+
+    _report(progress_cb, "analyzing_layout", "", 10)
+    layout = analyze_book_layout(img_pil)
+    if not layout.is_prose:
+        # Manga through this pipeline would produce furigana in the artwork.
+        return ProcessingResult(
+            job_id=job.job_id,
+            status="failed",
+            error=(f"page does not look like typeset prose "
+                   f"({len(layout.columns)} text columns found); "
+                   f"use a manga pipeline for this book"),
+            pipeline=job.pipeline,
+            source_hash=job.source_hash,
+        )
+
+    def on_column(done: int, total: int) -> None:
+        _report(progress_cb, "ocr", f"{done}/{total} columns",
+                20 + int(65 * done / max(total, 1)))
+
+    readings = read_book_columns(
+        img_pil, layout,
+        ocr=ocr_image,
+        annotate=furigana_annotate,
+        progress=on_column,
+    )
+
+    _report(progress_cb, "rendering", "", 95)
+    rendered = render_book_furigana(img_pil, layout, readings,
+                                    scale=BOOK_RENDER_SCALE)
+    output_bytes = encode_image_pil(rendered)
+
+    img_w, img_h = img_pil.width, img_pil.height
+    regions = [
+        _build_region(
+            region_id=f"c{reading.index + 1}",
+            kind="text_column",
+            bbox=(reading.column.x0, reading.column.y0,
+                  reading.column.x1, reading.column.y1),
+            img_w=img_w, img_h=img_h,
+            ocr_text=reading.text,
+            is_valid=bool(reading.text),
+            transformed={
+                "kind": "furigana_ruby",
+                "value": [
+                    {"reading": r.reading, "y0": r.y0, "y1": r.y1}
+                    for r in reading.ruby
+                ],
+            },
+        )
+        for reading in readings
+    ]
+
+    return ProcessingResult(
+        job_id=job.job_id,
+        status="completed",
+        image_bytes=output_bytes,
+        bubble_count=sum(len(r.ruby) for r in readings),
         pipeline=job.pipeline,
         source_hash=job.source_hash,
         metadata_payload=_build_metadata_payload(job, regions, img_w, img_h),

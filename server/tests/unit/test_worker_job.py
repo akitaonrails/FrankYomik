@@ -83,12 +83,14 @@ class TestProcessingResultDataclass:
 
 class TestValidPipelines:
     def test_valid_pipelines(self):
-        assert "manga_translate" in VALID_PIPELINES
-        assert "manga_furigana" in VALID_PIPELINES
-        assert "webtoon" in VALID_PIPELINES
-
-    def test_count(self):
-        assert len(VALID_PIPELINES) == 3
+        # The exact set, so adding one is a deliberate change here and in the
+        # Go handler that validates the same names.
+        assert VALID_PIPELINES == {
+            "manga_translate",
+            "manga_furigana",
+            "book_furigana",
+            "webtoon",
+        }
 
     def test_invalid_pipeline_fails(self):
         job = ProcessingJob(

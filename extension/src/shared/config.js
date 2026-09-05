@@ -19,7 +19,13 @@ export const STORAGE_KEYS = Object.freeze({
 export const KINDLE_HOSTS = new Set(['read.amazon.co.jp', 'read.kindle.co.jp']);
 export const NAVER_WEBTOON_HOSTS = new Set(['comic.naver.com', 'm.comic.naver.com']);
 export const VALID_TARGET_LANGUAGES = new Set(['en', 'pt-br']);
-export const VALID_MANGA_PIPELINES = new Set(['manga_translate', 'manga_furigana']);
+// Kindle delivers manga and prose alike as page images, so the pipeline is the
+// reader's choice rather than something detectable from the page.
+export const VALID_MANGA_PIPELINES = new Set([
+  'manga_translate',
+  'manga_furigana',
+  'book_furigana',
+]);
 export const VALID_READER_MODES = new Set(['lens', 'full']);
 export const VALID_LENS_ZOOMS = Object.freeze([1.5, 2, 3]);
 
@@ -28,7 +34,9 @@ export function normalizeSettings(raw = {}) {
     ...DEFAULT_SETTINGS,
     ...raw,
     apiBaseUrl: normalizeApiBaseUrl(raw.apiBaseUrl ?? DEFAULT_SETTINGS.apiBaseUrl),
-    mangaPipeline: raw.mangaPipeline === 'manga_furigana' ? 'manga_furigana' : 'manga_translate',
+    mangaPipeline: VALID_MANGA_PIPELINES.has(raw.mangaPipeline)
+      ? raw.mangaPipeline
+      : DEFAULT_SETTINGS.mangaPipeline,
     targetLanguage: raw.targetLanguage === 'pt-br' ? 'pt-br' : 'en',
     webtoonPrefetch: raw.webtoonPrefetch === 'off' || raw.webtoonPrefetch === 'episode'
       ? raw.webtoonPrefetch

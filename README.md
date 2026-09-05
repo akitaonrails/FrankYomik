@@ -151,7 +151,7 @@ curl -H "Authorization: Bearer secret" http://localhost:8080/api/v1/jobs/<job_id
 
 All endpoints except `/health` require `Authorization: Bearer <token>`.
 
-Pipelines: `manga_translate`, `manga_furigana`, `webtoon`. Priority: `high` (default) or `low` (prefetch).
+Pipelines: `manga_translate`, `manga_furigana`, `book_furigana`, `webtoon`. Priority: `high` (default) or `low` (prefetch).
 
 ## Cloudflare Tunnel (Remote Access)
 

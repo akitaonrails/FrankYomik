@@ -25,6 +25,7 @@ _fonts = _yaml.get("fonts", {})
 _ocr = _yaml.get("ocr", {})
 _text_det = _yaml.get("text_detection", {})
 _manga_inp = _yaml.get("manga_inpainting", {})
+_book = _yaml.get("book", {})
 
 # --- Ollama settings ---
 # Environment variable takes highest priority
@@ -72,6 +73,13 @@ TEXT_MARGIN = 2               # Margin inside bubble for text placement
 # ~147px for 2640px Galaxy Z Fold).  All bubbles on a page use this as the
 # target; smaller bubbles shrink as needed for text to fit.
 EN_PAGE_FONT_DIVISOR = 18
+
+# --- Book (reflowable prose) pipeline ---
+# Furigana on a prose page is small by necessity: the gutter it goes in is one
+# glyph wide. Raising the scale supersamples the whole page for sharper kana
+# under the reader's magnifier, at four times the pixels per step.
+BOOK_RENDER_SCALE = float(_book.get("render_scale", 1.0))
+BOOK_GLYPHS_PER_CHUNK = int(_book.get("glyphs_per_chunk", 12))
 
 # --- Text detection (EasyOCR for artwork text outside bubbles) ---
 TEXT_DETECTION_CONFIDENCE = _text_det.get("confidence", 0.3)

@@ -24,6 +24,13 @@ manga_inpainting:
   enabled: false          # Off by default
   pad: 20                 # Padding around text region for inpainting
 
+book:
+  # Furigana on a prose page is small by necessity — the gutter it goes in is
+  # one glyph wide. Raise the scale to supersample the page for sharper kana
+  # under the reader's magnifier, at four times the pixels per page.
+  render_scale: 1.0
+  glyphs_per_chunk: 12
+
 webtoon:
   data_dir: "webtoon_data"
   output_dir: "output/webtoon"

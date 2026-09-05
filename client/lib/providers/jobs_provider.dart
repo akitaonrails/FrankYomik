@@ -32,6 +32,11 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   /// carry the status the UI reports).
   static const _maxRetainedImages = 20;
 
+  /// Page size varies by an order of magnitude — a manga page is small, a
+  /// full-resolution prose page with furigana is not — so the real limit is
+  /// bytes rather than pages. Whichever bound is reached first wins.
+  static const _maxRetainedImageBytes = 48 * 1024 * 1024;
+
   /// Records for pages the reader left long ago are dropped outright. Kindle
   /// pageIds carry a per-session counter, so an evicted page never comes back
   /// under the same id; a webtoon page that scrolls back into view is
@@ -435,40 +440,55 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   /// Drop page bytes the reader is unlikely to need again.
   ///
   /// Insertion order is reading order, so the tail of the map is what is worth
-  /// keeping: the newest [maxImages] renders keep their bytes, older completed
-  /// pages keep only their record, and the oldest records beyond [maxJobs] are
-  /// dropped entirely. Jobs still in flight are never touched.
+  /// keeping: the newest renders keep their bytes until either bound is
+  /// reached, older completed pages keep only their record, and the oldest
+  /// records beyond [maxJobs] are dropped entirely. Jobs still in flight are
+  /// never touched.
   @visibleForTesting
   static Map<String, PageJob> pruneJobs(
     Map<String, PageJob> jobs, {
     int maxImages = _maxRetainedImages,
+    int maxBytes = _maxRetainedImageBytes,
     int maxJobs = _maxRetainedJobs,
     void Function(PageJob job)? onDropped,
   }) {
     final entries = jobs.entries.toList();
-    var withImages = 0;
-    for (final entry in entries) {
-      if (entry.value.translatedImage != null) withImages++;
-    }
-    final dropBytesBefore = withImages - maxImages;
     final dropRecordsBefore = entries.length - maxJobs;
-    if (dropBytesBefore <= 0 && dropRecordsBefore <= 0) return jobs;
+
+    var keptImages = 0;
+    var keptBytes = 0;
+    final release = <PageJob>[];
+    for (final entry in entries.reversed) {
+      final job = entry.value;
+      final image = job.translatedImage;
+      if (image == null) continue;
+      final withinCount = keptImages < maxImages;
+      final withinBudget = keptBytes + image.length <= maxBytes;
+      // The page in front of the reader is kept whatever it costs; a single
+      // oversized render must not evict itself and leave nothing to show.
+      if (keptImages == 0 || (withinCount && withinBudget)) {
+        keptImages++;
+        keptBytes += image.length;
+      } else {
+        release.add(job);
+      }
+    }
+    if (release.isEmpty && dropRecordsBefore <= 0) return jobs;
+
+    for (final job in release) {
+      job.translatedImage = null;
+      job.originalImage = null;
+    }
+
+    if (dropRecordsBefore <= 0) return {...jobs};
 
     final next = <String, PageJob>{};
-    var seenWithImages = 0;
     for (var i = 0; i < entries.length; i++) {
       final job = entries[i].value;
       final settled = job.isComplete || job.isFailed;
       if (settled && i < dropRecordsBefore) {
         onDropped?.call(job);
         continue;
-      }
-      if (job.translatedImage != null) {
-        seenWithImages++;
-        if (seenWithImages <= dropBytesBefore) {
-          job.translatedImage = null;
-          job.originalImage = null;
-        }
       }
       next[entries[i].key] = job;
     }

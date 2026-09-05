@@ -89,11 +89,11 @@ void main() {
   });
 
   group('job retention', () {
-    PageJob completed(String pageId, {bool withImage = true}) => PageJob(
+    PageJob completed(String pageId, {int bytes = 1024}) => PageJob(
       pageId: pageId,
       status: PageJobStatus.completed,
-      translatedImage: withImage ? Uint8List(1024) : null,
-      originalImage: withImage ? Uint8List(1024) : null,
+      translatedImage: bytes > 0 ? Uint8List(bytes) : null,
+      originalImage: bytes > 0 ? Uint8List(bytes) : null,
     );
 
     Map<String, PageJob> mapOf(Iterable<PageJob> jobs) => {
@@ -132,6 +132,30 @@ void main() {
 
       expect(pruned.keys, ['kindle-2', 'kindle-3', 'kindle-4', 'kindle-5']);
       expect(dropped, ['kindle-0', 'kindle-1']);
+    });
+
+    test('keeps fewer pages when the pages are large', () {
+      // A prose page with furigana is far bigger than a manga page, so the
+      // byte budget is what should bind, not the page count.
+      final jobs = mapOf([
+        for (var i = 0; i < 6; i++) completed('kindle-$i', bytes: 4 * 1024),
+      ]);
+
+      final pruned = JobsNotifier.pruneJobs(
+        jobs,
+        maxImages: 100,
+        maxBytes: 10 * 1024,
+        maxJobs: 100,
+      );
+
+      final kept = pruned.values.where((j) => j.translatedImage != null);
+      expect(kept.map((j) => j.pageId), ['kindle-4', 'kindle-5']);
+    });
+
+    test('a single page over the budget is still kept', () {
+      final jobs = mapOf([completed('kindle-0', bytes: 64 * 1024)]);
+      final pruned = JobsNotifier.pruneJobs(jobs, maxBytes: 1024);
+      expect(pruned['kindle-0']!.translatedImage, isNotNull);
     });
 
     test('never evicts a job that is still in flight', () {

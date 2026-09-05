@@ -88,7 +88,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	pipeline := r.FormValue("pipeline")
 	if !validPipelines[pipeline] {
-		jsonError(w, fmt.Sprintf("invalid pipeline: %s (valid: manga_translate, manga_furigana, webtoon)", pipeline),
+		jsonError(w, fmt.Sprintf("invalid pipeline: %s (valid: manga_translate, manga_furigana, book_furigana, webtoon)", pipeline),
 			http.StatusBadRequest)
 		return
 	}

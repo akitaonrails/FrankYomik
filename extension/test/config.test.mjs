@@ -51,3 +51,11 @@ test('normalizeSettings clamps reader mode and magnification', () => {
   assert.equal(normalizeSettings({ lensZoom: 12 }).lensZoom, 2);
   assert.equal(normalizeSettings({ lensZoom: 'huge' }).lensZoom, 2);
 });
+
+test('normalizeSettings accepts the book pipeline and rejects invented ones', () => {
+  // Kindle prose pages go through their own pipeline; manga must be unaffected.
+  assert.equal(normalizeSettings({ mangaPipeline: 'book_furigana' }).mangaPipeline, 'book_furigana');
+  assert.equal(normalizeSettings({ mangaPipeline: 'manga_furigana' }).mangaPipeline, 'manga_furigana');
+  assert.equal(normalizeSettings({ mangaPipeline: 'book_translate' }).mangaPipeline, 'manga_translate');
+  assert.equal(normalizeSettings({}).mangaPipeline, 'manga_translate');
+});

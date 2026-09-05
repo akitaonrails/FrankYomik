@@ -9,6 +9,7 @@ import '../providers/connection_provider.dart';
 import '../providers/jobs_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/image_capture_service.dart';
+import '../utils/kindle_pipelines.dart';
 import '../utils/kindle_priority.dart';
 import '../webview/dom_inspector.dart';
 import '../webview/js_bridge.dart';
@@ -96,8 +97,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   int _kindleOverlayFallback = 0;
   Timer? _kindleCaptureDebounceTimer;
 
-  /// Selected pipeline for Kindle pages (furigana vs english translation).
-  /// Initialized from global settings in initState, overridden per-volume.
+  /// Selected pipeline for Kindle pages. Initialized from global settings in
+  /// initState, overridden per-volume.
+  ///
+  /// Manga and prose are both delivered as page images by the Kindle reader,
+  /// so which pipeline a title needs cannot be told from the page alone — the
+  /// choice is the reader's, and it sticks per volume.
   late String _kindlePipeline;
 
   /// Current Kindle ASIN for per-title pipeline persistence.
@@ -1705,12 +1710,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     );
   }
 
-  /// Toggle Kindle pipeline between furigana and english translation.
+  /// Step to the next Kindle pipeline: furigana, English, then book furigana.
   /// Cancels all active Kindle jobs and re-submits the current page.
   void _toggleKindlePipeline() {
-    _kindlePipeline = _kindlePipeline == 'manga_furigana'
-        ? 'manga_translate'
-        : 'manga_furigana';
+    _kindlePipeline = KindlePipelines.next(_kindlePipeline);
     _syncPipelineButtonState();
 
     // Persist per-title pipeline preference
@@ -1844,7 +1847,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final controller = _webController;
     if (controller == null) return;
     final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
-    final label = _kindlePipeline == 'manga_furigana' ? 'Furigana' : 'English';
+    final label = KindlePipelines.labelFor(_kindlePipeline);
     controller.evaluateJavascript(
       source:
           "if(window.__frankSetPipeline) window.__frankSetPipeline('$label', $isKindle);",

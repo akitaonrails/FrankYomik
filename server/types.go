@@ -71,6 +71,7 @@ type WSNotification struct {
 var validPipelines = map[string]bool{
 	"manga_translate": true,
 	"manga_furigana":  true,
+	"book_furigana":   true,
 	"webtoon":         true,
 }
 

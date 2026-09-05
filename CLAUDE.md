@@ -11,10 +11,11 @@ If you need to get oriented fast, start with `server/main.go`, `server/handlers.
 
 The API accepts page images, hashes them, deduplicates them, and queues jobs in Redis. Python workers pull from Redis, run OCR and translation, render a new image, cache the result on disk, and publish completion events. The Flutter client watches those events and overlays translated images back into the reader.
 
-There are three pipelines:
+There are four pipelines:
 
 - `manga_translate`: Japanese manga page -> English render
 - `manga_furigana`: Japanese manga page -> furigana annotations
+- `book_furigana`: Japanese prose page -> furigana in the gutters
 - `webtoon`: Korean webtoon page -> English render
 
 ## Repo map
@@ -32,6 +33,9 @@ There are three pipelines:
 - `server/worker/job.py`: pipeline routing and metadata payload generation
 - `server/worker/page_cache.py`: Python-side cache v2 writer/reader
 - `server/kindle/`: manga OCR, translation, rendering, furigana, bubble detection
+- `server/kindle/book_layout.py`: column/gutter analysis for prose pages
+- `server/kindle/book_processor.py`: per-column OCR and reading placement
+- `server/kindle/book_renderer.py`: furigana drawn into the gutters
 - `server/webtoon/`: webtoon OCR, translation, rendering, scraper
 
 ### Client
@@ -155,6 +159,41 @@ ahead of the reader:
   rendered in the DOM, so there is nothing to capture ahead. Lens mode softens
   this: the original page is always readable while its translation is still in
   the queue.
+
+## Text books (`book_furigana`)
+
+Kindle rasterises reflowable novels exactly like manga: the page is one
+blob-backed `<img>` inside `#kr-renderer`, with no text in the DOM (the only
+Japanese there is the title in the reader chrome). So a book cannot be
+annotated by injecting `<ruby>`; it goes through the image pipeline like
+everything else, and the lens is what keeps the page itself untouched.
+
+What makes prose tractable is its regularity:
+
+- Columns come from a projection profile — a page of this novel gives 29
+  columns, ~35px wide, with ~34px gutters, uniform to within a few pixels.
+  Manga has neither the count nor the uniformity, which is what
+  `PageLayout.is_prose` tests before the pipeline will touch a page.
+- Columns are read in slices of ~12 glyphs. This matters: manga-ocr expects
+  about one balloon and returns gibberish for a whole column
+  (`無様な方のコンションは…` for a column that reads
+  `無機質な外観の古いマンションの8階。…`). Slices also bound alignment error,
+  since a chunk's height over the characters read from it gives the pitch.
+- Slices follow the column's ink runs, never blank paper — OCR asked to read
+  an empty crop invents text.
+- Readings come from `annotate()` on the whole column, so MeCab has the
+  sentence for context, and are located in that text by search rather than by
+  accumulating segment lengths (annotate drops whitespace morphemes).
+- Furigana is drawn only in the gutter, in the page's own ink colour. Gutters
+  that already hold the publisher's ruby are left alone.
+
+Nothing on the page is redrawn. `book_furigana` pages cannot be re-rendered
+from metadata — there are no editable regions, only gutter annotations.
+
+Which pipeline a Kindle title needs cannot be told from the page, since manga
+and prose arrive the same way, so the reader chooses: the Flutter toolbar
+cycles Furigana -> English -> Book and remembers it per volume (ASIN); the
+extension has it in the popup as one global setting.
 
 ## Cache model
 

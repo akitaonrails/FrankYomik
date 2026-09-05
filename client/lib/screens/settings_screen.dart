@@ -145,7 +145,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             initialValue: _pipeline,
             decoration: const InputDecoration(
               labelText: 'Kindle Pipeline (Japanese)',
-              helperText: 'Webtoon always uses Korean pipeline',
+              helperText: 'Default for new volumes; each title remembers its own',
               border: OutlineInputBorder(),
             ),
             items: const [
@@ -155,6 +155,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               DropdownMenuItem(
                   value: 'manga_translate',
                   child: Text('Translate')),
+              DropdownMenuItem(
+                  value: 'book_furigana',
+                  child: Text('Furigana (text books)')),
             ],
             onChanged: (v) => setState(() => _pipeline = v ?? _pipeline),
           ),
