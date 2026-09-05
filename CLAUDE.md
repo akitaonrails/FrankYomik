@@ -226,6 +226,14 @@ this, strategies kept whatever settings they started with until a reload.
 `FrankKindle.state()` and `FrankLens.state()` report why nothing is happening;
 read them from the extension's console context, not the page's.
 
+Reloading or reinstalling the extension leaves the previous content scripts
+running in open tabs against a dead runtime. Chrome injects the new copy, but
+every module guards on `window.Frank*`, so the orphan used to keep the page —
+with the settings it started with, which is how a book set to the text pipeline
+kept submitting as manga. Each module now exposes `alive()` and `destroy()`:
+a fresh copy stands the dead one down, taking its listeners and renders with
+it. Reloading the page is still the cleanest reset, but is no longer required.
+
 ## Cache model
 
 The server and worker share the same cache layout.

@@ -77,6 +77,12 @@ function matchesSelector(el, selector) {
 
 /// Loads content-script modules into one sandboxed window, in manifest order.
 export function loadContentScripts(scripts, images, options = {}) {
+  if (options.sandbox) {
+    for (const script of scripts) {
+      vm.runInContext(fs.readFileSync(path.join(contentDir, script), 'utf8'), options.sandbox);
+    }
+    return options.sandbox.__frankHarness;
+  }
   const revoked = [];
   const listeners = new Map();
   let urlCounter = 0;
@@ -104,6 +110,10 @@ export function loadContentScripts(scripts, images, options = {}) {
       if (!listeners.has(type)) listeners.set(type, []);
       listeners.get(type).push(fn);
     },
+    removeEventListener(type, fn) {
+      const list = listeners.get(type);
+      if (list) listeners.set(type, list.filter((entry) => entry !== fn));
+    },
   };
 
   const selection = {
@@ -125,6 +135,7 @@ export function loadContentScripts(scripts, images, options = {}) {
     document,
     getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
     addEventListener: (type, fn) => document.addEventListener(type, fn),
+    removeEventListener: (type, fn) => document.removeEventListener(type, fn),
     setTimeout,
     clearTimeout,
   };
@@ -163,6 +174,7 @@ export function loadContentScripts(scripts, images, options = {}) {
     },
     chrome: {
       runtime: {
+        id: options.runtimeId ?? 'frank-yomik-test',
         lastError: null,
         sendMessage: () => Promise.resolve(),
         onMessage: { addListener: (fn) => messageListeners.push(fn) },
@@ -212,7 +224,9 @@ export function loadContentScripts(scripts, images, options = {}) {
     for (const listener of messageListeners) listener(message, {}, () => {});
   };
 
-  return { sandbox, window, document, fire, pointer, revoked, selection, sendToContent };
+  const harness = { sandbox, window, document, fire, pointer, revoked, selection, sendToContent };
+  sandbox.__frankHarness = harness;
+  return harness;
 }
 
 export const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

@@ -1,7 +1,18 @@
 (function frankOverlayModule() {
   'use strict';
 
-  if (window.FrankOverlay) return;
+  function runtimeAlive() {
+    try {
+      return Boolean(chrome.runtime?.id);
+    } catch {
+      return false;
+    }
+  }
+
+  if (window.FrankOverlay) {
+    if (window.FrankOverlay.alive?.()) return;
+    window.FrankOverlay.destroy?.();
+  }
 
   const MIN_PAGE_SIDE_PX = 100;
   const MIN_VISIBLE_OVERLAP_PX2 = 2000;
@@ -23,6 +34,12 @@
   window.addEventListener('pagehide', releaseAll);
 
   window.FrankOverlay = {
+    alive: runtimeAlive,
+    destroy() {
+      releaseAll();
+      window.removeEventListener('pagehide', releaseAll);
+      delete window.FrankOverlay;
+    },
     applyKindleResult,
     applyWebtoonResult,
     applyReaderPreferences,

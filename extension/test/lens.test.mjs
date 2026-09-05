@@ -659,3 +659,48 @@ test('the lens does not paint its own background over the page', () => {
   assert.ok(source.includes('background-color:transparent'));
   assert.ok(!source.includes('background-color:#fff'));
 });
+
+// --- a reinstalled extension must be able to take the page back -------------
+// Reloading an extension leaves its content scripts running in open tabs with
+// a dead runtime. Chrome injects the new copy, but the old modules still own
+// the page's listeners — which is how a stale pipeline kept being submitted
+// after a reinstall.
+
+test('a live instance keeps the page', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, sandbox } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  loadContentScripts(['lens.js'], [img], { sandbox });   // a second injection
+
+  assert.equal(sandbox.window.FrankLens, lens, 'the running instance stays');
+  assert.equal(lens.has('kindle-1'), true, 'and keeps what it registered');
+});
+
+test('a dead instance stands down and releases its renders', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, revoked, sandbox } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  sandbox.chrome.runtime.id = undefined;      // the extension was reinstalled
+  assert.equal(lens.alive(), false);
+  lens.destroy();
+
+  assert.deepEqual(revoked.length, 1, 'its renders are freed');
+  assert.equal(sandbox.window.FrankLens, undefined, 'and the page is handed back');
+});
+
+test('an orphaned instance stops swallowing presses', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer, sandbox } = setup([img]);
+  lens.setPressCapture(true);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  sandbox.chrome.runtime.id = undefined;
+  lens.destroy();
+
+  const down = pointer('pointerdown', 200, 300);
+  fire('pointerdown', down);
+  assert.equal(down.propagationStopped, undefined,
+    'a dead instance must not keep taking the reader\'s presses');
+});

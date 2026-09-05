@@ -1,7 +1,18 @@
 (function frankWebtoonModule() {
   'use strict';
 
-  if (window.FrankWebtoon) return;
+  function runtimeAlive() {
+    try {
+      return Boolean(chrome.runtime?.id);
+    } catch {
+      return false;
+    }
+  }
+
+  if (window.FrankWebtoon) {
+    if (window.FrankWebtoon.alive?.()) return;
+    window.FrankWebtoon.destroy?.();
+  }
 
   const ALLOWED_IMAGE_HOSTS = new Set([
     'comic.naver.com',
@@ -29,7 +40,15 @@
   const pageById = new Map();
   const debugEntries = new Map();
 
-  window.FrankWebtoon = { start, updateSettings };
+  window.FrankWebtoon = {
+    start,
+    updateSettings,
+    alive: runtimeAlive,
+    destroy() {
+      started = false;
+      delete window.FrankWebtoon;
+    },
+  };
 
   /// Settings changed in the popup while this episode was open.
   function updateSettings(nextSettings) {

@@ -1,8 +1,17 @@
 (function frankBootstrap() {
   'use strict';
 
-  if (window.__frankYomikBootstrapLoaded) return;
-  window.__frankYomikBootstrapLoaded = true;
+  // A reinstalled extension leaves the previous bootstrap running against a
+  // dead runtime; it must not keep this page to itself.
+  const alive = () => {
+    try {
+      return Boolean(chrome.runtime?.id);
+    } catch {
+      return false;
+    }
+  };
+  if (window.__frankYomikBootstrapAlive?.() ) return;
+  window.__frankYomikBootstrapAlive = alive;
 
   const RETRY_MS = 5000;
   let retryTimer = null;

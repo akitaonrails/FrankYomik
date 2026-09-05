@@ -1,7 +1,18 @@
 (function frankKindleModule() {
   'use strict';
 
-  if (window.FrankKindle) return;
+  function runtimeAlive() {
+    try {
+      return Boolean(chrome.runtime?.id);
+    } catch {
+      return false;
+    }
+  }
+
+  if (window.FrankKindle) {
+    if (window.FrankKindle.alive?.()) return;
+    window.FrankKindle.destroy?.();
+  }
 
   const SPREAD_THRESHOLD = 1.3;
   const DETECT_INTERVAL_MS = 450;
@@ -43,6 +54,7 @@
   let consecutiveFailures = 0;
   let lastFailureError = '';
   let autoSubmitPaused = false;
+  let detectTimer = null;
   let lastHref = location.href;
   let loaderSince = 0;
   let loaderOverriddenAt = 0;
@@ -51,7 +63,16 @@
   const spreadGroups = new Map();
   const debugEntries = new Map();
 
-  window.FrankKindle = { start, updateSettings, state };
+  window.FrankKindle = { start, updateSettings, state, alive: runtimeAlive, destroy };
+
+  /// Stand down so a freshly injected copy can take the page over.
+  function destroy() {
+    started = false;
+    if (detectTimer) window.clearInterval(detectTimer);
+    if (submitDebounceTimer) window.clearTimeout(submitDebounceTimer);
+    detectTimer = null;
+    delete window.FrankKindle;
+  }
 
   /// Settings changed in the popup while this page was open.
   ///
@@ -119,7 +140,7 @@
     // mouse presses before the reader sees them and hand back the taps.
     window.FrankLens?.setPressCapture?.(true);
     installListeners();
-    window.setInterval(detectPageChange, DETECT_INTERVAL_MS);
+    detectTimer = window.setInterval(detectPageChange, DETECT_INTERVAL_MS);
     window.setTimeout(detectPageChange, 400);
     console.info('[Frank] Kindle strategy started');
     report('info', 'Kindle strategy started');

@@ -1,7 +1,23 @@
 (function frankLensModule() {
   'use strict';
 
-  if (window.FrankLens) return;
+  /// Whether the extension this code belongs to is still installed.
+  ///
+  /// Reloading or reinstalling an extension leaves its content scripts running
+  /// in open tabs with a dead runtime. Chrome injects the new copy, but the old
+  /// one still owns the page's listeners, so it has to stand down.
+  function runtimeAlive() {
+    try {
+      return Boolean(chrome.runtime?.id);
+    } catch {
+      return false;
+    }
+  }
+
+  if (window.FrankLens) {
+    if (window.FrankLens.alive?.()) return;
+    window.FrankLens.destroy?.();
+  }
 
   const HOLD_MS = 200;              // press duration that separates a peek from a tap
   const MOVE_CANCEL_PX = 12;        // travel that reclassifies a press as a scroll
@@ -56,7 +72,9 @@
     pressCapture: false,
   };
 
-  window.FrankLens = {
+  const api = {
+    alive: runtimeAlive,
+    destroy,
     attach,
     release,
     markPending,
@@ -81,7 +99,26 @@
     }),
   };
 
-  window.addEventListener('pagehide', clear);
+  window.FrankLens = api;
+
+  // Every listener this module installs, so it can hand the page back intact.
+  const installed = [];
+  function listen(target, type, handler, options) {
+    target.addEventListener(type, handler, options);
+    installed.push({ target, type, handler, options });
+  }
+
+  function destroy() {
+    clear();
+    for (const { target, type, handler, options } of installed.splice(0)) {
+      target.removeEventListener(type, handler, options);
+    }
+    state.el?.remove?.();
+    state.el = null;
+    if (window.FrankLens === api) delete window.FrankLens;
+  }
+
+  listen(window, 'pagehide', clear);
 
   /* ---------- registration ---------- */
 
@@ -555,6 +592,11 @@
     if (state.holding || state.holdTimer) event.preventDefault();
   }
 
+  function onScroll() {
+    cancelHold();
+    closeLens();
+  }
+
   // Injected before the page's own scripts run, so there may be no head yet.
   const style = document.createElement('style');
   style.textContent =
@@ -563,18 +605,18 @@
     '-webkit-touch-callout:none !important;}';
   (document.head || document.documentElement)?.appendChild(style);
 
-  window.addEventListener('pointerdown', onPointerDown, { capture: true });
-  window.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
-  window.addEventListener('pointerup', onPointerUp, { capture: true });
-  window.addEventListener('pointercancel', onPointerUp, { capture: true });
-  window.addEventListener('mousedown', onSyntheticMouse, { capture: true });
-  window.addEventListener('mouseup', onSyntheticMouse, { capture: true });
-  window.addEventListener('click', onSyntheticMouse, { capture: true });
-  window.addEventListener('mousemove', onMouseMove, { capture: true, passive: false });
-  window.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
-  window.addEventListener('dragstart', onDragOrSelect, { capture: true });
-  window.addEventListener('selectstart', onDragOrSelect, { capture: true });
-  window.addEventListener('contextmenu', onContextMenu, { capture: true });
-  window.addEventListener('scroll', () => { cancelHold(); closeLens(); }, { capture: true, passive: true });
-  window.addEventListener('resize', closeLens);
+  listen(window, 'pointerdown', onPointerDown, { capture: true });
+  listen(window, 'pointermove', onPointerMove, { capture: true, passive: false });
+  listen(window, 'pointerup', onPointerUp, { capture: true });
+  listen(window, 'pointercancel', onPointerUp, { capture: true });
+  listen(window, 'mousedown', onSyntheticMouse, { capture: true });
+  listen(window, 'mouseup', onSyntheticMouse, { capture: true });
+  listen(window, 'click', onSyntheticMouse, { capture: true });
+  listen(window, 'mousemove', onMouseMove, { capture: true, passive: false });
+  listen(window, 'touchmove', onTouchMove, { capture: true, passive: false });
+  listen(window, 'dragstart', onDragOrSelect, { capture: true });
+  listen(window, 'selectstart', onDragOrSelect, { capture: true });
+  listen(window, 'contextmenu', onContextMenu, { capture: true });
+  listen(window, 'scroll', onScroll, { capture: true, passive: true });
+  listen(window, 'resize', closeLens);
 })();
