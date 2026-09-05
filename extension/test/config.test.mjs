@@ -7,6 +7,7 @@ import {
   normalizeApiBaseUrl,
   normalizeSettings,
   pipelineForBook,
+  withPipelineChoice,
 } from '../src/shared/config.js';
 
 test('normalizeApiBaseUrl strips trailing slashes and URL noise', () => {
@@ -92,4 +93,41 @@ test('pipelineForBook prefers the book over the default', () => {
   assert.equal(pipelineForBook(settings, 'B0ZZZZZZZZ'), 'manga_furigana');
   assert.equal(pipelineForBook(settings, ''), 'manga_furigana');
   assert.equal(pipelineForBook(settings, null), 'manga_furigana');
+});
+
+test('a pipeline choice lands on the book being read', () => {
+  // One control, two meanings: with a book open it is that book's pipeline.
+  // A single global setting cannot follow a reader between a manga and a novel.
+  const settings = normalizeSettings({ mangaPipeline: 'manga_furigana' });
+
+  const next = withPipelineChoice(settings, 'B0GMLQXJ4S', 'book_furigana');
+
+  assert.equal(next.bookPipelines.B0GMLQXJ4S, 'book_furigana');
+  assert.equal(next.mangaPipeline, 'manga_furigana', 'the default is untouched');
+});
+
+test('a pipeline choice with no book open sets the default', () => {
+  const settings = normalizeSettings({ mangaPipeline: 'manga_furigana' });
+
+  const next = withPipelineChoice(settings, null, 'book_furigana');
+
+  assert.equal(next.mangaPipeline, 'book_furigana');
+  assert.deepEqual(next.bookPipelines, {});
+});
+
+test('choosing for one book leaves the others alone', () => {
+  const settings = normalizeSettings({
+    mangaPipeline: 'manga_translate',
+    bookPipelines: { B0MANGAAAA: 'manga_furigana' },
+  });
+
+  const next = withPipelineChoice(settings, 'B0GMLQXJ4S', 'book_furigana');
+
+  assert.equal(next.bookPipelines.B0MANGAAAA, 'manga_furigana');
+  assert.equal(next.bookPipelines.B0GMLQXJ4S, 'book_furigana');
+});
+
+test('an invented pipeline changes nothing', () => {
+  const settings = normalizeSettings({ mangaPipeline: 'manga_furigana' });
+  assert.equal(withPipelineChoice(settings, 'B0GMLQXJ4S', 'nonsense'), settings);
 });

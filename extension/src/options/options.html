@@ -35,6 +35,7 @@
             <option value="manga_furigana">Furigana</option>
             <option value="book_furigana">Furigana — text book</option>
           </select>
+          <span class="form-hint" id="pipeline-scope">Default for books you have not set.</span>
         </label>
 
         <label>
@@ -86,17 +87,6 @@
 
       <section class="current-page" aria-labelledby="current-page-title">
         <h2 id="current-page-title">Current page</h2>
-        <label>
-          Pipeline for this book
-          <select id="book-pipeline" name="bookPipeline" disabled>
-            <option value="">Use the default</option>
-            <option value="manga_translate">Translate</option>
-            <option value="manga_furigana">Furigana</option>
-            <option value="book_furigana">Furigana — text book</option>
-          </select>
-          <span class="form-hint" id="book-pipeline-hint">Open a Kindle book to choose.</span>
-        </label>
-
         <div class="actions">
           <button id="force-reprocess-current" type="button">Force reprocess current page</button>
           <button id="export-debug-images" type="button">Send debug pages to server</button>

@@ -313,7 +313,9 @@ test('the page is free to move again once the peek ends', async () => {
 
 // --- holding before the translation arrives --------------------------------
 
-test('holding on a page that is still translating shows nothing', async () => {
+test('holding on a page that is still translating shows a waiting ring', async () => {
+  // Holding and getting nothing back is indistinguishable from a broken lens,
+  // so the ring appears empty and pulses: the answer is "not yet".
   const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
   const { lens, document, fire, pointer } = setup([img]);
   lens.markPending(img);
@@ -321,8 +323,41 @@ test('holding on a page that is still translating shows nothing', async () => {
   fire('pointerdown', pointer('pointerdown', 200, 300));
   await wait(260);
 
-  assert.equal(lens.isOpen(), false);
-  assert.equal(lensElement(document), undefined, 'no empty magnifier');
+  const el = lensElement(document);
+  assert.equal(el.style.display, 'block');
+  assert.equal(el.style.backgroundImage, 'none', 'nothing to magnify yet');
+  assert.match(el.style.animation, /frankLensWaiting/);
+  assert.equal(lens.isOpen(), false, 'and it is not a peek');
+});
+
+test('the waiting ring follows the pointer', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  const before = lensElement(document).style.left;
+  fire('pointermove', pointer('pointermove', 260, 320));
+
+  assert.notEqual(lensElement(document).style.left, before);
+});
+
+test('the ring becomes the lens when the render lands', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  assert.equal(lensElement(document).style.backgroundImage, 'none');
+
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  const el = lensElement(document);
+  assert.match(el.style.backgroundImage, /^url\("blob:/);
+  assert.equal(el.style.animation, 'none', 'no longer waiting');
+  assert.equal(lens.isOpen(), true);
 });
 
 test('holding on a page that is still translating does not turn the page', async () => {

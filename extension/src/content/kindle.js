@@ -83,9 +83,12 @@
     settings = nextSettings || {};
     if (effectivePipeline() === previous) return;
     resumeAutoSubmit();
-    // Re-detect the page in front of the reader under the new pipeline.
+    // Re-detect the page in front of the reader under the new pipeline, and
+    // drop what the old one produced: it answers a different question.
     lastBlob = '';
     processedBlobs.clear();
+    window.FrankLens?.clear();
+    window.FrankStatus?.set('idle');
     window.setTimeout(detectPageChange, 100);
   }
 
@@ -236,6 +239,7 @@
       if (dw < REPAINT_GEOMETRY_TOLERANCE && dh < REPAINT_GEOMETRY_TOLERANCE && now - lastEmitAt < REPAINT_SUPPRESS_MS) return;
     }
 
+    window.FrankStatus?.set('idle');
     lastBlob = blobSrc;
     lastRect = { width: rect.width, height: rect.height };
     lastEmitAt = now;
@@ -263,6 +267,7 @@
     // and the previous render is released instead of accumulating.
     window.FrankOverlay?.releasePagesExcept(pageId, target);
     if (autoSubmitPaused) return;
+    window.FrankStatus?.set('working');
     scheduleSubmit(detection);
   }
 
@@ -398,6 +403,7 @@
     report('error', `Kindle job failed: ${error}`);
     if (message.capture?.groupId) spreadGroups.delete(message.capture.groupId);
     finishGroup();
+    window.FrankStatus?.set('failed');
     noteFailure(error);
   }
 
@@ -444,6 +450,7 @@
     const ok = await window.FrankOverlay?.applyKindleResult(message);
     if (ok) {
       resumeAutoSubmit();
+      window.FrankStatus?.set('ready');
       rememberDebug(message.pageId, { pageId: message.pageId, site: 'kindle', translatedDataUrl: message.imageDataUrl, capture: message.capture });
       report('info', `Kindle translated image applied: ${message.pageId || 'unknown page'}`);
       // Nothing is swapped into the DOM in lens mode, so a Kindle repaint has

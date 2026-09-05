@@ -98,8 +98,13 @@ if (serviceWorker.includes('chrome.permissions.request')) {
 for (const rel of new Set(contentScripts.flatMap((script) => script.js ?? []))) {
   const source = fs.readFileSync(path.join(root, rel), 'utf8');
   if (source.includes('authToken')) fail(`content script must not reference authToken: ${rel}`);
-  if (source.includes('frank-yomik-hud') || source.includes('showStatus')) {
-    fail(`content script must not create visible Frank controls/status overlays: ${rel}`);
+  // The lens and a 9px status dot are the only marks on a page, and both are
+  // passive: no buttons, panels or settings belong in a content script.
+  if (source.includes('frank-yomik-hud') || /addEventListener\(\s*['"]click['"][^)]*button/i.test(source)) {
+    fail(`content script must not create visible Frank controls: ${rel}`);
+  }
+  if (/document\.createElement\(\s*['"](button|input|select|textarea)['"]/i.test(source)) {
+    fail(`content script must not add interactive controls to the page: ${rel}`);
   }
   if (source.includes("endsWith('.pstatic.net')")) {
     fail(`content script must use exact webtoon image host allowlists: ${rel}`);

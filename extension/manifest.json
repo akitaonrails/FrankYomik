@@ -52,6 +52,7 @@
       ],
       "js": [
         "src/content/lens.js",
+        "src/content/status.js",
         "src/content/overlay.js",
         "src/content/kindle.js",
         "src/content/bootstrap.js"
@@ -66,6 +67,7 @@
       ],
       "js": [
         "src/content/lens.js",
+        "src/content/status.js",
         "src/content/overlay.js",
         "src/content/webtoon.js",
         "src/content/bootstrap.js"

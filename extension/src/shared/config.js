@@ -66,6 +66,17 @@ export function normalizeBookPipelines(raw) {
   return Object.fromEntries(entries);
 }
 
+/// Apply a pipeline choice where it belongs: to the book being read if there
+/// is one, otherwise to the default that new books start from.
+export function withPipelineChoice(settings, bookId, pipeline) {
+  if (!VALID_MANGA_PIPELINES.has(pipeline)) return settings;
+  if (!bookId) return { ...settings, mangaPipeline: pipeline };
+  return {
+    ...settings,
+    bookPipelines: { ...(settings.bookPipelines || {}), [bookId]: pipeline },
+  };
+}
+
 /// The pipeline a volume should use: its own choice, else the default.
 export function pipelineForBook(settings, bookId) {
   const chosen = bookId ? settings?.bookPipelines?.[bookId] : null;

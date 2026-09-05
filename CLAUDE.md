@@ -83,6 +83,12 @@ through a magnifier lens. Full-page replacement is still there as a mode.
   `img.src`, with the reapply/recovery timers that keep it stuck against
   Kindle repaints.
 
+Two passive marks are made on the page, and nothing else: the magnifier, and a
+9px status dot in the corner — amber while a page is being translated, green
+when it can be peeked, red when the server refused it. Holding before a render
+arrives shows an empty pulsing ring, because a hold that returns nothing is
+indistinguishable from a broken lens.
+
 Where the pieces live:
 
 | | Flutter client | Chromium extension |

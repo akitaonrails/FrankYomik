@@ -185,6 +185,7 @@
     img.dataset.frankOriginalSrc = src;
     pageById.set(pageId, { img, src, index });
     queue.push({ img, src, index, pageId, reason });
+    window.FrankStatus?.set('working');
     // Holding on a page that is still translating should do nothing rather
     // than fall through to the page underneath.
     window.FrankLens?.markPending(img);
@@ -260,6 +261,7 @@
     }
     const ok = await window.FrankOverlay?.applyWebtoonResult(message);
     if (ok) {
+      window.FrankStatus?.set('ready');
       rememberDebug(message.pageId, {
         pageId: message.pageId,
         site: 'webtoon',

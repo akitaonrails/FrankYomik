@@ -2,7 +2,7 @@
 
 Manifest V3 extension for using a self-hosted Frank Yomik server from desktop Chrome/Chromium.
 
-The extension intentionally keeps Kindle and Naver pages close to vanilla: it does not add in-page buttons, panels, HUDs, or settings overlays. Controls live in the extension popup/options page. Content scripts only detect and capture page images, and present the translated result.
+The extension intentionally keeps Kindle and Naver pages close to vanilla: it adds no in-page buttons, panels or settings overlays, and all controls live in the popup. The only marks it makes on a page are the magnifier itself and a 9px status dot in the corner — both passive and unclickable.
 
 ## Reading modes
 
@@ -20,7 +20,11 @@ The popup configures the self-hosted API URL, bearer token, enabled sites, Kindl
 
 **Kindle pipeline** picks what a page is sent through: *Translate* and *Furigana* for manga, and *Furigana — text book* for reflowable novels, whose pages Kindle also delivers as images but which are typeset prose rather than artwork. The server refuses a page that does not look like prose, so a manga page sent to the book pipeline fails with an explanation rather than annotating the artwork.
 
-That setting is the **default**. Under *Current page*, **Pipeline for this book** overrides it for the volume open in the active tab, so a novel and a manga can each keep their own mode without changing anything when you switch between them. Changes apply to the open reader immediately, without a reload. Settings autosave when you leave a field or change a checkbox/select; **Save now** is retained as a fallback and to trigger browser permission prompts when needed.
+The select follows what you are reading: with a Kindle book open in the active tab it sets **that book's** pipeline, and the hint beneath it names the book. With no book open it sets the default that new books start from. So a novel and a manga each keep their own mode, and switching between them needs no changes. Edits reach an open reader immediately, without a reload.
+
+### Knowing when a page is ready
+
+A 9px dot in the bottom-right corner follows the page: amber and pulsing while it is being translated, green once it can be peeked, red if the server refused it. Holding before a page is ready shows the magnifier as an empty pulsing ring rather than nothing, so "not yet" is distinguishable from "broken". Settings autosave when you leave a field or change a checkbox/select; **Save now** is retained as a fallback and to trigger browser permission prompts when needed.
 
 ![Kindle page translated by the Chromium extension](docs/kindle-extension-translation.png)
 

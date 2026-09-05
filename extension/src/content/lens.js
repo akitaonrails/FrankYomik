@@ -115,6 +115,7 @@
     }
     state.el?.remove?.();
     state.el = null;
+    style?.remove?.();
     if (window.FrankLens === api) delete window.FrankLens;
   }
 
@@ -384,6 +385,18 @@
     if (selection && !selection.isCollapsed) selection.removeAllRanges();
   }
 
+  /// The lens with nothing in it yet: this page is still being translated.
+  function openWaitingRing(x, y) {
+    const el = ensureLensEl();
+    const diameter = lensDiameter();
+    el.style.width = `${diameter}px`;
+    el.style.height = `${diameter}px`;
+    el.style.backgroundImage = 'none';
+    el.style.animation = 'frankLensWaiting 1.4s ease-in-out infinite';
+    el.style.display = 'block';
+    place(el, x, y, diameter / 2);
+  }
+
   function openLens(x, y, target, pointerType) {
     const url = target.dataset.frankLensSrc;
     if (!url) return;
@@ -393,6 +406,7 @@
     el.style.width = `${diameter}px`;
     el.style.height = `${diameter}px`;
     el.style.backgroundImage = `url("${url}")`;
+    el.style.animation = 'none';
     el.style.display = 'block';
     state.open = true;
     state.target = target;
@@ -422,11 +436,14 @@
     const offsetY = Math.min(0, Math.max(radius - (y - rect.top) * zoom, diameter - height));
     el.style.backgroundPosition = `${offsetX}px ${offsetY}px`;
 
+    place(el, x, y, radius);
+  }
+
+  function place(el, x, y, radius) {
     const lift = state.pointerType === 'touch' ? radius + TOUCH_LIFT_PX : 0;
-    const minX = radius + LENS_EDGE_MARGIN_PX;
-    const minY = radius + LENS_EDGE_MARGIN_PX;
-    const cx = Math.max(minX, Math.min(window.innerWidth - minX, x));
-    const cy = Math.max(minY, Math.min(window.innerHeight - minY, y - lift));
+    const min = radius + LENS_EDGE_MARGIN_PX;
+    const cx = Math.max(min, Math.min(window.innerWidth - min, x));
+    const cy = Math.max(min, Math.min(window.innerHeight - min, y - lift));
     el.style.left = `${cx - radius}px`;
     el.style.top = `${cy - radius}px`;
   }
@@ -473,8 +490,11 @@
       return;
     }
     // Nothing to show yet. Hold the gesture anyway so releasing does not turn
-    // the page out from under a reader who is waiting for this very page.
+    // the page out from under a reader who is waiting for this very page, and
+    // show an empty ring: holding and getting nothing back is indistinguishable
+    // from the lens being broken.
     state.pendingEl = candidate.el;
+    openWaitingRing(x, y);
   }
 
   function endHold() {
@@ -522,6 +542,7 @@
     state.lastX = event.clientX;
     state.lastY = event.clientY;
     if (state.open) updateLens(event.clientX, event.clientY);
+    else if (state.pendingEl) openWaitingRing(event.clientX, event.clientY);
   }
 
   function onPointerUp(event) {
@@ -602,7 +623,8 @@
   style.textContent =
     '.__frank-lens-open, .__frank-lens-open * {' +
     '-webkit-user-select:none !important;user-select:none !important;' +
-    '-webkit-touch-callout:none !important;}';
+    '-webkit-touch-callout:none !important;}' +
+    '@keyframes frankLensWaiting{0%,100%{opacity:0.25}50%{opacity:0.6}}';
   (document.head || document.documentElement)?.appendChild(style);
 
   listen(window, 'pointerdown', onPointerDown, { capture: true });

@@ -1,4 +1,4 @@
-import { apiOriginPattern, normalizeApiBaseUrl } from '../shared/config.js';
+import { apiOriginPattern, normalizeApiBaseUrl, withPipelineChoice } from '../shared/config.js';
 
 const form = document.querySelector('#settings-form');
 const statusEl = document.querySelector('#status');
@@ -13,15 +13,15 @@ const fields = {
   webtoonPrefetch: document.querySelector('#webtoon-prefetch'),
   readerMode: document.querySelector('#reader-mode'),
   lensZoom: document.querySelector('#lens-zoom'),
-  bookPipeline: document.querySelector('#book-pipeline'),
 };
-const bookPipelineHint = document.querySelector('#book-pipeline-hint');
+const pipelineScopeHint = document.querySelector('#pipeline-scope');
 const activeJobsEl = document.querySelector('#active-jobs');
 const diagnosticsListEl = document.querySelector('#diagnostics-list');
 // Per-volume pipeline choices are not form state: they are keyed by book and
 // edited one at a time, so they are carried across saves rather than read back
 // out of the form.
 let bookPipelines = {};
+let defaultPipeline = 'manga_translate';
 let currentBook = null;
 let lastSavedSignature = '';
 let saveInFlight = null;
@@ -37,21 +37,18 @@ form.addEventListener('submit', async (event) => {
 });
 
 for (const [name, field] of Object.entries(fields)) {
-  // The per-book select edits a keyed map rather than a form value, so it
-  // saves through setBookPipeline instead of the generic autosave.
-  if (name === 'bookPipeline') continue;
+  // The pipeline select follows the book being read, so it writes a keyed map
+  // rather than a plain form value.
+  if (name === 'mangaPipeline') continue;
   field.addEventListener('blur', scheduleAutosave);
   if (field.type === 'checkbox' || field.tagName === 'SELECT') {
     field.addEventListener('change', scheduleAutosave);
   }
 }
 
-fields.bookPipeline.addEventListener('change', async (event) => {
+fields.mangaPipeline.addEventListener('change', async (event) => {
   try {
-    await setBookPipeline(event.target.value);
-    setStatus(event.target.value
-      ? 'Saved for this book.'
-      : 'This book follows the default again.', 'ok');
+    await setPipeline(event.target.value);
   } catch (error) {
     setStatus(error.message || String(error), 'error');
   }
@@ -178,23 +175,44 @@ function applySettings(settings) {
   fields.authToken.value = settings.authToken || '';
   fields.kindleEnabled.checked = settings.kindleEnabled !== false;
   fields.webtoonEnabled.checked = settings.webtoonEnabled !== false;
-  fields.mangaPipeline.value = settings.mangaPipeline || 'manga_translate';
   fields.targetLanguage.value = settings.targetLanguage || 'en';
   fields.webtoonPrefetch.value = settings.webtoonPrefetch || 'nearby';
   fields.readerMode.value = settings.readerMode || 'lens';
   fields.lensZoom.value = String(settings.lensZoom ?? 2);
   bookPipelines = { ...(settings.bookPipelines || {}) };
-  applyBookPipeline();
+  defaultPipeline = settings.mangaPipeline || 'manga_translate';
+  applyPipelineScope(settings);
 }
 
-/// Show the choice for the volume in the active tab, if there is one.
-function applyBookPipeline() {
-  const known = Boolean(currentBook);
-  fields.bookPipeline.disabled = !known;
-  fields.bookPipeline.value = known ? (bookPipelines[currentBook] || '') : '';
-  bookPipelineHint.textContent = known
-    ? `${currentBook} — overrides the Kindle pipeline above for this book only.`
-    : 'Open a Kindle book to choose.';
+/// Point the pipeline select at whatever the reader is actually reading.
+///
+/// One control, two meanings: with a book open it is that book's pipeline,
+/// otherwise it is the default new books start from. A manga and a novel need
+/// different pipelines, and a single global setting cannot follow the reader
+/// between them.
+function applyPipelineScope(settings = {}) {
+  const fallback = settings.mangaPipeline || defaultPipeline;
+  if (currentBook) {
+    fields.mangaPipeline.value = bookPipelines[currentBook] || fallback;
+    pipelineScopeHint.textContent =
+      `Applies to this book (${currentBook}). Others keep their own.`;
+  } else {
+    fields.mangaPipeline.value = fallback;
+    pipelineScopeHint.textContent = 'Default for books you have not set.';
+  }
+}
+
+/// Save the pipeline against the book being read, or as the default.
+async function setPipeline(value) {
+  const next = withPipelineChoice(
+    { mangaPipeline: defaultPipeline, bookPipelines }, currentBook, value,
+  );
+  defaultPipeline = next.mangaPipeline;
+  bookPipelines = next.bookPipelines || bookPipelines;
+  const saved = await saveSettings({ force: true });
+  if (saved !== false) {
+    setStatus(currentBook ? 'Saved for this book.' : 'Saved as the default.', 'ok');
+  }
 }
 
 /// Ask the open reader which volume it is showing.
@@ -205,15 +223,10 @@ async function refreshCurrentBook() {
   } catch {
     currentBook = null;  // not a Kindle tab, or no reader in it
   }
-  applyBookPipeline();
+  applyPipelineScope();
 }
 
-async function setBookPipeline(value) {
-  if (!currentBook) return;
-  if (value) bookPipelines[currentBook] = value;
-  else delete bookPipelines[currentBook];
-  await saveSettings({ force: true });
-}
+
 
 function readSettings() {
   return {
@@ -221,7 +234,9 @@ function readSettings() {
     authToken: fields.authToken.value,
     kindleEnabled: fields.kindleEnabled.checked,
     webtoonEnabled: fields.webtoonEnabled.checked,
-    mangaPipeline: fields.mangaPipeline.value,
+    // The select edits the current book; the default only changes when no book
+    // is open, so it is carried across saves rather than read from the form.
+    mangaPipeline: currentBook ? defaultPipeline : fields.mangaPipeline.value,
     targetLanguage: fields.targetLanguage.value,
     webtoonPrefetch: fields.webtoonPrefetch.value,
     readerMode: fields.readerMode.value,
