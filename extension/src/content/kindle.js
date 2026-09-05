@@ -16,6 +16,7 @@
   const MIN_VISIBLE_OVERLAP_PX2 = 2000;
   const LOADER_VISIBLE_OVERLAP_PX2 = 1600;
   const NO_TARGET_REPORT_INTERVAL_MS = 15000;
+  const MAX_CONSECUTIVE_FAILURES = 3;
   const MAX_DEBUG_ENTRIES = 20;
   const MAX_DEBUG_PAYLOADS = 3;
 
@@ -32,12 +33,49 @@
   let queuedDetection = null;
   let submitDebounceTimer = null;
   let lastNoTargetReportAt = 0;
+  // A page that fails for a reason the page cannot change — the wrong pipeline
+  // for this book, say — fails identically every time. Kindle regenerates blob
+  // URLs on its own, so each churn would resubmit the same pixels forever.
+  let consecutiveFailures = 0;
+  let lastFailureError = '';
+  let autoSubmitPaused = false;
   const processedBlobs = new Set();
   const MAX_PROCESSED_BLOBS = 200;
   const spreadGroups = new Map();
   const debugEntries = new Map();
 
-  window.FrankKindle = { start };
+  window.FrankKindle = { start, updateSettings, state };
+
+  /// Settings changed in the popup while this page was open.
+  ///
+  /// Without this the strategy keeps the settings it started with, so
+  /// switching pipeline needed a reload to take effect.
+  function updateSettings(nextSettings) {
+    const previous = settings;
+    settings = nextSettings || {};
+    if (settings.mangaPipeline === previous.mangaPipeline) return;
+    resumeAutoSubmit();
+    // Re-detect the page in front of the reader under the new pipeline.
+    lastBlob = '';
+    processedBlobs.clear();
+    window.setTimeout(detectPageChange, 100);
+  }
+
+  function state() {
+    return {
+      started,
+      pipeline: settings.mangaPipeline,
+      autoSubmitPaused,
+      lastFailureError,
+      consecutiveFailures,
+    };
+  }
+
+  function resumeAutoSubmit() {
+    consecutiveFailures = 0;
+    lastFailureError = '';
+    autoSubmitPaused = false;
+  }
 
   function start(nextSettings) {
     if (started) return;
@@ -110,6 +148,7 @@
 
   function detectPageChange() {
     if (!settings.configured || settings.kindleEnabled === false) return;
+    if (autoSubmitPaused) return;
     if (loaderVisible()) return;
     const target = findVisibleBlob();
     if (!target) {
@@ -282,10 +321,27 @@
   }
 
   function handleJobFailed(message) {
-    console.warn('[Frank] Kindle job failed:', message.error);
-    report('error', `Kindle job failed: ${message.error || 'unknown error'}`);
+    const error = message.error || 'unknown error';
+    console.warn('[Frank] Kindle job failed:', error);
+    report('error', `Kindle job failed: ${error}`);
     if (message.capture?.groupId) spreadGroups.delete(message.capture.groupId);
     finishGroup();
+    noteFailure(error);
+  }
+
+  /// Give up on auto-submitting once the same error repeats.
+  ///
+  /// The page cannot fix a mismatched pipeline by being sent again, and
+  /// Kindle's blob churn would keep sending it. Changing a setting or forcing
+  /// a reprocess resumes.
+  function noteFailure(error) {
+    consecutiveFailures = error === lastFailureError ? consecutiveFailures + 1 : 1;
+    lastFailureError = error;
+    if (autoSubmitPaused || consecutiveFailures < MAX_CONSECUTIVE_FAILURES) return;
+    autoSubmitPaused = true;
+    report('error',
+      `Auto-translate paused after ${consecutiveFailures} failures: ${error}. ` +
+      'Change the pipeline in the popup, or force reprocess, to resume.');
   }
 
   async function handleSpreadSide(message) {
@@ -315,6 +371,7 @@
   async function applyKindle(message) {
     const ok = await window.FrankOverlay?.applyKindleResult(message);
     if (ok) {
+      resumeAutoSubmit();
       rememberDebug(message.pageId, { pageId: message.pageId, site: 'kindle', translatedDataUrl: message.imageDataUrl, capture: message.capture });
       report('info', `Kindle translated image applied: ${message.pageId || 'unknown page'}`);
       // Nothing is swapped into the DOM in lens mode, so a Kindle repaint has
@@ -650,6 +707,9 @@
   }
 
   function reportNoTarget() {
+    // Kindle injects into every frame; the ones without a reader have no page
+    // image by definition and their reports are pure noise.
+    if (!frameHostsKindleReader()) return;
     const now = Date.now();
     if (now - lastNoTargetReportAt < NO_TARGET_REPORT_INTERVAL_MS) return;
     lastNoTargetReportAt = now;

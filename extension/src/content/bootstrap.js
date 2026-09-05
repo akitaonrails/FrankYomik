@@ -74,7 +74,12 @@
     if (!Object.prototype.hasOwnProperty.call(changes, 'frankSettings')) return;
     chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (response) => {
       if (chrome.runtime.lastError || !response?.ok) return;
-      applyReaderPreferences(response.settings || {});
+      const next = response.settings || {};
+      applyReaderPreferences(next);
+      // Strategies captured their settings at start; hand them the new ones so
+      // a pipeline change does not need a reload.
+      if (site === 'kindle') window.FrankKindle?.updateSettings?.(next);
+      if (site === 'webtoon') window.FrankWebtoon?.updateSettings?.(next);
     });
   });
 

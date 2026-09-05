@@ -29,7 +29,12 @@
   const pageById = new Map();
   const debugEntries = new Map();
 
-  window.FrankWebtoon = { start };
+  window.FrankWebtoon = { start, updateSettings };
+
+  /// Settings changed in the popup while this episode was open.
+  function updateSettings(nextSettings) {
+    settings = nextSettings || {};
+  }
 
   function start(nextSettings) {
     if (started) return;

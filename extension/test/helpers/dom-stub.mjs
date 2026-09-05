@@ -97,7 +97,11 @@ export function loadContentScripts(scripts, images, options = {}) {
     removeAllRanges() { this.cleared += 1; this.isCollapsed = true; },
   };
 
+  const messageListeners = [];
+
   const window = {
+    setInterval: () => 0,
+    clearInterval: () => {},
     innerWidth: VIEWPORT.width,
     innerHeight: VIEWPORT.height,
     devicePixelRatio: 1,
@@ -122,7 +126,13 @@ export function loadContentScripts(scripts, images, options = {}) {
       createObjectURL: () => `blob:frank-${++urlCounter}`,
       revokeObjectURL: (url) => revoked.push(url),
     },
-    chrome: { runtime: { sendMessage: () => {} } },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage: () => Promise.resolve(),
+        onMessage: { addListener: (fn) => messageListeners.push(fn) },
+      },
+    },
     PointerEvent: class {
       constructor(type, init = {}) {
         this.type = type;
@@ -155,7 +165,12 @@ export function loadContentScripts(scripts, images, options = {}) {
     ...extra,
   });
 
-  return { sandbox, window, document, fire, pointer, revoked, selection };
+  /// Deliver a message the way the service worker would.
+  const sendToContent = (message) => {
+    for (const listener of messageListeners) listener(message, {}, () => {});
+  };
+
+  return { sandbox, window, document, fire, pointer, revoked, selection, sendToContent };
 }
 
 export const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

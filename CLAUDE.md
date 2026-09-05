@@ -200,6 +200,22 @@ and prose arrive the same way, so the reader chooses: the Flutter toolbar
 cycles Furigana -> English -> Book and remembers it per volume (ASIN); the
 extension has it in the popup as one global setting.
 
+## When a page keeps failing
+
+Kindle regenerates blob URLs on its own, so a page that fails for a reason the
+page cannot change — the wrong pipeline for the book, most likely — would be
+resubmitted on every churn for as long as the tab stays open. Three identical
+failures in a row pause auto-submission in `kindle.js` and report the server's
+own message; changing a setting or forcing a reprocess resumes.
+
+Popup settings now reach a reader that is already open: `bootstrap.js` hands
+new settings to `FrankKindle.updateSettings` / `FrankWebtoon.updateSettings` on
+every storage change, and a pipeline change re-reads the current page. Before
+this, strategies kept whatever settings they started with until a reload.
+
+`FrankKindle.state()` and `FrankLens.state()` report why nothing is happening;
+read them from the extension's console context, not the page's.
+
 ## Cache model
 
 The server and worker share the same cache layout.
