@@ -128,6 +128,8 @@
       pageImageSize: target
         ? `${Math.round(target.getBoundingClientRect().width)}x${Math.round(target.getBoundingClientRect().height)}`
         : null,
+      // More than one means a scored match could pick the wrong page.
+      pageImageCandidates: document.querySelectorAll('img[src^="blob:"]').length,
       pageMode: target ? spreadMode(target.getBoundingClientRect()) : null,
       pagesDetected: pageCounter,
       pagesSubmitted: processedBlobs.size,
@@ -396,6 +398,10 @@
   async function submitDetection(detection, force = false) {
     const target = findImageBySrc(detection.imgSrc) || findVisibleBlob();
     if (!target) return;
+    // Remember which element this capture came from. Scoring cannot tell one
+    // page image from its neighbour: they are the same size, in the same
+    // place, and both visible during a turn.
+    target.dataset.frankCapturedPage = detection.pageId;
     processedBlobs.add(detection.imgSrc);
     while (processedBlobs.size > MAX_PROCESSED_BLOBS) {
       processedBlobs.delete(processedBlobs.values().next().value);

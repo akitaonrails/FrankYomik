@@ -95,6 +95,9 @@ function matchesSelector(el, selector) {
   if (selector === 'img') return el.tagName === 'IMG';
   if (selector === 'img.toon_image') return el.tagName === 'IMG' && el.className.includes('toon_image');
   if (selector === 'img[data-frank-lens-src]') return el.tagName === 'IMG' && !!el.dataset.frankLensSrc;
+  if (selector === 'img[src^="blob:"]') return el.tagName === 'IMG' && String(el.src).startsWith('blob:');
+  const capturedPage = /^img\[data-frank-captured-page="(.*)"\]$/.exec(selector);
+  if (capturedPage) return el.tagName === 'IMG' && el.dataset.frankCapturedPage === capturedPage[1];
   if (selector === 'img[data-frank-translated="true"]') {
     return el.tagName === 'IMG' && el.dataset.frankTranslated === 'true';
   }
@@ -124,7 +127,12 @@ export function loadContentScripts(scripts, images, options = {}) {
     head: options.bareDocument ? null : makeElement('head'),
     documentElement: makeElement('html'),
     createElement: makeElement,
-    querySelector: () => options.readerRoot ?? null,
+    querySelector: (selector) => {
+      // Real selectors resolve against the images; anything else is the
+      // reader-root lookup, which the stub answers with a fixture.
+      const matched = images.find((el) => matchesSelector(el, selector));
+      return matched ?? options.readerRoot ?? null;
+    },
     querySelectorAll: queryAll,
     elementFromPoint(x, y) {
       const hit = images.filter((el) => {

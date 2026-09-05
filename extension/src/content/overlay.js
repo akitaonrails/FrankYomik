@@ -154,6 +154,17 @@
   }
 
   function findKindleTarget(capture, pageId) {
+    // The element the capture was actually taken from, when it is still the
+    // one holding that page. Kindle keeps neighbouring pages in the DOM at the
+    // same size and position during a turn, so scoring alone cannot tell them
+    // apart — and a render placed on the wrong one is a translation of a page
+    // the reader is not looking at.
+    if (pageId) {
+      const captured = document.querySelector(
+        `img[data-frank-captured-page="${cssEscape(pageId)}"]`,
+      );
+      if (captured && isActuallyVisible(captured)) return captured;
+    }
     const expected = capture.imgSrc || '';
     const expectedRect = capture.rect;
     const readerRoot = findReaderRoot();
@@ -244,6 +255,10 @@
   function samePageIgnoringForce(a, b) {
     const stripped = (s) => String(s || '').replace(/(?:-force-\d+)+$/, '');
     return stripped(a) === stripped(b);
+  }
+
+  function cssEscape(value) {
+    return String(value).replace(/["\\]/g, '\\$&');
   }
 
   function findReaderRoot() {

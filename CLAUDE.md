@@ -278,6 +278,24 @@ the render looked like afterwards:
 - A book is corrected once. A volume with pages of both kinds would otherwise
   be switched back and forth for as long as it stayed open.
 
+## A render belongs to the element it was captured from
+
+Kindle keeps neighbouring pages in the DOM during a turn — same size, same
+position, both visible — and regenerates blob URLs on its own, so by the time a
+render returns, the element it came from no longer matches the src it was
+captured from. Scoring then decides, and it cannot tell one page image from the
+next: a render lands on the page beside the one it depicts.
+
+That is what a difference of 0.71, repeated across sessions with identical
+dimensions, was saying: not a race, a systematic comparison against the
+neighbouring page. Captures now stamp their element with the page id and
+results bind to that stamp, falling back to scoring only when it is gone.
+
+The test for this only earns its place because it was checked against the bug:
+with the identity lookup removed it must fail. The first version passed either
+way, because the fixture let the scorer match by src — the ambiguity the bug
+depends on was missing from it.
+
 ## A page that moves under a job in flight
 
 A reflowable book re-paginates while a job is running — Kindle is still

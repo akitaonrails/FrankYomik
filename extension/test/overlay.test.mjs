@@ -134,3 +134,44 @@ test('a result with no matching page on screen is reported as unapplied', async 
 
   assert.equal(await overlay.applyKindleResult(kindleResult('kindle-1', 'blob:missing')), false);
 });
+
+// --- a render belongs to the element it was captured from -------------------
+// Kindle keeps neighbouring pages in the DOM during a turn: same size, same
+// place, both visible. Scoring cannot tell them apart, and a render placed on
+// the wrong one is a translation of a page the reader is not looking at —
+// which measured 0.71 against the page it landed on, every time.
+
+test('a result lands on the element its capture came from', async () => {
+  // Kindle regenerates blob URLs on its own, so by the time a render returns
+  // the captured element no longer matches the src it was captured from. That
+  // is when scoring takes over — and both pages are the same size, in the same
+  // place, so it can just as easily pick the neighbour.
+  const captured = makeImage({ left: 0, top: 0, width: 400, height: 600 }, { src: 'blob:page-2-churned' });
+  const neighbour = makeImage({ left: 0, top: 0, width: 400, height: 600 }, { src: 'blob:page-3' });
+  captured.dataset.frankCapturedPage = 'kindle-2';
+  const { overlay, lens } = setup([neighbour, captured]);
+
+  await overlay.applyKindleResult({
+    pageId: 'kindle-2',
+    imageDataUrl: DATA_URL,
+    capture: { imgSrc: 'blob:page-2', rect: { x: 0, y: 0, width: 400, height: 600 } },
+  });
+
+  assert.equal(captured.dataset.frankLensPageId, 'kindle-2');
+  assert.equal(neighbour.dataset.frankLensPageId, undefined,
+    'the page beside it must not receive this render');
+  assert.equal(lens.has('kindle-2'), true);
+});
+
+test('an unstamped page still falls back to matching by source', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 }, { src: 'blob:page-2' });
+  const { overlay } = setup([img]);
+
+  await overlay.applyKindleResult({
+    pageId: 'kindle-2',
+    imageDataUrl: DATA_URL,
+    capture: { imgSrc: 'blob:page-2', rect: { x: 0, y: 0, width: 400, height: 600 } },
+  });
+
+  assert.equal(img.dataset.frankLensPageId, 'kindle-2');
+});
