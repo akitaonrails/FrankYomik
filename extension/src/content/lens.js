@@ -195,7 +195,7 @@
       'box-shadow:0 6px 24px rgba(0,0,0,0.45), 0 0 0 3px rgba(255,255,255,0.9), 0 0 0 5px rgba(0,0,0,0.35)',
       'will-change:left,top,background-position',
     ].join(';');
-    document.body.appendChild(el);
+    (document.body || document.documentElement).appendChild(el);
     state.el = el;
     return el;
   }
@@ -464,12 +464,13 @@
     if (state.holding || state.holdTimer) event.preventDefault();
   }
 
+  // Injected before the page's own scripts run, so there may be no head yet.
   const style = document.createElement('style');
   style.textContent =
     '.__frank-lens-open, .__frank-lens-open * {' +
     '-webkit-user-select:none !important;user-select:none !important;' +
     '-webkit-touch-callout:none !important;}';
-  document.head.appendChild(style);
+  (document.head || document.documentElement)?.appendChild(style);
 
   window.addEventListener('pointerdown', onPointerDown, { capture: true });
   window.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });

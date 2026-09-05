@@ -87,8 +87,8 @@ export function loadContentScripts(scripts, images, options = {}) {
   body.querySelectorAll = queryAll;
 
   const document = {
-    body,
-    head: makeElement('head'),
+    body: options.bareDocument ? null : body,
+    head: options.bareDocument ? null : makeElement('head'),
     documentElement: makeElement('html'),
     createElement: makeElement,
     querySelector: () => options.readerRoot ?? null,

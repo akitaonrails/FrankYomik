@@ -57,7 +57,7 @@
         "src/content/bootstrap.js"
       ],
       "all_frames": true,
-      "run_at": "document_idle"
+      "run_at": "document_start"
     },
     {
       "matches": [
@@ -70,7 +70,7 @@
         "src/content/webtoon.js",
         "src/content/bootstrap.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ]
 }

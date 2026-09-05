@@ -486,3 +486,13 @@ test('the cancel dispatched at the reader does not end our own peek', async () =
   assert.equal(bgX, radius - (320 - 100) * 2, 'the lens must still track the pointer');
   assert.equal(move.propagationStopped, true, 'and still take moves from the page');
 });
+
+test('the module loads before the document has a head or body', () => {
+  // Content scripts run at document_start so their capture listeners are in
+  // place before the reader registers its own; at that point the document is
+  // little more than an <html> element.
+  const env = loadContentScripts(['lens.js'], [], { bareDocument: true });
+
+  assert.equal(typeof env.window.FrankLens?.attach, 'function');
+  assert.equal(env.window.FrankLens.state().enabled, true);
+});
