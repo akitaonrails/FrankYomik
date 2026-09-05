@@ -59,6 +59,13 @@ export function makeImage(rect, { src = 'blob:page', className = '' } = {}) {
 }
 
 function matchesSelector(el, selector) {
+  // Comma-separated groups match if any part does, as in the real thing.
+  if (selector.includes(',')) {
+    return selector.split(',').some((part) => matchesSelector(el, part.trim()));
+  }
+  const classContains = /^\[class\*="(.+)"\]$/.exec(selector);
+  if (classContains) return String(el.className || '').includes(classContains[1]);
+  if (selector.startsWith('.')) return String(el.className || '').split(/\s+/).includes(selector.slice(1));
   if (selector === 'img') return el.tagName === 'IMG';
   if (selector === 'img.toon_image') return el.tagName === 'IMG' && el.className.includes('toon_image');
   if (selector === 'img[data-frank-lens-src]') return el.tagName === 'IMG' && !!el.dataset.frankLensSrc;
@@ -127,6 +134,10 @@ export function loadContentScripts(scripts, images, options = {}) {
     window,
     location: window.location,
     document,
+    // A clock the test can move, so time-based gates are deterministic.
+    Date: options.clock
+      ? Object.assign(Object.create(Date), { now: () => options.clock.now })
+      : Date,
     console,
     setTimeout,
     clearTimeout,

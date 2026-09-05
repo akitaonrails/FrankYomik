@@ -17,6 +17,10 @@
   const LOADER_VISIBLE_OVERLAP_PX2 = 1600;
   const NO_TARGET_REPORT_INTERVAL_MS = 15000;
   const MAX_CONSECUTIVE_FAILURES = 3;
+  // A loader that never goes away is not a loader. The selector below is loose
+  // enough to match unrelated furniture, and a false match used to disable
+  // detection for the life of the page without saying so.
+  const LOADER_PATIENCE_MS = 5000;
   const MAX_DEBUG_ENTRIES = 20;
   const MAX_DEBUG_PAYLOADS = 3;
 
@@ -39,6 +43,8 @@
   let consecutiveFailures = 0;
   let lastFailureError = '';
   let autoSubmitPaused = false;
+  let loaderSince = 0;
+  let loaderOverriddenAt = 0;
   const processedBlobs = new Set();
   const MAX_PROCESSED_BLOBS = 200;
   const spreadGroups = new Map();
@@ -62,14 +68,27 @@
   }
 
   function state() {
+    const target = findVisibleBlob();
     return {
       started,
+      configured: Boolean(settings.configured),
+      kindleEnabled: settings.kindleEnabled !== false,
       book: bookId(),
       pipeline: effectivePipeline(),
       defaultPipeline: settings.mangaPipeline,
       autoSubmitPaused,
       lastFailureError,
       consecutiveFailures,
+      // Why detection is or is not producing pages.
+      frameHostsReader: frameHostsKindleReader(),
+      loaderPresent: loaderPresent(),
+      loaderBlocking: loaderVisible(),
+      pageImageFound: Boolean(target),
+      pageImageSize: target
+        ? `${Math.round(target.getBoundingClientRect().width)}x${Math.round(target.getBoundingClientRect().height)}`
+        : null,
+      pagesDetected: pageCounter,
+      pagesSubmitted: processedBlobs.size,
     };
   }
 
@@ -666,7 +685,24 @@
     ) || document.body;
   }
 
+  /// Whether the reader is still painting, with a limit on how long we will
+  /// believe it.
   function loaderVisible() {
+    if (!loaderPresent()) {
+      loaderSince = 0;
+      return false;
+    }
+    const now = Date.now();
+    if (!loaderSince) loaderSince = now;
+    if (now - loaderSince < LOADER_PATIENCE_MS) return true;
+    if (!loaderOverriddenAt) {
+      loaderOverriddenAt = now;
+      report('info', 'A loader has been on screen for 5s; reading the page anyway');
+    }
+    return false;
+  }
+
+  function loaderPresent() {
     const nodes = document.querySelectorAll('.kg-loader-wrapper, .kg-loader-container, [class*="loader"]');
     for (const el of nodes) {
       const style = window.getComputedStyle(el);
