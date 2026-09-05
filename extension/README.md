@@ -18,7 +18,9 @@ The lens is the only element the extension puts on the page, it appears only whi
 
 The popup configures the self-hosted API URL, bearer token, enabled sites, Kindle pipeline, target language, reading mode, lens magnification, and webtoon prefetch behavior.
 
-**Kindle pipeline** picks what a page is sent through: *Translate* and *Furigana* for manga, and *Furigana — text book* for reflowable novels, whose pages Kindle also delivers as images but which are typeset prose rather than artwork. The server refuses a page that does not look like prose, so a manga page sent to the book pipeline fails with an explanation rather than annotating the artwork. Settings autosave when you leave a field or change a checkbox/select; **Save now** is retained as a fallback and to trigger browser permission prompts when needed.
+**Kindle pipeline** picks what a page is sent through: *Translate* and *Furigana* for manga, and *Furigana — text book* for reflowable novels, whose pages Kindle also delivers as images but which are typeset prose rather than artwork. The server refuses a page that does not look like prose, so a manga page sent to the book pipeline fails with an explanation rather than annotating the artwork.
+
+That setting is the **default**. Under *Current page*, **Pipeline for this book** overrides it for the volume open in the active tab, so a novel and a manga can each keep their own mode without changing anything when you switch between them. Changes apply to the open reader immediately, without a reload. Settings autosave when you leave a field or change a checkbox/select; **Save now** is retained as a fallback and to trigger browser permission prompts when needed.
 
 ![Kindle page translated by the Chromium extension](docs/kindle-extension-translation.png)
 

@@ -8,6 +8,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   webtoonPrefetch: 'nearby',
   readerMode: 'lens',
   lensZoom: 2,
+  // Per-volume pipeline overrides, keyed by Kindle ASIN. A manga volume and a
+  // novel need different pipelines, and the reader moves between them.
+  bookPipelines: {},
 });
 
 export const STORAGE_KEYS = Object.freeze({
@@ -26,6 +29,11 @@ export const VALID_MANGA_PIPELINES = new Set([
   'manga_furigana',
   'book_furigana',
 ]);
+// Kindle ASINs. Anything else in the map is not a book we put there.
+export const ASIN_PATTERN = /^B[A-Z0-9]{9}$/;
+// Bounded so a long library cannot grow extension storage without limit.
+export const MAX_BOOK_PIPELINES = 50;
+
 export const VALID_READER_MODES = new Set(['lens', 'full']);
 export const VALID_LENS_ZOOMS = Object.freeze([1.5, 2, 3]);
 
@@ -45,7 +53,25 @@ export function normalizeSettings(raw = {}) {
     webtoonEnabled: raw.webtoonEnabled !== false,
     readerMode: raw.readerMode === 'full' ? 'full' : 'lens',
     lensZoom: normalizeLensZoom(raw.lensZoom),
+    bookPipelines: normalizeBookPipelines(raw.bookPipelines),
   };
+}
+
+export function normalizeBookPipelines(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const entries = Object.entries(raw)
+    .filter(([asin, pipeline]) => ASIN_PATTERN.test(asin)
+      && VALID_MANGA_PIPELINES.has(pipeline))
+    .slice(-MAX_BOOK_PIPELINES);
+  return Object.fromEntries(entries);
+}
+
+/// The pipeline a volume should use: its own choice, else the default.
+export function pipelineForBook(settings, bookId) {
+  const chosen = bookId ? settings?.bookPipelines?.[bookId] : null;
+  return VALID_MANGA_PIPELINES.has(chosen)
+    ? chosen
+    : (settings?.mangaPipeline || DEFAULT_SETTINGS.mangaPipeline);
 }
 
 export function normalizeLensZoom(value) {

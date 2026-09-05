@@ -32,6 +32,8 @@ export function makeElement(tag) {
     dispatched: [],
     dispatchEvent(event) { this.dispatched.push(event); return true; },
     contains(other) { return other === this; },
+    // Enough of a canvas for capture paths to bail out cleanly.
+    getContext: () => null,
     getBoundingClientRect() {
       const r = this._rect || { left: 0, top: 0, width: 0, height: 0 };
       return { ...r, x: r.left, y: r.top, right: r.left + r.width, bottom: r.top + r.height };
@@ -100,6 +102,7 @@ export function loadContentScripts(scripts, images, options = {}) {
   const messageListeners = [];
 
   const window = {
+    location: { href: options.href ?? 'https://read.amazon.co.jp/?asin=B0ABCDEFGH' },
     setInterval: () => 0,
     clearInterval: () => {},
     innerWidth: VIEWPORT.width,
@@ -116,6 +119,7 @@ export function loadContentScripts(scripts, images, options = {}) {
 
   const sandbox = {
     window,
+    location: window.location,
     document,
     console,
     setTimeout,

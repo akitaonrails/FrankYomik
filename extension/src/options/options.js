@@ -13,14 +13,21 @@ const fields = {
   webtoonPrefetch: document.querySelector('#webtoon-prefetch'),
   readerMode: document.querySelector('#reader-mode'),
   lensZoom: document.querySelector('#lens-zoom'),
+  bookPipeline: document.querySelector('#book-pipeline'),
 };
+const bookPipelineHint = document.querySelector('#book-pipeline-hint');
 const activeJobsEl = document.querySelector('#active-jobs');
 const diagnosticsListEl = document.querySelector('#diagnostics-list');
+// Per-volume pipeline choices are not form state: they are keyed by book and
+// edited one at a time, so they are carried across saves rather than read back
+// out of the form.
+let bookPipelines = {};
+let currentBook = null;
 let lastSavedSignature = '';
 let saveInFlight = null;
 let autoSaveTimer = null;
 
-loadSettings();
+loadSettings().then(refreshCurrentBook);
 refreshDiagnostics();
 window.setInterval(refreshDiagnostics, 2000);
 
@@ -29,12 +36,26 @@ form.addEventListener('submit', async (event) => {
   await saveSettings({ force: true });
 });
 
-for (const field of Object.values(fields)) {
+for (const [name, field] of Object.entries(fields)) {
+  // The per-book select edits a keyed map rather than a form value, so it
+  // saves through setBookPipeline instead of the generic autosave.
+  if (name === 'bookPipeline') continue;
   field.addEventListener('blur', scheduleAutosave);
   if (field.type === 'checkbox' || field.tagName === 'SELECT') {
     field.addEventListener('change', scheduleAutosave);
   }
 }
+
+fields.bookPipeline.addEventListener('change', async (event) => {
+  try {
+    await setBookPipeline(event.target.value);
+    setStatus(event.target.value
+      ? 'Saved for this book.'
+      : 'This book follows the default again.', 'ok');
+  } catch (error) {
+    setStatus(error.message || String(error), 'error');
+  }
+});
 
 document.querySelector('#health-check').addEventListener('click', async () => {
   setStatus('Checking server…');
@@ -162,6 +183,36 @@ function applySettings(settings) {
   fields.webtoonPrefetch.value = settings.webtoonPrefetch || 'nearby';
   fields.readerMode.value = settings.readerMode || 'lens';
   fields.lensZoom.value = String(settings.lensZoom ?? 2);
+  bookPipelines = { ...(settings.bookPipelines || {}) };
+  applyBookPipeline();
+}
+
+/// Show the choice for the volume in the active tab, if there is one.
+function applyBookPipeline() {
+  const known = Boolean(currentBook);
+  fields.bookPipeline.disabled = !known;
+  fields.bookPipeline.value = known ? (bookPipelines[currentBook] || '') : '';
+  bookPipelineHint.textContent = known
+    ? `${currentBook} — overrides the Kindle pipeline above for this book only.`
+    : 'Open a Kindle book to choose.';
+}
+
+/// Ask the open reader which volume it is showing.
+async function refreshCurrentBook() {
+  try {
+    const response = await sendMessage({ type: 'RUN_ACTIVE_TAB_ACTION', action: 'get-book' });
+    currentBook = response.ok ? (response.bookId || null) : null;
+  } catch {
+    currentBook = null;  // not a Kindle tab, or no reader in it
+  }
+  applyBookPipeline();
+}
+
+async function setBookPipeline(value) {
+  if (!currentBook) return;
+  if (value) bookPipelines[currentBook] = value;
+  else delete bookPipelines[currentBook];
+  await saveSettings({ force: true });
 }
 
 function readSettings() {
@@ -175,6 +226,7 @@ function readSettings() {
     webtoonPrefetch: fields.webtoonPrefetch.value,
     readerMode: fields.readerMode.value,
     lensZoom: Number(fields.lensZoom.value),
+    bookPipelines,
   };
 }
 

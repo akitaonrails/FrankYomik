@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  MAX_BOOK_PIPELINES,
   apiOriginPattern,
   normalizeApiBaseUrl,
   normalizeSettings,
+  pipelineForBook,
 } from '../src/shared/config.js';
 
 test('normalizeApiBaseUrl strips trailing slashes and URL noise', () => {
@@ -58,4 +60,36 @@ test('normalizeSettings accepts the book pipeline and rejects invented ones', ()
   assert.equal(normalizeSettings({ mangaPipeline: 'manga_furigana' }).mangaPipeline, 'manga_furigana');
   assert.equal(normalizeSettings({ mangaPipeline: 'book_translate' }).mangaPipeline, 'manga_translate');
   assert.equal(normalizeSettings({}).mangaPipeline, 'manga_translate');
+});
+
+test('per-book pipelines keep only real books and real pipelines', () => {
+  const settings = normalizeSettings({
+    bookPipelines: {
+      B0ABCDEFGH: 'book_furigana',
+      B0IJKLMNOP: 'not_a_pipeline',
+      'javascript:alert(1)': 'manga_furigana',
+      '../../etc': 'manga_furigana',
+    },
+  });
+  assert.deepEqual(settings.bookPipelines, { B0ABCDEFGH: 'book_furigana' });
+});
+
+test('per-book pipelines are bounded so storage cannot grow forever', () => {
+  const many = {};
+  for (let i = 0; i < MAX_BOOK_PIPELINES + 10; i++) {
+    many[`B0${String(i).padStart(8, '0')}`] = 'manga_furigana';
+  }
+  const kept = normalizeSettings({ bookPipelines: many }).bookPipelines;
+  assert.equal(Object.keys(kept).length, MAX_BOOK_PIPELINES);
+});
+
+test('pipelineForBook prefers the book over the default', () => {
+  const settings = normalizeSettings({
+    mangaPipeline: 'manga_furigana',
+    bookPipelines: { B0ABCDEFGH: 'book_furigana' },
+  });
+  assert.equal(pipelineForBook(settings, 'B0ABCDEFGH'), 'book_furigana');
+  assert.equal(pipelineForBook(settings, 'B0ZZZZZZZZ'), 'manga_furigana');
+  assert.equal(pipelineForBook(settings, ''), 'manga_furigana');
+  assert.equal(pipelineForBook(settings, null), 'manga_furigana');
 });

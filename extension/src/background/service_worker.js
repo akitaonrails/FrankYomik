@@ -117,7 +117,9 @@ async function runActiveTabAction(action) {
     ? 'FRANK_FORCE_REPROCESS_CURRENT'
     : (action === 'export-debug-pair' || action === 'upload-debug-pair')
       ? 'FRANK_EXPORT_DEBUG_PAIR'
-      : '';
+      : action === 'get-book'
+        ? 'FRANK_GET_BOOK'
+        : '';
   if (!messageType) throw new Error('unknown active tab action');
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error('No active tab found.');
@@ -133,7 +135,10 @@ async function runActiveTabAction(action) {
   if (action === 'upload-debug-pair') {
     response = await uploadDebugPair(response, tab);
   }
-  await recordEvent({ site: response.site || 'extension', level: 'info', message: `Active tab action completed: ${action}` });
+  // Reading which volume is open is a query, not an action worth logging.
+  if (action !== 'get-book') {
+    await recordEvent({ site: response.site || 'extension', level: 'info', message: `Active tab action completed: ${action}` });
+  }
   return response;
 }
 

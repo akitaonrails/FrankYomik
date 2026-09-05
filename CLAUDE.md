@@ -196,9 +196,12 @@ Nothing on the page is redrawn. `book_furigana` pages cannot be re-rendered
 from metadata — there are no editable regions, only gutter annotations.
 
 Which pipeline a Kindle title needs cannot be told from the page, since manga
-and prose arrive the same way, so the reader chooses: the Flutter toolbar
-cycles Furigana -> English -> Book and remembers it per volume (ASIN); the
-extension has it in the popup as one global setting.
+and prose arrive the same way, so the reader chooses, and both clients remember
+the choice per volume (ASIN): the Flutter toolbar cycles Furigana -> English ->
+Book, and the extension popup has "Pipeline for this book" under Current page.
+The global setting is the default for volumes that have not been given one.
+Without per-volume memory, moving from a novel to a manga left the manga on the
+book pipeline, and the server refused every page of it.
 
 ## When a page keeps failing
 

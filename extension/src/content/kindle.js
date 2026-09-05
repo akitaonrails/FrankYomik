@@ -51,9 +51,9 @@
   /// Without this the strategy keeps the settings it started with, so
   /// switching pipeline needed a reload to take effect.
   function updateSettings(nextSettings) {
-    const previous = settings;
+    const previous = effectivePipeline();
     settings = nextSettings || {};
-    if (settings.mangaPipeline === previous.mangaPipeline) return;
+    if (effectivePipeline() === previous) return;
     resumeAutoSubmit();
     // Re-detect the page in front of the reader under the new pipeline.
     lastBlob = '';
@@ -64,7 +64,9 @@
   function state() {
     return {
       started,
-      pipeline: settings.mangaPipeline,
+      book: bookId(),
+      pipeline: effectivePipeline(),
+      defaultPipeline: settings.mangaPipeline,
       autoSubmitPaused,
       lastFailureError,
       consecutiveFailures,
@@ -123,6 +125,17 @@
       if (message?.type === 'FRANK_FORCE_REPROCESS_CURRENT') {
         if (!frameHostsKindleReader()) return false;
         forceReprocessCurrent().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+        return true;
+      }
+      if (message?.type === 'FRANK_GET_BOOK') {
+        if (!frameHostsKindleReader()) return false;
+        sendResponse({
+          ok: true,
+          site: 'kindle',
+          bookId: bookId(),
+          pipeline: effectivePipeline(),
+          usingDefault: !settings.bookPipelines?.[bookId()],
+        });
         return true;
       }
       if (message?.type === 'FRANK_EXPORT_DEBUG_PAIR') {
@@ -299,7 +312,7 @@
       type: 'SUBMIT_CAPTURE',
       site: 'kindle',
       pageId,
-      pipeline: settings.mangaPipeline,
+      pipeline: effectivePipeline(),
       priority: 'high',
       metadata,
       capture,
@@ -678,9 +691,22 @@
     return slider ? `pos:${slider.value || slider.getAttribute('aria-valuenow') || ''}` : '';
   }
 
+  /// The volume being read, as Kindle's ASIN. Also the key a per-book
+  /// pipeline choice is stored under.
+  function bookId() {
+    return /[/=](B[A-Z0-9]{9})/.exec(location.href)?.[1] || '';
+  }
+
+  /// The pipeline this volume should use: its own choice, else the default.
+  /// A manga volume and a novel need different ones, and the reader moves
+  /// between them without wanting to change a setting each time.
+  function effectivePipeline() {
+    const chosen = settings.bookPipelines?.[bookId()];
+    return chosen || settings.mangaPipeline;
+  }
+
   function parseKindleMetadata(capture, pageId) {
-    const asinMatch = /[/=](B[A-Z0-9]{9})/.exec(location.href);
-    const title = asinMatch?.[1] || 'kindle';
+    const title = bookId() || 'kindle';
     const latestToken = capture.groupId || capture.pageId || pageId;
     return {
       title,

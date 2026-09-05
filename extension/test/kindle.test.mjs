@@ -92,3 +92,57 @@ test('the strategy reports the pipeline it is running', () => {
   assert.equal(kindle.state().started, true);
   assert.equal(kindle.state().pipeline, 'book_furigana');
 });
+
+// --- a volume keeps its own pipeline ---------------------------------------
+// A manga volume and a novel need different pipelines, and the reader moves
+// between them. With one global setting, switching to a novel left the manga
+// on the book pipeline and switching back left the novel on the manga one.
+
+const NOVEL = 'B0ABCDEFGH';
+
+test('a book with no choice of its own follows the default', () => {
+  const { kindle } = setup();
+  assert.equal(kindle.state().book, NOVEL);
+  assert.equal(kindle.state().pipeline, 'book_furigana');
+  assert.equal(kindle.state().defaultPipeline, 'book_furigana');
+});
+
+test('a book with its own choice keeps it whatever the default is', () => {
+  const { kindle } = setup();
+
+  kindle.updateSettings({
+    ...READER_SETTINGS,
+    mangaPipeline: 'manga_furigana',
+    bookPipelines: { [NOVEL]: 'book_furigana' },
+  });
+
+  assert.equal(kindle.state().pipeline, 'book_furigana', 'the novel stays a novel');
+  assert.equal(kindle.state().defaultPipeline, 'manga_furigana');
+});
+
+test('another volume is unaffected by this one', () => {
+  const { kindle } = setup();
+
+  kindle.updateSettings({
+    ...READER_SETTINGS,
+    mangaPipeline: 'manga_furigana',
+    bookPipelines: { B0ZZZZZZZZ: 'book_furigana' },
+  });
+
+  assert.equal(kindle.state().pipeline, 'manga_furigana',
+    'a choice made on a different book must not follow the reader here');
+});
+
+test('choosing a pipeline for this book resumes a paused reader', () => {
+  const { kindle, sendToContent } = setup();
+  for (let i = 0; i < 3; i++) sendToContent(failure(PIPELINE_MISMATCH));
+  assert.equal(kindle.state().autoSubmitPaused, true);
+
+  kindle.updateSettings({
+    ...READER_SETTINGS,
+    bookPipelines: { [NOVEL]: 'manga_furigana' },
+  });
+
+  assert.equal(kindle.state().autoSubmitPaused, false);
+  assert.equal(kindle.state().pipeline, 'manga_furigana');
+});
