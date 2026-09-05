@@ -386,3 +386,31 @@ test('state names the build that is running', () => {
 
   assert.equal(kindle.state().version, '9.9.9');
 });
+
+// --- capturing a page that has not decoded yet -------------------------------
+// An <img> keeps painting its previous frame until a new src decodes, and
+// drawImage copies what is painted. Kindle regenerates blob URLs constantly
+// and detection notices within half a second, so capturing immediately yields
+// the page before this one — identically, every time. That is why those
+// captures all hashed the same, cache-hit, and never matched their page.
+
+test('a page is decoded before it is captured', async () => {
+  const env = setup();
+  // Detection fires at 400ms, then the submit debounce runs for another 550ms.
+  await settle(1200);
+
+  assert.ok(env.page.decodeCalls >= 1, 'the capture waits for the frame it means to copy');
+  assert.equal(env.page.decodedSrc, env.page.src, 'and captures the current page, not the last');
+});
+
+test('a page whose decode is abandoned is left for the next detection', async () => {
+  const env = setup();
+  env.page.decodeFails = true;         // Kindle replaced the src mid-decode
+  const before = env.kindle.state().pagesSubmitted;
+
+  env.page.src = 'blob:page-next';
+  await settle(1400);
+
+  assert.equal(env.kindle.state().pagesSubmitted, before,
+    'better to wait than to submit the previous page');
+});

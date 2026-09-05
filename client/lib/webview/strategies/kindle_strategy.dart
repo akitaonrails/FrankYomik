@@ -241,6 +241,11 @@ $_findVisibleBlobFn
   static const String _captureFn = '''
   function __frankCaptureImg(target) {
     if (!target) return null;
+    // An <img> keeps painting its previous frame until a new src loads, and
+    // drawImage copies what is painted. Kindle regenerates blob URLs
+    // constantly, so capturing before the new one is ready yields the page
+    // before this one. Leave it for the next detection instead.
+    if (target.complete === false || !target.naturalWidth) return null;
     var rect = target.getBoundingClientRect();
     var dpr = window.devicePixelRatio || 1;
     var renderW = Math.max(1, Math.round(rect.width * dpr));

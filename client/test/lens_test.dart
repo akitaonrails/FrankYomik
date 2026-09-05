@@ -174,6 +174,24 @@ void main() {
     });
   });
 
+  group('capture', () {
+    late String strategy;
+
+    setUpAll(
+      () => strategy = _read('lib/webview/strategies/kindle_strategy.dart'),
+    );
+
+    test('a page that has not finished loading is not captured', () {
+      // drawImage copies what the element is painting, which is the previous
+      // page until the new blob loads. Capturing then produces the page before
+      // this one, byte for byte.
+      expect(
+        strategy,
+        contains('if (target.complete === false || !target.naturalWidth) return null;'),
+      );
+    });
+  });
+
   group('webtoon prefetch', () {
     late String reader;
 

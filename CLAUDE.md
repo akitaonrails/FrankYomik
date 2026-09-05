@@ -278,6 +278,27 @@ the render looked like afterwards:
 - A book is corrected once. A volume with pages of both kinds would otherwise
   be switched back and forth for as long as it stayed open.
 
+## Capture only what the page has actually decoded
+
+An `<img>` keeps painting its previous frame until a new `src` decodes, and
+`drawImage` copies what is painted. Kindle regenerates blob URLs constantly and
+detection notices within half a second, so capturing immediately yields *the
+page before this one* — identically, every time.
+
+That is what three separate jobs each returning exactly 244 ruby meant: the
+same bytes going in. Those captures then hashed the same, hit the cache, and
+came back as a render of the previous page, which measured a constant 0.71
+against the page on screen. The stable number was the tell; a race would have
+varied.
+
+The extension awaits `target.decode()` and re-checks the src afterwards. The
+Flutter capture is synchronous, so it refuses a target whose `complete` is
+false and waits for the next detection.
+
+The DOM stub models this: what a canvas draws is the element's last *decoded*
+src, not its current one. A stub where drawing always yields the current page
+cannot express this bug at all.
+
 ## A render belongs to the element it was captured from
 
 Kindle keeps neighbouring pages in the DOM during a turn — same size, same

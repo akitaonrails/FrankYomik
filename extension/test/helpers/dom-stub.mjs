@@ -80,7 +80,13 @@ export function makeImage(rect, { src = 'blob:page', className = '' } = {}) {
   el.className = className;
   el.naturalWidth = Math.round(rect.width);
   el.naturalHeight = Math.round(rect.height);
-  el.decode = async () => {};
+  el.decodedSrc = src;          // what a canvas would actually copy
+  el.decodeCalls = 0;
+  el.decode = async () => {
+    el.decodeCalls += 1;
+    if (el.decodeFails) throw new Error('decode aborted');
+    el.decodedSrc = el.src;     // the new frame is ready only now
+  };
   return el;
 }
 

@@ -395,9 +395,31 @@
     });
   }
 
+  /// Wait until the element has actually decoded the page we mean to capture.
+  ///
+  /// An <img> keeps painting its previous frame until a new src decodes, and
+  /// drawImage copies what is painted. Kindle regenerates blob URLs constantly
+  /// and we notice within half a second, so capturing straight away yields the
+  /// page before this one — every time, byte for byte, which is why those
+  /// captures cache-hit and why their renders never matched the page.
+  async function decoded(target, expectedSrc) {
+    if (expectedSrc && target.src !== expectedSrc) return false;
+    if (typeof target.decode !== 'function') return target.complete !== false;
+    try {
+      await target.decode();
+    } catch {
+      return false;   // the src changed under us; the next detection handles it
+    }
+    return !expectedSrc || target.src === expectedSrc;
+  }
+
   async function submitDetection(detection, force = false) {
     const target = findImageBySrc(detection.imgSrc) || findVisibleBlob();
     if (!target) return;
+    if (!await decoded(target, target.src)) {
+      report('info', 'The page was still loading; leaving it for the next detection.');
+      return;
+    }
     // Remember which element this capture came from. Scoring cannot tell one
     // page image from its neighbour: they are the same size, in the same
     // place, and both visible during a turn.
