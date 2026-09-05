@@ -57,7 +57,8 @@ export function makeElement(tag) {
           const page = canvasPixels[key] ?? canvasPixels.default ?? 0;
           const data = new Uint8ClampedArray(w * h * 4);
           for (let i = 0; i < w * h; i++) {
-            const value = ((i * page) % 251 + (key.length % 3)) % 256;
+            const base = ((i * Math.abs(page)) % 251 + (key.length % 3)) % 256;
+            const value = page < 0 ? 255 - base : base;
             data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = value;
             data[i * 4 + 3] = 255;
           }
@@ -171,11 +172,13 @@ export function loadContentScripts(scripts, images, options = {}) {
     window,
     location: window.location,
     document,
+    console: options.onWarn
+      ? { ...console, warn: (...args) => options.onWarn(args.join(' ')) }
+      : console,
     // A clock the test can move, so time-based gates are deterministic.
     Date: options.clock
       ? Object.assign(Object.create(Date), { now: () => options.clock.now })
       : Date,
-    console,
     setTimeout,
     clearTimeout,
     // Enough of an Image for the decode warm-up, including the load event the

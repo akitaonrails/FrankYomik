@@ -794,3 +794,20 @@ test('a page that reads as blank is not called a mismatch', async () => {
 
   assert.equal(env.window.FrankLens.has('kindle-1'), true);
 });
+
+test('an inverted render is named as a pipeline mismatch', async () => {
+  // A manga pipeline on a prose page clears "balloons" and redraws the text,
+  // which comes back as the page inverted. That is a setting to change, not a
+  // failure to retry, so the message has to say which.
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const warned = [];
+  const env = loadContentScripts(['lens.js'], [img], {
+    pixels: { 'blob:page': 7, 'blob:frank-1': -7 },   // the same page, inverted
+    onWarn: (message) => warned.push(message),
+  });
+
+  await env.window.FrankLens.attach(img, 'kindle-1', DATA_URL);
+
+  assert.equal(env.window.FrankLens.has('kindle-1'), false);
+  assert.match(warned.join(' '), /text book run through a manga pipeline/);
+});

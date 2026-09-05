@@ -42,6 +42,7 @@
   const SIGNATURE_SIZE = 16;
   const SIGNATURE_TOLERANCE = 0.5;
   const FLAT_IMAGE_DEVIATION = 0.02;
+  const INVERTED_CORRELATION = -0.3;
 
   // pageId -> { el, url }. Registrations own their object URL and revoke it,
   // so a long reading session cannot accumulate translated pages.
@@ -166,12 +167,18 @@
       // showing nothing: it reads as a translation of what is on screen.
       const rect = target.getBoundingClientRect();
       release(pageId);
+      // An inverted render means the page's own text was redrawn — a manga
+      // pipeline clearing balloons on a page that has none. Say so, because
+      // the fix is a setting rather than anything the reader can retry.
+      const diagnosis = match.inverted
+        ? 'This page looks like a text book run through a manga pipeline. '
+          + 'Set the pipeline for this book to "Furigana — text book".'
+        : 'It is a render of a different page.';
       report(
-        `Discarded a render that does not match its page (${pageId}): `
-        + `difference ${match.difference.toFixed(2)} of max ${SIGNATURE_TOLERANCE}, `
+        `Discarded a render that does not match its page (${pageId}). ${diagnosis} `
+        + `[difference ${match.difference.toFixed(2)} of max ${SIGNATURE_TOLERANCE}, `
         + `render ${warm.naturalWidth}x${warm.naturalHeight}, `
-        + `page ${Math.round(rect.width)}x${Math.round(rect.height)} `
-        + `natural ${target.naturalWidth || '?'}x${target.naturalHeight || '?'}`,
+        + `page ${Math.round(rect.width)}x${Math.round(rect.height)}]`,
       );
     });
     warm.src = url;
@@ -222,9 +229,17 @@
     const b = signature(target);
     if (!a || !b) return { ok: true, reason: 'unreadable' };
     let total = 0;
-    for (let i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i]);
+    let correlation = 0;
+    for (let i = 0; i < a.length; i++) {
+      total += Math.abs(a[i] - b[i]);
+      correlation += a[i] * b[i];
+    }
     const difference = total / a.length;
-    return { ok: difference <= SIGNATURE_TOLERANCE, difference };
+    // Both signatures are zero-mean and unit-variance, so this is their
+    // correlation: strongly negative means the render is the page inverted,
+    // which is what redrawing dark text as light boxes looks like.
+    const inverted = (correlation / a.length) < INVERTED_CORRELATION;
+    return { ok: difference <= SIGNATURE_TOLERANCE, difference, inverted };
   }
 
   /// Note an element as a page whose translation has not arrived yet.
