@@ -3,6 +3,9 @@ FROM python:3.12-bookworm AS builder
 
 WORKDIR /build
 COPY server/requirements.txt .
+# See Dockerfile.worker-rocm: bump to pull dependencies fresh within their
+# major bounds instead of reusing whatever the last build resolved.
+ARG DEPS_REFRESH=2026-09-05
 # Install CPU-only PyTorch first, then the rest
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \

@@ -1,15 +1,41 @@
-manga-ocr
-pykakasi
-opencv-python-headless
-Pillow
-requests
-deep-translator
-pyyaml
-redis
-nodriver
-easyocr
-simple-lama-inpainting  # install with: pip install --no-deps simple-lama-inpainting
-                        # (its pinned deps conflict with numpy/Pillow/opencv)
-pytest
-# Optional - for Flux/SDXL inpainting backends:
-# pip install diffusers transformers accelerate
+# Runtime dependencies for the Python workers.
+#
+# Bounds stop at the next major on purpose: the worker image is rebuilt from
+# this file, and an unpinned rebuild silently took opencv from 4 to 5 during a
+# routine CVE patch. Minor and patch releases still flow in on every rebuild —
+# the same "latest within the major" policy the clients follow.
+#
+# Everything imported directly by our code is listed here, even where another
+# package happens to pull it in today.
+
+# Japanese OCR (vertical manga and prose text)
+manga-ocr>=0.1.16,<0.2
+
+# Morphological analysis behind furigana readings. fugashi needs a dictionary;
+# unidic-lite is the one kindle/furigana.py is tuned against.
+fugashi>=1.5,<2
+unidic-lite>=1.0,<2
+
+# Imaging
+opencv-python-headless>=5.0,<6
+Pillow>=12.1,<13
+numpy>=2.4,<3
+
+# Latin-script OCR for artwork text and webtoons
+easyocr>=1.7,<2
+
+# Inpainting for artwork text. Installed with --no-deps in the images: its
+# pins conflict with the numpy/Pillow/opencv versions above.
+simple-lama-inpainting>=0.1,<0.2
+
+# Services and IO
+redis>=8.1,<9
+requests>=2.32,<3
+pyyaml>=6.0,<7
+deep-translator>=1.11,<2
+
+# Naver Webtoon scraping
+nodriver>=0.50,<1
+
+# Tests
+pytest>=9.0,<10

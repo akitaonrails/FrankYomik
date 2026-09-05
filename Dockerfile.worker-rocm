@@ -25,6 +25,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 COPY server/requirements.txt .
 
+# Dependencies are pulled fresh within their major bounds whenever this value
+# changes. Without it the pip layer is cached against requirements.txt alone,
+# so a rebuild silently keeps whatever versions the last build happened to
+# resolve — refreshing them becomes an accident of layer invalidation rather
+# than a decision.
+ARG DEPS_REFRESH=2026-09-05
+
 # Base image has torch pre-installed with ROCm support.
 # Install torchvision from ROCm index, then our deps (skipping torch).
 RUN pip install --no-cache-dir --upgrade pip && \

@@ -280,6 +280,26 @@ Risks that still matter operationally:
 - The Android app allows cleartext HTTP to local addresses. Fine for a trusted home LAN, not fine for untrusted Wi-Fi.
 - The client stores the auth token in shared preferences. That is normal for this kind of side-loaded utility app, but it is not hardened secret storage.
 
+## Server dependencies
+
+`server/requirements.txt` bounds every direct dependency at the next major.
+The file used to be unpinned, and a routine CVE rebuild silently moved opencv
+from 4 to 5 in production — it happened to work, but nothing would have caught
+it. Minor and patch releases still arrive on every rebuild.
+
+Everything the code imports directly is declared there, even where another
+package pulls it in today (numpy, fugashi, and the unidic-lite dictionary
+`kindle/furigana.py` is tuned against).
+
+The pip layer is otherwise cached against `requirements.txt` alone, so bump
+`--build-arg DEPS_REFRESH=<date>` to pull dependencies fresh within their
+bounds. Test the artifact rather than the dev venv — the local environment is
+CUDA, production is ROCm:
+
+```bash
+docker run --rm --entrypoint python <worker-image> -m pytest tests/unit/ -q
+```
+
 ## Versioning
 
 Android `versionCode` is derived automatically from `git rev-list --count HEAD` in `client/android/app/build.gradle.kts`. This means every commit produces a higher build number — no manual bumping and no risk of version code regression (which causes "app not installed" errors on Android).
