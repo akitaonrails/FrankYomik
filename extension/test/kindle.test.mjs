@@ -454,3 +454,40 @@ test('a settled page is captured', async () => {
   assert.equal(sent.filter((m) => m.type === 'SUBMIT_CAPTURE').length, 1,
     'a page that stops changing is captured normally');
 });
+
+// --- the page the reader can actually see ------------------------------------
+// Kindle parks the pages either side of the current one in the DOM, laid out
+// inside the viewport but hidden. They are the same size and in the same
+// place, so rectangle overlap cannot tell them apart. Capturing one produces a
+// page nobody is looking at — and since it never changes, every such capture
+// is byte-identical and cache-hits the same stale render.
+
+function withHiddenNeighbour() {
+  const hidden = makeImage({ left: 0, top: 0, width: 400, height: 600 }, { src: 'blob:hidden' });
+  hidden.computedStyle = { display: 'block', visibility: 'visible', opacity: '0' };
+  const visible = makeImage({ left: 0, top: 0, width: 400, height: 600 }, { src: 'blob:visible' });
+  // The hidden one comes first, as the previous page does in Kindle's DOM.
+  const env = loadContentScripts(['lens.js', 'status.js', 'overlay.js', 'kindle.js'],
+    [hidden, visible]);
+  env.window.FrankKindle.start({ ...READER_SETTINGS });
+  return { ...env, kindle: env.window.FrankKindle, hidden, visible };
+}
+
+test('a hidden page is never the one captured', async () => {
+  const env = withHiddenNeighbour();
+  const sent = recordSubmissions(env);
+
+  await settle(2600);
+
+  const submitted = sent.find((m) => m.type === 'SUBMIT_CAPTURE');
+  assert.ok(submitted, 'something was submitted');
+  assert.equal(env.hidden.dataset.frankCapturedPage, undefined,
+    'the hidden page must not be captured');
+  assert.ok(env.visible.dataset.frankCapturedPage,
+    'the page the reader sees is the one captured');
+});
+
+test('state reports the page image it would capture', () => {
+  const env = withHiddenNeighbour();
+  assert.equal(env.kindle.state().pageImageFound, true);
+});

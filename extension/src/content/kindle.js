@@ -737,6 +737,11 @@
     for (const img of imgs) {
       if (img.dataset.frankTranslated === 'true') continue;
       if (!img.src?.startsWith('blob:')) continue;
+      // Kindle parks the pages either side of the current one in the DOM, laid
+      // out inside the viewport but hidden from the reader. They are the same
+      // size and in the same place, so overlap alone cannot tell them apart —
+      // and capturing one produces a page nobody is looking at.
+      if (!isActuallyVisible(img)) continue;
       const rect = img.getBoundingClientRect();
       if (rect.width < MIN_PAGE_SIDE_PX || rect.height < MIN_PAGE_SIDE_PX) continue;
       let overlap = overlapAreaInViewport(rect, vw, vh);
@@ -746,12 +751,41 @@
         if (rootOverlap < MIN_VISIBLE_OVERLAP_PX2) continue;
         overlap = Math.min(overlap, rootOverlap);
       }
-      if (overlap > bestArea) {
-        bestArea = overlap;
+      // The page the reader can actually point at beats one merely laid out
+      // under the same coordinates.
+      const score = (topLayerHits(img) * 1e9) + overlap;
+      if (score > bestArea) {
+        bestArea = score;
         best = img;
       }
     }
     return best;
+  }
+
+  /// Whether the reader can actually see this element.
+  function isActuallyVisible(el) {
+    const style = window.getComputedStyle(el);
+    if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+    const opacity = Number.parseFloat(style.opacity || '1');
+    return !Number.isFinite(opacity) || opacity > 0.05;
+  }
+
+  /// How many probe points land on this element rather than something above it.
+  function topLayerHits(el) {
+    const rect = el.getBoundingClientRect();
+    const points = [
+      [rect.left + rect.width / 2, rect.top + rect.height / 2],
+      [rect.left + rect.width * 0.25, rect.top + rect.height / 2],
+      [rect.left + rect.width * 0.75, rect.top + rect.height / 2],
+    ];
+    let hits = 0;
+    for (const [rawX, rawY] of points) {
+      const x = Math.max(0, Math.min(window.innerWidth - 1, rawX));
+      const y = Math.max(0, Math.min(window.innerHeight - 1, rawY));
+      const top = document.elementFromPoint?.(x, y);
+      if (top && (top === el || el.contains?.(top) || top.contains?.(el))) hits += 1;
+    }
+    return hits;
   }
 
   function findVisibleKindleImage() {

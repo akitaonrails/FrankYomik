@@ -278,6 +278,27 @@ the render looked like afterwards:
 - A book is corrected once. A volume with pages of both kinds would otherwise
   be switched back and forth for as long as it stayed open.
 
+## Capture the page the reader can see, not one parked beside it
+
+Kindle keeps the pages either side of the current one in the DOM, laid out
+inside the viewport but hidden. They are the same size and in the same place,
+so `findVisibleBlob` — which only measured rectangle overlap, with no
+visibility test at all — could return one of them, and ties went to whichever
+came first in the DOM.
+
+Meanwhile `overlay.js` and `lens.js` *did* check visibility. So the capture
+and the comparison were looking at different elements by construction: we
+translated a page nobody was looking at, then measured the result against the
+page on screen and refused it. Because a hidden page never changes, every such
+capture was byte-identical — same hash, same cache entry, the same stale render
+returned instantly, a constant 0.70 that survived every other fix.
+
+Detection now requires the element to be visible *and* prefers the one that
+hit-tests at its own centre, which is what the reader is actually pointing at.
+
+The test for it was checked against the original code, not just the fix: with
+both the visibility test and the hit-test scoring removed, it fails.
+
 ## A reflowable book is laid out progressively
 
 This is why the novel behaved differently from manga, and why it looked like

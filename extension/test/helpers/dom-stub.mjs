@@ -144,7 +144,12 @@ export function loadContentScripts(scripts, images, options = {}) {
     },
     querySelectorAll: queryAll,
     elementFromPoint(x, y) {
+      // As in a browser: hit testing never returns something the reader
+      // cannot see, and the last painted element wins.
       const hit = images.filter((el) => {
+        const style = el.computedStyle;
+        if (style && (style.display === 'none' || style.visibility === 'hidden'
+            || Number.parseFloat(style.opacity ?? '1') <= 0.05)) return false;
         const r = el.getBoundingClientRect();
         return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
       });
@@ -177,7 +182,8 @@ export function loadContentScripts(scripts, images, options = {}) {
     devicePixelRatio: 1,
     getSelection: () => selection,
     document,
-    getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
+    getComputedStyle: (el) => el?.computedStyle
+      ?? { display: 'block', visibility: 'visible', opacity: '1' },
     addEventListener: (type, fn) => document.addEventListener(type, fn),
     removeEventListener: (type, fn) => document.removeEventListener(type, fn),
     setTimeout,
