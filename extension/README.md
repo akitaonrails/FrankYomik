@@ -71,7 +71,9 @@ Use this path when you only want to install the extension, not develop it.
 11. Click **Check server**.
 12. Reload any Kindle/Naver tabs that were already open before installing or updating the extension.
 
-To update later, download the newer release zip, replace the extracted folder contents, then click the reload button on the extension card. Removing and re-adding the extension can clear Chromium extension storage, so use **Export settings** first if you want a backup of the API URL/token.
+To update later, download the newer release zip, replace the extracted folder contents, then click the reload button on the extension card.
+
+**Use that reload button rather than removing and re-adding the extension.** Chromium clears extension storage on uninstall, which loses the API URL, the token, and every per-book pipeline choice — after which a novel falls back to a manga pipeline and its pages come back looking wrong. If you do remove it, use **Export settings** first.
 
 ## Load unpacked from source
 
