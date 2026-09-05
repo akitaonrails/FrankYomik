@@ -151,7 +151,7 @@
     // Kindle reuses the same <img> across turns: retarget before the new
     // page's translation lands, so a peek cannot magnify the page just left,
     // and the previous render is released instead of accumulating.
-    window.FrankOverlay?.releasePagesExcept(pageId);
+    window.FrankOverlay?.releasePagesExcept(pageId, target);
     scheduleSubmit(detection);
   }
 

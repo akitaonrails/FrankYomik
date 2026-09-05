@@ -72,6 +72,24 @@ class LensController {
     );
   }
 
+  /// Note a page as awaiting its translation.
+  ///
+  /// A hold on such a page shows nothing, but is still absorbed: the reader
+  /// should not turn the page out from under someone waiting for that very
+  /// render. Kindle pages are marked by [setActivePage]; webtoon pages have no
+  /// single active page, so they are marked by their original src at submit.
+  Future<void> markPending(
+    AppWebViewController controller, {
+    String? originalSrc,
+  }) async {
+    final opts = originalSrc != null
+        ? jsonEncode({'originalSrc': originalSrc})
+        : '{}';
+    await controller.evaluateJavascript(
+      source: 'if(window.__frankLens) window.__frankLens.markPending($opts);',
+    );
+  }
+
   /// Restrict peeking to [pageId], releasing translations for other pages.
   ///
   /// Pass null on sites where several pages are on screen at once (webtoon),
@@ -138,8 +156,14 @@ const String _moduleScript = r'''
     zoom: 2.0,
     activePage: '',     // '' means every registered page may be peeked
     sources: {},        // pageId -> blob url
+    // Pages the reader knows about that have no translation yet. A hold on one
+    // is still our gesture: it shows nothing, but it must not fall through and
+    // turn the page while the reader waits for the render.
+    pending: [],
     el: null,
-    open: false,
+    open: false,        // the magnifier is on screen
+    holding: false,     // the press became a peek; the reader is locked
+    pendingEl: null,
     holdTimer: null,
     pointerId: null,
     pointerType: '',
@@ -271,6 +295,7 @@ const String _moduleScript = r'''
     }
 
     releaseSource(pageId);
+    unmarkPending(target);
     state.sources[pageId] = blobUrl;
     var registered = Object.keys(state.sources);
     while (registered.length > MAX_REGISTRATIONS) {
@@ -286,6 +311,11 @@ const String _moduleScript = r'''
     var warm = new Image();
     warm.src = blobUrl;
 
+    // The reader may already be holding on this page, waiting for it.
+    if (state.holding && !state.open && state.pendingEl === target) {
+      openLens(state.lastX, state.lastY, target, state.pointerType);
+    }
+
     var rect = target.getBoundingClientRect();
     return JSON.stringify({
       ok: true,
@@ -295,6 +325,19 @@ const String _moduleScript = r'''
         w: Math.round(rect.width), h: Math.round(rect.height)
       }
     });
+  }
+
+  function markPending(el) {
+    if (!el) return;
+    var idx = state.pending.indexOf(el);
+    if (idx !== -1) state.pending.splice(idx, 1);
+    state.pending.push(el);
+    while (state.pending.length > MAX_REGISTRATIONS) state.pending.shift();
+  }
+
+  function unmarkPending(el) {
+    var idx = state.pending.indexOf(el);
+    if (idx !== -1) state.pending.splice(idx, 1);
   }
 
   function releaseSource(pageId) {
@@ -349,15 +392,12 @@ const String _moduleScript = r'''
     return el;
   }
 
-  function findTargetAt(x, y) {
-    var els = document.querySelectorAll('img[data-frank-lens-src]');
+  function smallestCovering(els, x, y) {
     var best = null;
     var bestArea = Infinity;
     for (var i = 0; i < els.length; i++) {
       var el = els[i];
-      // Kindle reuses the same <img> across page turns; without this gate a
-      // stale registration would magnify the page the reader already left.
-      if (state.activePage && el.dataset.frankLensPageId !== state.activePage) continue;
+      if (!el) continue;
       var r = el.getBoundingClientRect();
       if (r.width < 40 || r.height < 40) continue;
       if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
@@ -366,6 +406,22 @@ const String _moduleScript = r'''
       if (area < bestArea) { bestArea = area; best = el; }
     }
     return best;
+  }
+
+  // The page under the pointer, and whether its translation is ready.
+  function candidateAt(x, y) {
+    var els = document.querySelectorAll('img[data-frank-lens-src]');
+    var registered = [];
+    for (var i = 0; i < els.length; i++) {
+      // Kindle reuses the same <img> across page turns; without this gate a
+      // stale registration would magnify the page the reader already left.
+      if (state.activePage && els[i].dataset.frankLensPageId !== state.activePage) continue;
+      registered.push(els[i]);
+    }
+    var ready = smallestCovering(registered, x, y);
+    if (ready) return { el: ready, ready: true };
+    var waiting = smallestCovering(state.pending, x, y);
+    return waiting ? { el: waiting, ready: false } : null;
   }
 
   function openLens(x, y, target, pointerType) {
@@ -426,25 +482,58 @@ const String _moduleScript = r'''
 
   /* ---------- gestures ---------- */
   // A quick tap is left alone so the reader still turns pages; only a press
-  // held past HOLD_MS without travel becomes a peek.
+  // held past HOLD_MS without travel becomes a peek. Once it does, the gesture
+  // is ours: the reader must not also pan, drag or turn.
+
+  // Take the event away from the page entirely. preventDefault only stops the
+  // browser's own default action — the reader's drag handler is a listener
+  // like any other and would still see the move, which is what made the page
+  // slide around under an open lens.
+  function swallow(e) {
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+  }
+
+  function beginHold(x, y, candidate, pointerType) {
+    state.holding = true;
+    state.pointerType = pointerType || '';
+    state.lastX = x;
+    state.lastY = y;
+    if (candidate.ready) {
+      state.pendingEl = null;
+      openLens(x, y, candidate.el, pointerType);
+      return;
+    }
+    // Nothing to show yet. Hold the gesture anyway so releasing does not turn
+    // the page out from under a reader who is waiting for this very page.
+    state.pendingEl = candidate.el;
+  }
+
+  function endHold() {
+    state.holding = false;
+    state.pendingEl = null;
+    closeLens();
+  }
 
   function onPointerDown(e) {
     if (!state.enabled) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    closeLens();
-    var target = findTargetAt(e.clientX, e.clientY);
-    if (!target) return;
+    endHold();
+    var candidate = candidateAt(e.clientX, e.clientY);
+    if (!candidate) return;
     state.pointerId = e.pointerId;
     state.startX = e.clientX;
     state.startY = e.clientY;
+    state.lastX = e.clientX;
+    state.lastY = e.clientY;
     var x = e.clientX;
     var y = e.clientY;
     var type = e.pointerType;
     cancelHold();
     state.holdTimer = setTimeout(function() {
       state.holdTimer = null;
-      var fresh = findTargetAt(x, y) || target;
-      if (fresh && fresh.dataset.frankLensSrc) openLens(x, y, fresh, type);
+      beginHold(x, y, candidateAt(x, y) || candidate, type);
     }, HOLD_MS);
   }
 
@@ -456,40 +545,52 @@ const String _moduleScript = r'''
       if (Math.hypot(dx, dy) > MOVE_CANCEL_PX) cancelHold();
       return;
     }
-    if (!state.open) return;
-    if (e.cancelable) e.preventDefault();
-    updateLens(e.clientX, e.clientY);
+    if (!state.holding) return;
+    swallow(e);
+    state.lastX = e.clientX;
+    state.lastY = e.clientY;
+    if (state.open) updateLens(e.clientX, e.clientY);
   }
 
   function onPointerUp(e) {
-    if (state.pointerId !== null && e.pointerId !== state.pointerId) {
-      return;
-    }
+    if (state.pointerId !== null && e.pointerId !== state.pointerId) return;
     state.pointerId = null;
-    var wasOpen = state.open;
-    closeLens();
-    if (wasOpen) {
-      // The press was a peek, not a page turn: swallow the click it spawns.
-      state.suppressClick = true;
-      if (e.cancelable) e.preventDefault();
-      e.stopPropagation();
-      setTimeout(function() { state.suppressClick = false; }, 400);
-    }
+    var wasHolding = state.holding;
+    endHold();
+    if (!wasHolding) return;
+    // The press was a peek, not a page turn: swallow the click it spawns.
+    state.suppressClick = true;
+    swallow(e);
+    setTimeout(function() { state.suppressClick = false; }, 400);
   }
 
+  // Touch also generates compatibility mouse events after pointerup, and the
+  // reader turns pages on those as readily as on click.
   function onSyntheticMouseCapture(e) {
+    if (state.holding) { swallow(e); return; }
     if (!state.suppressClick) return;
     if (e.type === 'click') state.suppressClick = false;
-    if (e.cancelable) e.preventDefault();
-    e.stopPropagation();
+    swallow(e);
+  }
+
+  // Mouse drags raise mousemove alongside pointermove, and readers pan on
+  // either, so both have to be taken away.
+  function onMouseMove(e) {
+    if (state.holding) swallow(e);
   }
 
   function onTouchMove(e) {
-    if (state.open && e.cancelable) e.preventDefault();
+    if (state.holding) swallow(e);
+  }
+
+  // Dragging an <img> is a native gesture of its own; without this the page
+  // image gets picked up while peeking.
+  function onDragOrSelect(e) {
+    if (state.holding || state.holdTimer) swallow(e);
   }
 
   function onContextMenu(e) {
-    if (state.open || state.holdTimer) e.preventDefault();
+    if (state.holding || state.holdTimer) e.preventDefault();
   }
 
   var style = document.createElement('style');
@@ -500,24 +601,39 @@ const String _moduleScript = r'''
     '}';
   document.head.appendChild(style);
 
-  document.addEventListener('pointerdown', onPointerDown, { capture: true });
-  document.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
-  document.addEventListener('pointerup', onPointerUp, { capture: true });
-  document.addEventListener('pointercancel', onPointerUp, { capture: true });
-  document.addEventListener('mousedown', onSyntheticMouseCapture, { capture: true });
-  document.addEventListener('mouseup', onSyntheticMouseCapture, { capture: true });
-  document.addEventListener('click', onSyntheticMouseCapture, { capture: true });
-  document.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
-  document.addEventListener('contextmenu', onContextMenu, { capture: true });
+  window.addEventListener('pointerdown', onPointerDown, { capture: true });
+  window.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
+  window.addEventListener('pointerup', onPointerUp, { capture: true });
+  window.addEventListener('pointercancel', onPointerUp, { capture: true });
+  window.addEventListener('mousedown', onSyntheticMouseCapture, { capture: true });
+  window.addEventListener('mouseup', onSyntheticMouseCapture, { capture: true });
+  window.addEventListener('click', onSyntheticMouseCapture, { capture: true });
+  window.addEventListener('mousemove', onMouseMove, { capture: true, passive: false });
+  window.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+  window.addEventListener('dragstart', onDragOrSelect, { capture: true });
+  window.addEventListener('selectstart', onDragOrSelect, { capture: true });
+  window.addEventListener('contextmenu', onContextMenu, { capture: true });
   window.addEventListener('scroll', function() { cancelHold(); closeLens(); }, { capture: true, passive: true });
   window.addEventListener('resize', function() { closeLens(); });
 
   window.__frankLens = {
     register: register,
     clear: clearAll,
+    markPending: function(opts) {
+      var el = (opts && opts.originalSrc)
+        ? findWebtoonTarget(opts)
+        : findKindleTarget(opts || {});
+      if (el) markPending(el);
+      return !!el;
+    },
     setActivePage: function(pageId) {
       var id = pageId == null ? '' : String(pageId);
       state.activePage = id;
+      // The page now on screen has no translation yet; a hold on it should be
+      // absorbed rather than turning the page.
+      state.pending = [];
+      var current = findKindleTarget({});
+      if (current) markPending(current);
       if (!id) return;
       if (state.open && state.target &&
           state.target.dataset.frankLensPageId !== id) closeLens();

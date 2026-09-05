@@ -120,6 +120,7 @@ function buildSandbox(images) {
     cancelable: true, defaultPrevented: false,
     preventDefault() { this.defaultPrevented = true; },
     stopPropagation() { this.propagationStopped = true; },
+    stopImmediatePropagation() { this.immediatePropagationStopped = true; },
     ...extra,
   });
 
@@ -326,4 +327,135 @@ test('touch peeks lift the lens clear of the fingertip', async () => {
   // Content still tracks the finger, not the lens centre.
   const [, bgY] = el.style.backgroundPosition.split(' ').map(parseFloat);
   assert.equal(bgY, r - 500 * 2);
+});
+
+// --- the reader must not move while the lens is up -------------------------
+// preventDefault alone left the reader's own drag handler receiving the moves,
+// so peeking dragged the page sideways under the lens.
+
+test('an open lens takes move events away from the page', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  const move = pointer('pointermove', 240, 320);
+  const mouseMove = pointer('mousemove', 240, 320);
+  const drag = pointer('dragstart', 240, 320);
+  fire('pointermove', move);
+  fire('mousemove', mouseMove);
+  fire('dragstart', drag);
+
+  assert.equal(move.propagationStopped, true, 'the reader must not see the move');
+  assert.equal(move.immediatePropagationStopped, true);
+  assert.equal(mouseMove.propagationStopped, true);
+  assert.equal(drag.defaultPrevented, true, 'the page image must not be dragged');
+});
+
+test('the page is free to move again once the peek ends', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  const move = pointer('pointermove', 240, 320);
+  fire('pointermove', move);
+
+  assert.equal(move.propagationStopped, undefined, 'the reader owns the page again');
+});
+
+// --- holding before the translation arrives --------------------------------
+
+test('a page turn marks the page on screen as awaiting its translation', () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens } = buildSandbox([img]);
+
+  lens.setActivePage('kindle-1');
+
+  assert.equal(lens.isOpen(), false);
+  assert.equal(lens.has('kindle-1'), false, 'nothing is registered yet');
+});
+
+test('holding while a page is still translating shows nothing but holds the gesture', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = buildSandbox([img]);
+  lens.setActivePage('kindle-1');
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  assert.equal(lens.isOpen(), false);
+  assert.equal(lensEl(document), undefined, 'no empty magnifier');
+
+  fire('pointerup', pointer('pointerup', 200, 300));
+  const click = pointer('click', 200, 300);
+  fire('click', click);
+  assert.equal(click.defaultPrevented, true, 'waiting for a render must not cost the page');
+});
+
+test('a quick tap while a page is still translating still turns it', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = buildSandbox([img]);
+  lens.setActivePage('kindle-1');
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(60);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  const click = pointer('click', 200, 300);
+  fire('click', click);
+
+  assert.equal(click.defaultPrevented, false);
+});
+
+test('a translation that lands mid-hold opens the lens where the pointer is', async () => {
+  const img = makeImage({ left: 100, top: 50, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = buildSandbox([img]);
+  lens.setActivePage('kindle-1');
+
+  fire('pointerdown', pointer('pointerdown', 300, 350));
+  await wait(260);
+  assert.equal(lens.isOpen(), false);
+
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  assert.equal(lens.isOpen(), true, 'the reader is still holding — just show it');
+  const el = lensEl(document);
+  const r = parseFloat(el.style.width) / 2;
+  const [bgX] = el.style.backgroundPosition.split(' ').map(parseFloat);
+  assert.equal(bgX, r - (300 - 100) * 2);
+});
+
+test('a hold that found nothing leaves no state behind for the next one', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = buildSandbox([img]);
+  lens.setActivePage('kindle-1');
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  fire('click', pointer('click', 200, 300));
+
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+
+  assert.equal(lens.isOpen(), true, 'the next hold must zoom normally');
+});
+
+test('webtoon pages awaiting a render are claimed by their original src', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 }, { src: 'https://naver/1.jpg' });
+  const { lens, fire, pointer } = buildSandbox([img]);
+
+  assert.equal(lens.markPending({ originalSrc: 'https://naver/1.jpg' }), true);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  const click = pointer('click', 200, 300);
+  fire('click', click);
+
+  assert.equal(lens.isOpen(), false);
+  assert.equal(click.defaultPrevented, true);
 });

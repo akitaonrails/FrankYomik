@@ -161,6 +161,9 @@
     img.dataset.frankOriginalSrc = src;
     pageById.set(pageId, { img, src, index });
     queue.push({ img, src, index, pageId, reason });
+    // Holding on a page that is still translating should do nothing rather
+    // than fall through to the page underneath.
+    window.FrankLens?.markPending(img);
   }
 
   function pumpQueue() {

@@ -250,3 +250,149 @@ test('touch peeks lift the lens clear of the fingertip', async () => {
   const [, bgY] = el.style.backgroundPosition.split(' ').map(Number.parseFloat);
   assert.equal(bgY, radius - 500 * 2, 'content still tracks the finger');
 });
+
+// --- the reader must not move while the lens is up -------------------------
+// preventDefault alone left Kindle's own drag handler receiving the moves, so
+// peeking dragged the page sideways under the lens.
+
+test('an open lens takes move events away from the page', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  const move = pointer('pointermove', 240, 320);
+  fire('pointermove', move);
+
+  assert.equal(lens.isOpen(), true);
+  assert.equal(move.defaultPrevented, true);
+  assert.equal(move.propagationStopped, true, 'the reader must not see the move');
+  assert.equal(move.immediatePropagationStopped, true);
+});
+
+test('compatibility mouse and touch moves are taken away too', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  const mouseMove = pointer('mousemove', 240, 320);
+  const touchMove = pointer('touchmove', 240, 320);
+  const drag = pointer('dragstart', 240, 320);
+  fire('mousemove', mouseMove);
+  fire('touchmove', touchMove);
+  fire('dragstart', drag);
+
+  assert.equal(mouseMove.propagationStopped, true);
+  assert.equal(touchMove.propagationStopped, true);
+  assert.equal(drag.defaultPrevented, true, 'the page image must not be dragged');
+});
+
+test('the page is free to move again once the peek ends', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  const move = pointer('pointermove', 240, 320);
+  fire('pointermove', move);
+
+  assert.equal(move.propagationStopped, undefined, 'the reader owns the page again');
+});
+
+// --- holding before the translation arrives --------------------------------
+
+test('holding on a page that is still translating shows nothing', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+
+  assert.equal(lens.isOpen(), false);
+  assert.equal(lensElement(document), undefined, 'no empty magnifier');
+});
+
+test('holding on a page that is still translating does not turn the page', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  const click = pointer('click', 200, 300);
+  fire('click', click);
+
+  assert.equal(click.defaultPrevented, true, 'waiting for a render must not cost the page');
+});
+
+test('a quick tap on a page that is still translating still turns it', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(60);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  const click = pointer('click', 200, 300);
+  fire('click', click);
+
+  assert.equal(click.defaultPrevented, false);
+});
+
+test('a translation that lands mid-hold opens the lens where the pointer is', async () => {
+  const img = makeImage({ left: 100, top: 50, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  fire('pointerdown', pointer('pointerdown', 300, 350));
+  await wait(260);
+  assert.equal(lens.isOpen(), false);
+
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  assert.equal(lens.isOpen(), true, 'the reader is still holding — just show it');
+  const el = lensElement(document);
+  const radius = Number.parseFloat(el.style.width) / 2;
+  const [bgX] = el.style.backgroundPosition.split(' ').map(Number.parseFloat);
+  assert.equal(bgX, radius - (300 - 100) * 2);
+});
+
+test('a hold that found nothing leaves no state behind for the next one', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  // Hold while it is still translating, then give up.
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  fire('click', pointer('click', 200, 300));
+
+  await lens.attach(img, 'kindle-1', DATA_URL);
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+
+  assert.equal(lens.isOpen(), true, 'the next hold must zoom normally');
+});
+
+test('a page turn clears pages that were waiting on the previous one', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  lens.setActivePage('kindle-2');
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  const click = pointer('click', 200, 300);
+  fire('click', click);
+
+  assert.equal(click.defaultPrevented, false, 'a stale page must not swallow taps');
+});

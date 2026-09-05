@@ -74,11 +74,14 @@
 
   /// Drop every retained render except [pageId] — Kindle shows one page at a
   /// time, so the rest are dead weight the moment the reader turns.
-  function releasePagesExcept(pageId) {
+  ///
+  /// [element] is the page image just detected: handing it over lets a hold
+  /// claim the gesture while that page is still being translated.
+  function releasePagesExcept(pageId, element) {
     for (const retained of Array.from(objectUrls.keys())) {
       if (retained !== pageId) releasePage(retained);
     }
-    window.FrankLens?.setActivePage(pageId);
+    window.FrankLens?.setActivePage(pageId, element);
   }
 
   function releaseAll() {

@@ -95,6 +95,16 @@ Gesture rules that keep the reader usable:
   scroll or swipe, so webtoon scrolling still works.
 - A peek swallows the `click`/`mouseup` it would otherwise spawn, so releasing
   the lens does not also turn the page.
+- While a peek is held, pointer/mouse/touch moves are stopped from reaching the
+  page at all (`stopPropagation` + `stopImmediatePropagation`, registered on
+  `window` in capture phase). `preventDefault` alone is not enough: it stops
+  the browser's default action, but Kindle's drag handler is a listener like
+  any other and would still pan the page under the lens.
+- A hold on a page whose translation has not arrived shows nothing but is still
+  absorbed, so waiting for a render never costs the reader their page. If the
+  render lands while the press is still down, the lens opens under the pointer.
+  Kindle marks the page on screen through `setActivePage`; webtoon marks each
+  page as it is submitted.
 - Kindle reuses the same `<img>` across page turns, so `setActivePage` releases
   the previous page's translation on every detection. Without it a peek could
   magnify the page the reader already left.

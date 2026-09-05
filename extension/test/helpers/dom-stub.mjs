@@ -136,6 +136,7 @@ export function loadContentScripts(scripts, images, options = {}) {
     defaultPrevented: false,
     preventDefault() { this.defaultPrevented = true; },
     stopPropagation() { this.propagationStopped = true; },
+    stopImmediatePropagation() { this.immediatePropagationStopped = true; },
     ...extra,
   });
 

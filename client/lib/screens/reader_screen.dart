@@ -775,6 +775,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     if (isWebtoon) {
       _updateWebtoonProgress();
+      final src = pageInfo['src'] as String?;
+      final controller = _webController;
+      if (_lensMode && controller != null && src != null && src.isNotEmpty) {
+        _lens.markPending(controller, originalSrc: src);
+      }
     }
 
     // Watch for completion to apply overlay

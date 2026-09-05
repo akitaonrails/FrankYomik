@@ -41,6 +41,18 @@ void main() {
       expect(source, contains('var HOLD_MS = 200;'));
       expect(source, contains('var MOVE_CANCEL_PX = 12;'));
     });
+
+    test('a peek takes events away from the reader, not just their defaults', () {
+      // preventDefault alone leaves the reader's own drag handler running.
+      expect(source, contains('e.stopPropagation();'));
+      expect(source, contains('stopImmediatePropagation'));
+      expect(source, contains("window.addEventListener('mousemove'"));
+    });
+
+    test('pages still translating absorb the hold instead of turning', () {
+      expect(source, contains('state.pendingEl = candidate.el;'));
+      expect(source, contains('markPending'));
+    });
   });
 
   group('reader wiring', () {
