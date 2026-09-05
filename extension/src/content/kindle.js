@@ -209,6 +209,12 @@
   }
 
   function noteRenderMismatch(detail = {}) {
+    // Keep the refused render alongside the page it was refused for, so
+    // "Send debug pages to server" can hand over both for comparison.
+    if (detail.pageId && detail.renderUrl) {
+      rememberDebug(detail.pageId, { pageId: detail.pageId, site: 'kindle',
+                                     translatedDataUrl: detail.renderUrl });
+    }
     explainMismatch(detail).catch(() => {});
     recaptures += 1;
     if (recaptures > MAX_RECAPTURES) {
@@ -649,7 +655,12 @@
     const target = findVisibleKindleImage();
     if (!target) throw new Error('No current Kindle page image found.');
     const entry = debugEntryForImage(target);
-    const originalDataUrl = entry?.originalDataUrl;
+    // A fresh snapshot of what the reader is looking at right now, rather than
+    // the copy kept from capture time. When a render is refused as not
+    // depicting its page, the difference between these two is the evidence: it
+    // says whether the wrong page was captured, or the right one measured
+    // wrongly.
+    const originalDataUrl = captureImage(target, 'full') || entry?.originalDataUrl;
     const translatedDataUrl = entry?.translatedDataUrl || (target.dataset.frankTranslated === 'true' ? await dataUrlFromSrc(target.src) : null);
     if (!originalDataUrl) throw new Error('Original debug image unavailable. Reload or turn the page to let Frank recapture the original.');
     if (!translatedDataUrl) throw new Error('Translated debug image unavailable for the current page.');
