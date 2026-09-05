@@ -4,7 +4,7 @@
 
 # Frank Yomik
 
-Automatic manga and webtoon translation system. Detects speech bubbles with RT-DETR-v2, extracts text via OCR, translates with a local LLM (Ollama), and renders the result back onto the page — all running on your own hardware.
+Read Japanese and Korean comics — and Japanese novels — in the original, and look up only what you stumble on. Frank Yomik detects speech bubbles with RT-DETR-v2, reads them with OCR, translates with a local LLM (Ollama) or annotates them with furigana, and shows the result through a magnifier you hold over the page. Everything runs on your own hardware.
 
 <p align="center">
   <img src="docs/sample_translate.png" width="45%" alt="English translation sample">
@@ -13,22 +13,57 @@ Automatic manga and webtoon translation system. Detects speech bubbles with RT-D
 </p>
 <p align="center"><em>Left: Japanese → English translation. Right: Furigana reading aids.</em></p>
 
+## Hold to peek
+
+The page is left exactly as the publisher drew it. Press and hold for 200ms and
+a magnifier opens under your pointer, showing the same page with the
+translation or the readings — release and it is gone. A quick tap still turns
+the page, so the reader underneath keeps working as it always did.
+
+<table>
+<tr>
+<td width="50%" align="center">
+<a href="docs/media/lens-manga.mp4"><img src="docs/media/lens-manga-poster.jpg" width="100%" alt="Peeking at a manga speech balloon through the lens"></a>
+<em>Manga: furigana over a balloon, 1.5x / 2x / 3x.<br><a href="docs/media/lens-manga.mp4">▶ play (20s)</a></em>
+</td>
+<td width="50%" align="center">
+<a href="docs/media/lens-textbook.mp4"><img src="docs/media/lens-textbook-poster.jpg" width="100%" alt="Peeking at a Japanese novel page through the lens"></a>
+<em>Text books: furigana in the gutters of a Kindle novel.<br><a href="docs/media/lens-textbook.mp4">▶ play (20s)</a></em>
+</td>
+</tr>
+</table>
+
+Full-page replacement is still there as a mode, in both the app and the
+extension, for when you would rather read the translation outright.
+
 ## Components
 
 | Directory | Language | Description |
 |-----------|----------|-------------|
-| `server/` | Go + Python | API server, processing pipelines (manga + webtoon), Redis worker |
+| `server/` | Go + Python | API server, processing pipelines (manga, text books, webtoon), Redis worker |
 | `client/` | Dart/Flutter | Android + Linux reader app with WebView overlay |
 | `extension/` | JavaScript | Chromium MV3 extension for desktop Kindle/Naver reading |
-| `docs/` | — | Test images, screenshots, deployment notes |
+| `docs/` | — | Test images, screenshots, demo videos (Git LFS), deployment notes |
 
 ## How It Works
 
 **Manga pipeline** (Japanese → English or furigana):
 ```
 Image → RT-DETR-v2 bubble detection → manga-ocr → Ollama translation → English render
-                                                 → pykakasi furigana → Vertical JP render
+                                                 → MeCab furigana    → Vertical JP render
 ```
+
+**Text book pipeline** (Japanese novels → furigana):
+```
+Image → column detection (projection profile) → manga-ocr per ~12 glyphs
+      → MeCab readings over the whole column  → furigana drawn in the gutters
+```
+
+Kindle rasterises reflowable novels the same way it renders manga — one image
+per page, no text in the DOM — so a book is annotated as pixels too. What makes
+prose tractable is its regularity: a page gives ~29 evenly spaced columns, and
+a page that does not look like typeset prose is refused rather than annotated
+as if it were.
 
 **Webtoon pipeline** (Korean → English):
 ```
@@ -39,9 +74,9 @@ Image → EasyOCR text detection → cluster into bubbles → Ollama translation
 
 The protected debug API can also store original/translated page pairs uploaded from the Chromium extension. List recent pairs with `GET /api/v1/debug/pages`.
 
-**Flutter client**: Wraps Kindle (read.amazon.co.jp) and Naver Webtoon in a WebView, captures pages, submits them to the API, and reveals the translation through a magnifier lens — the original page stays on screen and a 200ms press-and-hold peeks at the translated render underneath (1.5x/2x/3x), with full-page replacement available as a mode. The Chromium extension presents translations the same way. Supports auto-translate or manual translate-on-demand, per-volume pipeline selection (furigana vs English), and local SQLite caching.
+**Flutter client**: Wraps Kindle (read.amazon.co.jp) and Naver Webtoon in a WebView, captures pages, submits them to the API, and reveals the translation through a magnifier lens — the original page stays on screen and a 200ms press-and-hold peeks at the translated render underneath (1.5x/2x/3x), with full-page replacement available as a mode. The Chromium extension presents translations the same way. Supports auto-translate or manual translate-on-demand, per-volume pipeline selection (furigana vs English), and local SQLite caching. Each Kindle volume remembers its own pipeline, so moving between a manga and a novel needs no setting changes.
 
-**Chromium extension**: Runs on desktop Chrome/Chromium, Brave, and Edge. It keeps Kindle and Naver pages visually close to stock: the content script detects the current page image, sends it to your self-hosted server, then swaps in the completed translated/furigana image. All settings live in the extension popup; the bearer token stays in the extension service worker and is never exposed to page scripts.
+**Chromium extension**: Runs on desktop Chrome/Chromium, Brave, and Edge. It keeps Kindle and Naver pages visually close to stock: the content script detects the current page image, sends it to your self-hosted server, and reveals the result through the same hold-to-peek magnifier. All settings live in the extension popup; the bearer token stays in the extension service worker and is never exposed to page scripts.
 
 <p align="center">
   <img src="extension/docs/chromium-extension-popup.png" width="80%" alt="Frank Yomik Chromium extension popup on Amazon Manga">
@@ -52,7 +87,7 @@ The protected debug API can also store original/translated page pairs uploaded f
 
 - Python 3.12+
 - [Ollama](https://ollama.ai) with `qwen3:14b` (~9 GB VRAM)
-- Go 1.21+
+- Go 1.25+
 - Redis
 - Flutter 3.11+ (for the client app)
 
@@ -220,8 +255,10 @@ The desktop extension is the lightest way to use Frank Yomik directly on the Kin
 
 - Kindle Japan: `read.amazon.co.jp`, `read.kindle.co.jp`
 - Naver Webtoon: `comic.naver.com`, `m.comic.naver.com`
-- Manga pipelines: English translation or furigana annotations
+- Kindle pipelines: English translation, furigana, or furigana for text books
 - Webtoon pipeline: Korean → English
+- A pipeline per volume: a novel and a manga each keep their own, so switching books changes nothing
+- Reading mode (lens or full page) and lens magnification
 - Per-site enable/disable, target-language selection, and webtoon prefetch settings
 - Manual force-reprocess and original-vs-translated debug pair upload from the popup
 
@@ -239,7 +276,7 @@ The extension is distributed as a zip asset on the [latest release](https://gith
 4. Enable **Developer mode**.
 5. Click **Load unpacked** and select the extracted folder that contains `manifest.json`.
 6. Pin/open the **Frank Yomik** extension action.
-7. Set the API base URL, auth token, sites, manga pipeline, and target language. Settings autosave when you leave a field; **Save now** is available as a fallback and may trigger the exact API-origin permission prompt.
+7. Set the API base URL, auth token, sites, Kindle pipeline, and target language. Settings autosave when you leave a field; **Save now** is available as a fallback and may trigger the exact API-origin permission prompt.
 8. Click **Check server**.
 9. Reload any Kindle/Naver tabs that were already open.
 
@@ -264,7 +301,7 @@ This is a one-time setup. Future updates signed with the same key install withou
 ```bash
 cd server
 
-# Python unit tests (356 tests)
+# Python unit tests (442 tests)
 .venv/bin/pytest tests/unit/ -v
 
 # Python integration tests (34 tests, needs test images in docs/)
@@ -273,8 +310,11 @@ cd server
 # Go API tests (needs Redis for full coverage, skips gracefully without it)
 go test -v .
 
-# Flutter tests (50 tests)
+# Flutter tests (78 tests; the lens suite needs node)
 cd ../client && flutter test
+
+# Chromium extension (74 tests, plus manifest validation)
+cd ../extension && npm test
 ```
 
 ## Configuration
@@ -288,6 +328,7 @@ All settings in `server/config.yaml`:
 | `ocr` | Device (cpu/cuda) for manga-ocr |
 | `text_detection` | EasyOCR confidence and GPU for artwork text |
 | `manga_inpainting` | LaMa text removal (off by default) |
+| `book` | Text-book render scale and OCR chunk size |
 | `webtoon` | Scraper, OCR, bubble detection, inpainting |
 | `worker` | Redis, consumer group, heartbeat, timeout |
 
