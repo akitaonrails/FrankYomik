@@ -429,6 +429,7 @@ class Consumer:
             "source_hash": result.source_hash,
             "content_hash": result.content_hash,
             "render_hash": result.render_hash,
+            "page_kind": result.page_kind,
         }
         meta_key = f"{RESULT_KEY_PREFIX}{result.job_id}"
         self._rdb.set(meta_key, json.dumps(meta), ex=self.result_ttl)

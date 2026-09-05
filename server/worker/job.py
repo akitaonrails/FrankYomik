@@ -73,6 +73,10 @@ class ProcessingResult:
     content_hash: str = ""
     render_hash: str = ""
     metadata_payload: dict[str, Any] | None = None
+    # "prose" when the page is typeset text rather than artwork. The manga
+    # pipelines report it so a client can tell that a book needs book_furigana
+    # without inferring it from a render that came back wrong.
+    page_kind: str = ""
 
 
 def process_job(job: ProcessingJob,
@@ -380,6 +384,10 @@ def _process_manga(job: ProcessingJob,
     img_cv, img_pil = decode_image_bytes(job.image_bytes)
     page = load_page_from_memory(img_cv, img_pil, name=job.job_id)
 
+    # Cheap, and the only reliable way to tell a novel from artwork: prose is
+    # many columns of one width, manga is not.
+    page_kind = "prose" if analyze_book_layout(img_pil).is_prose else "artwork"
+
     mode = (PipelineMode.FURIGANA if job.pipeline == "manga_furigana"
             else PipelineMode.TRANSLATE)
 
@@ -469,6 +477,7 @@ def _process_manga(job: ProcessingJob,
         pipeline=job.pipeline,
         source_hash=job.source_hash,
         metadata_payload=_build_metadata_payload(job, regions, img_w, img_h),
+        page_kind=page_kind,
     )
 
 

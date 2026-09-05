@@ -26,6 +26,9 @@ type JobStatusResponse struct {
 	SourceHash       string `json:"source_hash,omitempty"`
 	ContentHash      string `json:"content_hash,omitempty"`
 	RenderHash       string `json:"render_hash,omitempty"`
+	// PageKind is "prose" or "artwork" when the worker could tell, so a client
+	// can correct a book that is on the wrong pipeline.
+	PageKind string `json:"page_kind,omitempty"`
 }
 
 // HealthResponse is the API response for health checks.
@@ -65,6 +68,9 @@ type WSNotification struct {
 	SourceHash  string `json:"source_hash,omitempty"`
 	ContentHash string `json:"content_hash,omitempty"`
 	RenderHash  string `json:"render_hash,omitempty"`
+	// PageKind mirrors JobStatusResponse.PageKind: a client that listens
+	// rather than polls needs the same facts.
+	PageKind string `json:"page_kind,omitempty"`
 }
 
 // Valid pipeline values.

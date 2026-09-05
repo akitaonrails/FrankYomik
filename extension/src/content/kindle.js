@@ -29,6 +29,7 @@
   const NO_TARGET_REPORT_INTERVAL_MS = 15000;
   const MAX_CONSECUTIVE_FAILURES = 3;
   const MISMATCHES_BEFORE_SWITCH = 2;
+  const PROSE_VERDICTS_BEFORE_SWITCH = 2;
   // A loader that never goes away is not a loader. The selector below is loose
   // enough to match unrelated furniture, and a false match used to disable
   // detection for the life of the page without saying so.
@@ -58,6 +59,10 @@
   // Renders that came back describing something other than the page they were
   // bound to. Two in a row on a manga pipeline means the book is prose.
   let renderMismatches = 0;
+  let proseVerdicts = 0;
+  // A book is corrected at most once. A volume with pages of both kinds would
+  // otherwise be switched back and forth for as long as it is open.
+  const correctedBooks = new Set();
   let detectTimer = null;
   let lastHref = location.href;
   let loaderSince = 0;
@@ -100,6 +105,9 @@
   function state() {
     const target = findVisibleBlob();
     return {
+      // Which build is actually running: a released zip and a working copy
+      // have looked identical before, which made every other answer suspect.
+      version: chrome.runtime?.getManifest?.().version ?? 'unknown',
       started,
       configured: Boolean(settings.configured),
       kindleEnabled: settings.kindleEnabled !== false,
@@ -135,6 +143,34 @@
     report('info', 'Navigated; cleared translations from the previous book');
   }
 
+  /// The worker's verdict on what kind of page it just processed.
+  ///
+  /// A manga pipeline reporting prose means this book is a novel, which is a
+  /// far better signal than a render that came back looking wrong: it comes
+  /// from the page itself rather than from what we made of it. Two in a row,
+  /// so one text page in a manga volume does not move the whole book.
+  function notePageKind(kind) {
+    const pipeline = effectivePipeline();
+    if (kind !== 'prose' || !pipeline.startsWith('manga_')) {
+      proseVerdicts = 0;
+      return;
+    }
+    proseVerdicts += 1;
+    if (proseVerdicts < PROSE_VERDICTS_BEFORE_SWITCH) return;
+    proseVerdicts = 0;
+    switchBookPipeline('book_furigana',
+      `${bookId()} reads as typeset prose; switching it to the text-book pipeline.`);
+  }
+
+  function switchBookPipeline(pipeline, reason) {
+    const book = bookId();
+    if (!book || correctedBooks.has(book)) return;
+    correctedBooks.add(book);
+    report('info', reason);
+    chrome.runtime.sendMessage({ type: 'SET_BOOK_PIPELINE', bookId: book, pipeline })
+      ?.catch?.(() => {});
+  }
+
   /// A render that does not depict its page usually means the wrong pipeline.
   ///
   /// The manga pipeline clears balloons it thinks it found and redraws their
@@ -148,12 +184,9 @@
     const book = bookId();
     if (!book || !pipeline.startsWith('manga_')) return;
     renderMismatches = 0;
-    report('info',
+    switchBookPipeline('book_furigana',
       `Pages of ${book} do not survive the ${pipeline} pipeline; switching this `
       + 'book to the text-book pipeline.');
-    chrome.runtime.sendMessage({
-      type: 'SET_BOOK_PIPELINE', bookId: book, pipeline: 'book_furigana',
-    })?.catch?.(() => {});
   }
 
   function resumeAutoSubmit() {
@@ -207,7 +240,10 @@
       window.setTimeout(detectPageChange, 1000);
     });
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message?.type === 'FRANK_JOB_COMPLETE' && message.site === 'kindle') handleJobComplete(message);
+      if (message?.type === 'FRANK_JOB_COMPLETE' && message.site === 'kindle') {
+        notePageKind(message.pageKind);
+        handleJobComplete(message);
+      }
       if (message?.type === 'FRANK_JOB_FAILED' && message.site === 'kindle') handleJobFailed(message);
       if (message?.type === 'FRANK_FORCE_REPROCESS_CURRENT') {
         if (!frameHostsKindleReader()) return false;
@@ -442,10 +478,7 @@
   /// a reprocess resumes.
   function noteFailure(error) {
     if (/use a manga pipeline/i.test(error) && bookId()) {
-      report('info', `${bookId()} is not a text book; switching it back.`);
-      chrome.runtime.sendMessage({
-        type: 'SET_BOOK_PIPELINE', bookId: bookId(), pipeline: 'manga_furigana',
-      })?.catch?.(() => {});
+      switchBookPipeline('manga_furigana', `${bookId()} is not a text book; switching it back.`);
       return;
     }
     consecutiveFailures = error === lastFailureError ? consecutiveFailures + 1 : 1;

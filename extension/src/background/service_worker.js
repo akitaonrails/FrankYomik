@@ -208,14 +208,20 @@ async function getSettings() {
 async function getSettingsForSender(sender) {
   const settings = await getSettings();
   if (!sender?.tab) return settings;
+  // An allowlist rather than a redaction, so a new setting is never leaked to
+  // a page by default. Everything a content script actually reads has to be
+  // here: a setting missing from this list does not fail, it silently falls
+  // back — which is how a book set to the text pipeline kept submitting as
+  // manga, and how the reader mode and lens zoom never left the popup.
   return {
-    apiBaseUrl: settings.apiBaseUrl,
     configured: Boolean(settings.apiBaseUrl && settings.authToken),
     kindleEnabled: settings.kindleEnabled,
     webtoonEnabled: settings.webtoonEnabled,
     mangaPipeline: settings.mangaPipeline,
-    targetLanguage: settings.targetLanguage,
+    bookPipelines: settings.bookPipelines,
     webtoonPrefetch: settings.webtoonPrefetch,
+    readerMode: settings.readerMode,
+    lensZoom: settings.lensZoom,
   };
 }
 
@@ -577,6 +583,7 @@ async function pollActiveJobs() {
       if (status.status === 'completed') {
         const ok = await finalizeJobCompletion(settings, job, jobs, recordId, {
           imageUrl: status.image_url,
+          pageKind: status.page_kind,
           sourceHash: status.source_hash,
           source: 'poll',
         });
@@ -607,7 +614,7 @@ async function pollActiveJobs() {
 // Download the result, cache it, drop the job record, and notify the tab.
 // Shared between the poll loop and WebSocket notifications so both paths are
 // idempotent — first writer wins and the loser becomes a cheap no-op.
-async function finalizeJobCompletion(settings, job, jobsMap, recordId, { imageUrl, sourceHash, source }) {
+async function finalizeJobCompletion(settings, job, jobsMap, recordId, { imageUrl, sourceHash, source, pageKind }) {
   if (!jobsMap[recordId]) return false;
   const url = imageUrl || `/api/v1/jobs/${encodeURIComponent(job.jobId)}/image`;
   try {
@@ -628,6 +635,9 @@ async function finalizeJobCompletion(settings, job, jobsMap, recordId, { imageUr
       imageUrl: url,
       imageDataUrl,
       capture: job.capture,
+      // What the worker made of the page, so a book on the wrong pipeline can
+      // be corrected from evidence rather than from a render that looks odd.
+      pageKind: safeText(pageKind, 16),
     });
     return true;
   } catch (error) {
@@ -765,6 +775,7 @@ async function handleWsMessage(event) {
   if (payload.status === 'completed') {
     const ok = await finalizeJobCompletion(settings, job, jobs, recordId, {
       imageUrl: payload.image_url,
+      pageKind: payload.page_kind,
       sourceHash: payload.source_hash,
       source: 'ws',
     });

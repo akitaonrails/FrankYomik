@@ -704,31 +704,46 @@ func (s *Server) StartRedisSubscriber(ctx context.Context) {
 				continue
 			}
 
-			// Completion events
-			status, _ := meta["status"].(string)
-			errMsg, _ := meta["error"].(string)
-
-			notif := WSNotification{
-				Type:   "job_complete",
-				JobID:  jobID,
-				Status: status,
-				Error:  errMsg,
-			}
-			if status == "completed" {
-				notif.ImageURL = fmt.Sprintf("/api/v1/jobs/%s/image", jobID)
-				if pipeline, ok := meta["pipeline"].(string); ok {
-					notif.SourceHash, _ = meta["source_hash"].(string)
-					notif.ContentHash, _ = meta["content_hash"].(string)
-					notif.RenderHash, _ = meta["render_hash"].(string)
-					if notif.SourceHash != "" {
-						notif.MetaURL = fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, notif.SourceHash)
-					}
-				}
-			}
-
-			s.notify(jobID, notif)
+			s.notify(jobID, completionNotification(jobID, meta))
 		}
 	}
+}
+
+// completionNotification builds the message pushed to clients when a job
+// finishes.
+//
+// Clients prefer this over polling, so any field the worker reports has to be
+// copied here as well as into JobStatusResponse. A field added to only one of
+// them does not fail: it silently arrives empty over whichever path the client
+// happens to use.
+func completionNotification(jobID string, meta map[string]any) WSNotification {
+	status, _ := meta["status"].(string)
+	errMsg, _ := meta["error"].(string)
+
+	notif := WSNotification{
+		Type:     "job_complete",
+		JobID:    jobID,
+		Status:   status,
+		Error:    errMsg,
+		PageKind: stringField(meta, "page_kind"),
+	}
+	if status != "completed" {
+		return notif
+	}
+
+	notif.ImageURL = fmt.Sprintf("/api/v1/jobs/%s/image", jobID)
+	notif.SourceHash = stringField(meta, "source_hash")
+	notif.ContentHash = stringField(meta, "content_hash")
+	notif.RenderHash = stringField(meta, "render_hash")
+	if pipeline := stringField(meta, "pipeline"); pipeline != "" && notif.SourceHash != "" {
+		notif.MetaURL = fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, notif.SourceHash)
+	}
+	return notif
+}
+
+func stringField(meta map[string]any, key string) string {
+	value, _ := meta[key].(string)
+	return value
 }
 
 func parseCachedV2JobID(jobID string) (pipeline string, sourceHash string, ok bool) {

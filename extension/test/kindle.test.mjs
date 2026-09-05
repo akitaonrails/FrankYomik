@@ -333,3 +333,75 @@ test('the server refusing a prose page switches the book back', () => {
   assert.equal(env.kindle.state().autoSubmitPaused, false,
     'switching is the fix; pausing would leave it stuck');
 });
+
+// --- the server's verdict beats our guesswork -------------------------------
+// The worker measures the page itself: prose is many columns of one width,
+// manga is not. That is a far better signal than a render that came back
+// looking wrong, which only says something went awry somewhere.
+
+function completion(pageKind) {
+  return { type: 'FRANK_JOB_COMPLETE', site: 'kindle', pageId: 'kindle-1', pageKind };
+}
+
+test('one prose verdict is not enough', () => {
+  const env = setup();
+  const sent = [];
+  env.sandbox.chrome.runtime.sendMessage = (m) => { sent.push(m); return Promise.resolve(); };
+  env.window.FrankKindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: 'manga_furigana' });
+
+  env.sendToContent(completion('prose'));
+
+  assert.equal(sent.filter((m) => m.type === 'SET_BOOK_PIPELINE').length, 0);
+});
+
+test('two prose verdicts move the book to the text-book pipeline', () => {
+  const env = setup();
+  const sent = [];
+  env.sandbox.chrome.runtime.sendMessage = (m) => { sent.push(m); return Promise.resolve(); };
+  env.window.FrankKindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: 'manga_furigana' });
+
+  env.sendToContent(completion('prose'));
+  env.sendToContent(completion('prose'));
+
+  const switches = sent.filter((m) => m.type === 'SET_BOOK_PIPELINE');
+  assert.equal(switches.length, 1);
+  assert.equal(switches[0].pipeline, 'book_furigana');
+});
+
+test('a single text page in a manga volume moves nothing', () => {
+  const env = setup();
+  const sent = [];
+  env.sandbox.chrome.runtime.sendMessage = (m) => { sent.push(m); return Promise.resolve(); };
+  env.window.FrankKindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: 'manga_furigana' });
+
+  env.sendToContent(completion('prose'));
+  env.sendToContent(completion('artwork'));   // the run is broken
+  env.sendToContent(completion('prose'));
+
+  assert.equal(sent.filter((m) => m.type === 'SET_BOOK_PIPELINE').length, 0);
+});
+
+test('a book is never switched back and forth', () => {
+  // A volume with pages of both kinds would otherwise oscillate.
+  const env = setup();
+  const sent = [];
+  env.sandbox.chrome.runtime.sendMessage = (m) => { sent.push(m); return Promise.resolve(); };
+  env.window.FrankKindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: 'manga_furigana' });
+
+  env.sendToContent(completion('prose'));
+  env.sendToContent(completion('prose'));      // switches to book_furigana
+  env.sendToContent(failure(PIPELINE_MISMATCH));   // would switch back
+  env.sendToContent(failure(PIPELINE_MISMATCH));
+
+  const switches = sent.filter((m) => m.type === 'SET_BOOK_PIPELINE');
+  assert.equal(switches.length, 1, 'one correction, then it stops');
+});
+
+test('state names the build that is running', () => {
+  // A released zip and a working copy carried the same version once, which
+  // made every other diagnostic ambiguous.
+  const { kindle, sandbox } = setup();
+  sandbox.chrome.runtime.getManifest = () => ({ version: '9.9.9' });
+
+  assert.equal(kindle.state().version, '9.9.9');
+});

@@ -204,6 +204,7 @@ export function loadContentScripts(scripts, images, options = {}) {
     chrome: {
       runtime: {
         id: options.runtimeId ?? 'frank-yomik-test',
+        getManifest: () => ({ version: options.version ?? '0.0.0-test' }),
         lastError: null,
         sendMessage: () => Promise.resolve(),
         onMessage: { addListener: (fn) => messageListeners.push(fn) },

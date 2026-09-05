@@ -4,7 +4,8 @@ The manga pipelines must be unaffected, and a page that is not prose has to be
 turned away before it reaches OCR rather than annotated as if it were.
 """
 
-import numpy as np
+from unittest.mock import patch
+
 import pytest
 from PIL import Image, ImageDraw
 
@@ -64,3 +65,51 @@ class TestRerender:
         result = process_job(job(rerender_from_metadata=True))
         assert result.status == "failed"
         assert "cannot be re-rendered" in result.error
+
+
+class TestPageKind:
+    """The manga pipelines report what kind of page they were given.
+
+    A book on the wrong pipeline is otherwise invisible until its renders come
+    back rearranged, and a client should not have to infer that.
+    """
+
+    @staticmethod
+    def _prose_page():
+        from PIL import ImageFont
+        from kindle.config import FONT_JP
+        img = Image.new("RGB", (700, 500), (0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype(FONT_JP, 26)
+        except OSError:  # pragma: no cover - depends on the host's fonts
+            pytest.skip("Japanese font unavailable")
+        text = "風が頬を撫で髪を優しく揺らしている今日は良い天気だと思った"
+        for column in range(10):
+            x = 40 + column * 60
+            for row in range(14):
+                draw.text((x, 30 + row * 30), text[(column + row) % len(text)],
+                          font=font, fill=(210, 210, 210))
+        return img
+
+    @patch("worker.job.translate")
+    @patch("worker.job.ocr_bubble")
+    @patch("worker.job.detect_page_bubbles")
+    def test_prose_page_is_reported_as_prose(self, mock_detect, mock_ocr, mock_translate):
+        result = process_job(job(pipeline="manga_translate", img=self._prose_page()))
+        assert result.status == "completed"
+        assert result.page_kind == "prose"
+
+    @patch("worker.job.translate")
+    @patch("worker.job.ocr_bubble")
+    @patch("worker.job.detect_page_bubbles")
+    def test_artwork_is_not_reported_as_prose(self, mock_detect, mock_ocr, mock_translate):
+        img = Image.new("RGB", (900, 700), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        for x, y, w, h in [(40, 40, 200, 300), (300, 80, 60, 500), (420, 200, 350, 120)]:
+            draw.rectangle([x, y, x + w, y + h], fill=(0, 0, 0))
+
+        result = process_job(job(pipeline="manga_furigana", img=img))
+
+        assert result.status == "completed"
+        assert result.page_kind == "artwork"

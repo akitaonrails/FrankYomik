@@ -232,6 +232,37 @@ The global setting is the default for volumes that have not been given one.
 Without per-volume memory, moving from a novel to a manga left the manga on the
 book pipeline, and the server refused every page of it.
 
+## Values that cross a boundary must be declared at every hop
+
+The worst bugs in this repo have all been one shape: a value that has to be
+re-declared at each hop, where *omitting* it fails silently rather than loudly.
+A missing field is `undefined`, the reading code falls back to a default, and
+everything downstream looks plausible.
+
+Three of them shipped:
+
+- `bookPipelines` was absent from the allowlist in `getSettingsForSender`, so
+  content scripts never saw per-book pipelines. The popup showed
+  `book_furigana` while the page submitted `manga_furigana`, for days.
+- `page_kind` was added to `JobStatusResponse` but not `WSNotification`.
+  Clients prefer the socket, so it arrived empty exactly where it was needed.
+- `sanitizeCapture` dropped `pageId` and `kindlePage`, so job metadata quietly
+  used a running index instead of the reader's own page label.
+
+Each is now guarded by a test that derives the requirement from the consuming
+code rather than restating it:
+
+- `extension/test/settings-exposure.test.mjs` scans the content scripts for
+  every `settings.x` and every `capture.x` they read, and fails if the
+  allowlist or the sanitiser does not carry it.
+- `server/notification_test.go` builds one worker result and asserts the poll
+  response and the socket notification carry the same facts.
+
+Both were verified by reintroducing the original bug and watching them fail.
+When adding a field that clients consume, extend these rather than trusting a
+checklist — and note that test doubles built by reading the consumer will
+happily encode the same wrong assumption as the code.
+
 ## Getting the pipeline wrong is self-correcting
 
 A book on the wrong pipeline used to be silent and confusing: the manga

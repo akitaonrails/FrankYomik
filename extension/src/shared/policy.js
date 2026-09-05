@@ -80,6 +80,11 @@ export function sanitizeCapture(capture = {}) {
     imgSrc: safeText(capture.imgSrc, 2048),
     originalSrc: safeText(capture.originalSrc, 2048),
     groupId: safeText(capture.groupId, 160),
+    // Read back by the content script when a result returns: pageId anchors a
+    // forced reprocess, and kindlePage is the reader's own page label, which
+    // is better metadata than the running index it falls back to.
+    pageId: safeText(capture.pageId, 160),
+    kindlePage: safeText(capture.kindlePage, 30),
     side: capture.side === 'left' || capture.side === 'right' ? capture.side : undefined,
     index: Number.isFinite(Number(capture.index)) ? Number(capture.index) : undefined,
     pageMode: capture.pageMode === 'spread' ? 'spread' : 'single',
