@@ -414,3 +414,52 @@ test('state reports why a hold did or did not open the lens', async () => {
   assert.equal(lens.state().awaitingTranslation, 0, 'no longer waiting once it lands');
   assert.deepEqual([...lens.state().registered], ['kindle-1']);
 });
+
+// --- the reader's own long-press must not survive the peek ------------------
+// The press is let through so taps still turn pages, which means Kindle has
+// begun selecting by the time the lens opens; releasing then pops its
+// highlight/copy/note menu over the page.
+
+test('opening the lens cancels the gesture the reader had started', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+
+  const cancels = img.dispatched.filter((e) => e.type === 'pointercancel');
+  assert.equal(cancels.length, 1);
+  assert.equal(cancels[0].bubbles, true);
+});
+
+test('a peek leaves no selection behind', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer, selection } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  assert.ok(selection.cleared >= 1, 'cleared when the lens takes over');
+
+  selection.isCollapsed = false;
+  fire('pointermove', pointer('pointermove', 220, 310));
+  assert.ok(selection.cleared >= 2, 'and again as the pointer drags');
+
+  selection.isCollapsed = false;
+  fire('pointerup', pointer('pointerup', 220, 310));
+  assert.ok(selection.cleared >= 3, 'and once more on release');
+});
+
+test('a tap that never becomes a peek is left entirely alone', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer, selection } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(60);
+  fire('pointerup', pointer('pointerup', 200, 300));
+
+  assert.equal(selection.cleared, 0, 'the reader keeps its own gestures');
+  assert.equal(img.dispatched.length, 0);
+});

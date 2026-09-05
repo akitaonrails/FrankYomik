@@ -29,6 +29,8 @@ export function makeElement(tag) {
     },
     appendChild(child) { this.children.push(child); return child; },
     addEventListener() {},
+    dispatched: [],
+    dispatchEvent(event) { this.dispatched.push(event); return true; },
     contains(other) { return other === this; },
     getBoundingClientRect() {
       const r = this._rect || { left: 0, top: 0, width: 0, height: 0 };
@@ -89,10 +91,17 @@ export function loadContentScripts(scripts, images, options = {}) {
     },
   };
 
+  const selection = {
+    isCollapsed: false,
+    cleared: 0,
+    removeAllRanges() { this.cleared += 1; this.isCollapsed = true; },
+  };
+
   const window = {
     innerWidth: VIEWPORT.width,
     innerHeight: VIEWPORT.height,
     devicePixelRatio: 1,
+    getSelection: () => selection,
     document,
     getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
     addEventListener: (type, fn) => document.addEventListener(type, fn),
@@ -114,6 +123,12 @@ export function loadContentScripts(scripts, images, options = {}) {
       revokeObjectURL: (url) => revoked.push(url),
     },
     chrome: { runtime: { sendMessage: () => {} } },
+    PointerEvent: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        Object.assign(this, init);
+      }
+    },
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
@@ -140,7 +155,7 @@ export function loadContentScripts(scripts, images, options = {}) {
     ...extra,
   });
 
-  return { sandbox, window, document, fire, pointer, revoked };
+  return { sandbox, window, document, fire, pointer, revoked, selection };
 }
 
 export const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

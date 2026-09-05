@@ -240,9 +240,40 @@
     return waiting ? { el: waiting, ready: false } : null;
   }
 
+  /// Tell the reader its gesture is void.
+  ///
+  /// The press that becomes a peek is deliberately let through, so Kindle has
+  /// already started its own long-press selection by the time the lens opens.
+  /// Swallowing the release stops our click but not its selection, which is
+  /// what pops the highlight/copy/note menu. A pointercancel is exactly the
+  /// signal for "this gesture is not happening", and the selection is dropped
+  /// alongside it for readers that track it through the DOM.
+  function abortReaderGesture(target, pointerType, x, y) {
+    clearSelection();
+    if (typeof PointerEvent !== 'function' || !target?.dispatchEvent) return;
+    try {
+      target.dispatchEvent(new PointerEvent('pointercancel', {
+        bubbles: true,
+        cancelable: false,
+        pointerId: state.pointerId ?? 1,
+        pointerType: pointerType || 'mouse',
+        clientX: x,
+        clientY: y,
+      }));
+    } catch {
+      // Synthetic pointer events are a courtesy; never break the peek over one.
+    }
+  }
+
+  function clearSelection() {
+    const selection = window.getSelection?.();
+    if (selection && !selection.isCollapsed) selection.removeAllRanges();
+  }
+
   function openLens(x, y, target, pointerType) {
     const url = target.dataset.frankLensSrc;
     if (!url) return;
+    abortReaderGesture(target, pointerType, x, y);
     const el = ensureLensEl();
     const diameter = lensDiameter();
     el.style.width = `${diameter}px`;
@@ -326,9 +357,12 @@
   }
 
   function endHold() {
+    const wasHolding = state.holding;
     state.holding = false;
     state.pendingEl = null;
     closeLens();
+    // Anything the reader selected under the lens goes with it.
+    if (wasHolding) clearSelection();
   }
 
   function onPointerDown(event) {
@@ -359,6 +393,7 @@
     }
     if (!state.holding) return;
     swallow(event);
+    clearSelection();
     state.lastX = event.clientX;
     state.lastY = event.clientY;
     if (state.open) updateLens(event.clientX, event.clientY);

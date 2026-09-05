@@ -424,9 +424,39 @@ const String _moduleScript = r'''
     return waiting ? { el: waiting, ready: false } : null;
   }
 
+  // Tell the reader its gesture is void. The press that becomes a peek is
+  // deliberately let through so taps still turn pages, which means the reader
+  // has already begun its own long-press selection by the time the lens
+  // opens; releasing then pops its highlight/copy/note menu. A pointercancel
+  // is exactly the signal for "this gesture is not happening", and the
+  // selection is dropped alongside it.
+  function abortReaderGesture(target, pointerType, x, y) {
+    clearSelection();
+    if (typeof PointerEvent !== 'function' || !target || !target.dispatchEvent) return;
+    try {
+      target.dispatchEvent(new PointerEvent('pointercancel', {
+        bubbles: true,
+        cancelable: false,
+        pointerId: state.pointerId === null ? 1 : state.pointerId,
+        pointerType: pointerType || 'mouse',
+        clientX: x,
+        clientY: y
+      }));
+    } catch (e) {
+      // Synthetic pointer events are a courtesy; never break the peek over one.
+    }
+  }
+
+  function clearSelection() {
+    if (!window.getSelection) return;
+    var selection = window.getSelection();
+    if (selection && !selection.isCollapsed) selection.removeAllRanges();
+  }
+
   function openLens(x, y, target, pointerType) {
     var src = target.dataset.frankLensSrc;
     if (!src) return;
+    abortReaderGesture(target, pointerType, x, y);
     var el = ensureLensEl();
     var d = lensDiameter();
     el.style.width = d + 'px';
@@ -511,9 +541,12 @@ const String _moduleScript = r'''
   }
 
   function endHold() {
+    var wasHolding = state.holding;
     state.holding = false;
     state.pendingEl = null;
     closeLens();
+    // Anything the reader selected under the lens goes with it.
+    if (wasHolding) clearSelection();
   }
 
   function onPointerDown(e) {
@@ -547,6 +580,7 @@ const String _moduleScript = r'''
     }
     if (!state.holding) return;
     swallow(e);
+    clearSelection();
     state.lastX = e.clientX;
     state.lastY = e.clientY;
     if (state.open) updateLens(e.clientX, e.clientY);

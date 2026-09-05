@@ -37,6 +37,8 @@ function makeElement(tag) {
     className: '',
     appendChild(child) { this.children.push(child); return child; },
     addEventListener() {},
+    dispatched: [],
+    dispatchEvent(event) { this.dispatched.push(event); return true; },
     getBoundingClientRect() {
       const r = this._rect || { left: 0, top: 0, width: 0, height: 0 };
       return { ...r, right: r.left + r.width, bottom: r.top + r.height };
@@ -84,9 +86,16 @@ function buildSandbox(images) {
     },
   };
 
+  const selection = {
+    isCollapsed: false,
+    cleared: 0,
+    removeAllRanges() { this.cleared += 1; this.isCollapsed = true; },
+  };
+
   const window = {
     innerWidth: VIEWPORT.width,
     innerHeight: VIEWPORT.height,
+    getSelection: () => selection,
     getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
     addEventListener(type, fn) { document.addEventListener(type, fn); },
     document,
@@ -102,6 +111,12 @@ function buildSandbox(images) {
     atob: (b64) => Buffer.from(b64, 'base64').toString('binary'),
     Blob: class { constructor(parts, opts) { this.parts = parts; this.type = opts?.type; } },
     Image: class { set src(v) { this._src = v; } get src() { return this._src; } },
+    PointerEvent: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        Object.assign(this, init);
+      }
+    },
     URL: {
       createObjectURL: () => `blob:lens-${++urlCounter}`,
       revokeObjectURL: (u) => revoked.push(u),
@@ -124,7 +139,7 @@ function buildSandbox(images) {
     ...extra,
   });
 
-  return { sandbox, lens: sandbox.window.__frankLens, document, fire, pointer, revoked };
+  return { sandbox, lens: sandbox.window.__frankLens, document, fire, pointer, revoked, selection };
 }
 
 const PNG_B64 = 'iVBORw0KGgo=';
@@ -458,4 +473,45 @@ test('webtoon pages awaiting a render are claimed by their original src', async 
 
   assert.equal(lens.isOpen(), false);
   assert.equal(click.defaultPrevented, true);
+});
+
+// --- the reader's own long-press must not survive the peek ------------------
+
+test('opening the lens cancels the gesture the reader had started', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+
+  const cancels = img.dispatched.filter((e) => e.type === 'pointercancel');
+  assert.equal(cancels.length, 1);
+});
+
+test('a peek leaves no selection behind', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer, selection } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  assert.ok(selection.cleared >= 1);
+
+  selection.isCollapsed = false;
+  fire('pointerup', pointer('pointerup', 200, 300));
+  assert.ok(selection.cleared >= 2, 'cleared again on release');
+});
+
+test('a tap that never becomes a peek is left entirely alone', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer, selection } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(60);
+  fire('pointerup', pointer('pointerup', 200, 300));
+
+  assert.equal(selection.cleared, 0);
+  assert.equal(img.dispatched.length, 0);
 });
