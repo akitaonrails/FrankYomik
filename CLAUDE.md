@@ -123,6 +123,15 @@ Gesture rules that keep the reader usable:
   back as a synthetic click, so pages still turn — mouse only, since a touch
   press is also how the reader scrolls and swipes, and that cannot be handed
   back. Only the Kindle strategy opts in; webtoon presses are untouched.
+- **A render is checked against the page before it is bound.** Blob URL, page
+  id and element identity have each pointed at the wrong page at some point,
+  and a real render of the wrong page reads as a translation of what is on
+  screen — the worst possible failure. A render is its page plus annotations,
+  so both are reduced to a 16x16 brightness-normalised signature and compared:
+  measured on real pages, a page against its own render differs by 0.05 and
+  against a different page by 0.90, so the threshold sits at 0.5. Unreadable
+  pixels (a tainted canvas) trust the binding rather than dropping a good
+  render.
 - Kindle reuses the same `<img>` across page turns *and across books*, so
   `setActivePage` releases the previous page's translation on every detection,
   navigation clears every registration, and a render whose page no longer has

@@ -18,6 +18,8 @@ const moduleSource = match[1];
 
 const VIEWPORT = { width: 1000, height: 800 };
 
+let canvasPixels = null;
+
 function makeElement(tag) {
   return {
     tagName: tag.toUpperCase(),
@@ -49,6 +51,26 @@ function makeElement(tag) {
       const r = this._rect || { left: 0, top: 0, width: 0, height: 0 };
       return { ...r, right: r.left + r.width, bottom: r.top + r.height };
     },
+    // Enough of a canvas for the page/render comparison; the value keyed per
+    // source is a page identity, so a page and its render look alike.
+    getContext(kind) {
+      if (kind !== '2d' || !canvasPixels) return null;
+      let drawn = null;
+      return {
+        drawImage(source) { drawn = source; },
+        getImageData(_x, _y, w, h) {
+          const key = drawn?.src ?? '';
+          const page = canvasPixels[key] ?? canvasPixels.default ?? 0;
+          const data = new Uint8ClampedArray(w * h * 4);
+          for (let i = 0; i < w * h; i++) {
+            const value = ((i * page) % 251 + (key.length % 3)) % 256;
+            data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = value;
+            data[i * 4 + 3] = 255;
+          }
+          return { data };
+        },
+      };
+    },
   };
 }
 
@@ -70,7 +92,8 @@ function matches(el, selector) {
   return false;
 }
 
-function buildSandbox(images) {
+function buildSandbox(images, options = {}) {
+  canvasPixels = options.pixels ?? null;
   const listeners = new Map();
   const revoked = [];
   let urlCounter = 0;
@@ -583,4 +606,33 @@ test('the magnifier stops at the edge of the page', async () => {
   const [bgX, bgY] = lensEl(document).style.backgroundPosition.split(' ').map(parseFloat);
   assert.equal(bgX, 0);
   assert.equal(bgY, 0);
+});
+
+// --- the render has to depict the page it is bound to -----------------------
+
+test('a render of another page is discarded, not shown', () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens } = buildSandbox([img], { pixels: { 'blob:page': 7, 'blob:lens-1': 31 } });
+
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  assert.equal(lens.has('kindle-1'), false, 'better nothing than the wrong page');
+});
+
+test('a render of this page is bound', () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens } = buildSandbox([img], { pixels: { 'blob:page': 7, 'blob:lens-1': 7 } });
+
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  assert.equal(lens.has('kindle-1'), true);
+});
+
+test('unreadable pixels leave the binding alone', () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens } = buildSandbox([img]);   // no canvas pixels available
+
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  assert.equal(lens.has('kindle-1'), true);
 });

@@ -739,3 +739,44 @@ test('an orphaned instance stops swallowing presses', async () => {
   assert.equal(down.propagationStopped, undefined,
     'a dead instance must not keep taking the reader\'s presses');
 });
+
+// --- the render has to depict the page it is bound to -----------------------
+// Every other link in the chain — blob URL, page id, element identity — has at
+// some point pointed at the wrong page, and a real render of the wrong page
+// reads as a translation of what is on screen. So compare them directly.
+
+test('a render of this page is bound', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const env = loadContentScripts(['lens.js'], [img], {
+    pixels: { 'blob:page': 7, 'blob:frank-1': 7 },   // a page and its render
+  });
+  const lens = env.window.FrankLens;
+
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  assert.equal(lens.has('kindle-1'), true);
+});
+
+test('a render of another page is discarded, not shown', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const env = loadContentScripts(['lens.js'], [img], {
+    pixels: { 'blob:page': 7, 'blob:frank-1': 31 },  // two different pages
+  });
+  const lens = env.window.FrankLens;
+
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  assert.equal(lens.has('kindle-1'), false, 'better nothing than the wrong page');
+  assert.equal(env.revoked.length, 1, 'and it is freed');
+});
+
+test('unreadable pixels leave the binding alone', async () => {
+  // A tainted canvas must not cost a good render.
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const env = loadContentScripts(['lens.js'], [img], {});   // no canvas pixels
+  const lens = env.window.FrankLens;
+
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  assert.equal(lens.has('kindle-1'), true);
+});

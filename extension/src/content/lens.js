@@ -35,6 +35,12 @@
   // A render and the page it belongs to have the same shape. Beyond this the
   // registration belongs to something else the reader has since replaced.
   const ASPECT_TOLERANCE = 0.08;
+  // A render is its page plus annotations, so the two look alike at a glance.
+  // Measured on real pages: a page against its own render differs by 0.05, and
+  // against a different page by 0.90. Half way between leaves room for a
+  // re-captured page (0.33) without admitting another one.
+  const SIGNATURE_SIZE = 16;
+  const SIGNATURE_TOLERANCE = 0.5;
 
   // pageId -> { el, url }. Registrations own their object URL and revoke it,
   // so a long reading session cannot accumulate translated pages.
@@ -153,6 +159,11 @@
     const warm = new Image();
     warm.addEventListener('load', () => {
       if (warm.naturalHeight > 0) entry.aspect = warm.naturalWidth / warm.naturalHeight;
+      if (depicts(warm, target)) return;
+      // The render is of some other page. Showing it would be worse than
+      // showing nothing: it reads as a translation of what is on screen.
+      release(pageId);
+      report(`Discarded a render that does not match the page it was bound to (${pageId})`);
     });
     warm.src = url;
 
@@ -161,6 +172,46 @@
       openLens(state.lastX, state.lastY, target, state.pointerType);
     }
     return true;
+  }
+
+  /// A coarse, brightness-independent fingerprint of what something looks like.
+  ///
+  /// Returns null when the pixels cannot be read — a tainted canvas, an image
+  /// that has not decoded — in which case the caller trusts the binding rather
+  /// than dropping a good render.
+  function signature(source) {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = SIGNATURE_SIZE;
+      canvas.height = SIGNATURE_SIZE;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) return null;
+      context.drawImage(source, 0, 0, SIGNATURE_SIZE, SIGNATURE_SIZE);
+      const { data } = context.getImageData(0, 0, SIGNATURE_SIZE, SIGNATURE_SIZE);
+      const luma = [];
+      for (let i = 0; i < data.length; i += 4) {
+        luma.push((0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255);
+      }
+      const mean = luma.reduce((a, b) => a + b, 0) / luma.length;
+      const variance = luma.reduce((a, b) => a + (b - mean) ** 2, 0) / luma.length;
+      const deviation = Math.sqrt(variance) || 1e-6;
+      return luma.map((value) => (value - mean) / deviation);
+    } catch {
+      return null;   // reading the pixels is a courtesy, not a requirement
+    }
+  }
+
+  /// Whether a render depicts the page it is about to be bound to.
+  ///
+  /// Every other link in the chain — blob URL, page id, element identity — has
+  /// at some point pointed at the wrong page. This compares the two directly.
+  function depicts(render, target) {
+    const a = signature(render);
+    const b = signature(target);
+    if (!a || !b) return true;
+    let total = 0;
+    for (let i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i]);
+    return (total / a.length) <= SIGNATURE_TOLERANCE;
   }
 
   /// Note an element as a page whose translation has not arrived yet.
@@ -378,6 +429,17 @@
   /// Our own cancel, coming back to us through the capture phase.
   function isOurs(event) {
     return state.cancelling || event?.frankSynthetic === true;
+  }
+
+  function report(message) {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'REPORT_EVENT', site: 'kindle', level: 'error', message,
+      })?.catch?.(() => {});
+    } catch {
+      // The extension may have been reloaded; the console still has it.
+    }
+    console.warn(`[Frank] ${message}`);
   }
 
   function clearSelection() {

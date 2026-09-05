@@ -11,6 +11,10 @@ const contentDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../.
 
 export const VIEWPORT = Object.freeze({ width: 1000, height: 800 });
 
+// What each source "looks like" to a canvas, keyed by src. makeElement is
+// module scope, so the harness publishes it here rather than through options.
+let canvasPixels = null;
+
 export function makeElement(tag) {
   const classSet = new Set();
   return {
@@ -38,8 +42,29 @@ export function makeElement(tag) {
       return true;
     },
     contains(other) { return other === this; },
-    // Enough of a canvas for capture paths to bail out cleanly.
-    getContext: () => null,
+    // Enough of a canvas for the capture paths and the page/render comparison.
+    getContext(kind) {
+      if (kind !== '2d' || !canvasPixels) return null;
+      let drawn = null;
+      return {
+        drawImage(source) { drawn = source; },
+        getImageData(_x, _y, w, h) {
+          const key = drawn?.src ?? '';
+          // The value is a page identity: two sources sharing one look alike,
+          // as a page and its render do, and different ones do not. Brightness
+          // alone would not work — the signature normalises that away on
+          // purpose, so a dark and a light copy of one page still match.
+          const page = canvasPixels[key] ?? canvasPixels.default ?? 0;
+          const data = new Uint8ClampedArray(w * h * 4);
+          for (let i = 0; i < w * h; i++) {
+            const value = ((i * page) % 251 + (key.length % 3)) % 256;
+            data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = value;
+            data[i * 4 + 3] = 255;
+          }
+          return { data };
+        },
+      };
+    },
     getBoundingClientRect() {
       const r = this._rect || { left: 0, top: 0, width: 0, height: 0 };
       return { ...r, x: r.left, y: r.top, right: r.left + r.width, bottom: r.top + r.height };
@@ -77,6 +102,7 @@ function matchesSelector(el, selector) {
 
 /// Loads content-script modules into one sandboxed window, in manifest order.
 export function loadContentScripts(scripts, images, options = {}) {
+  canvasPixels = options.pixels ?? null;
   if (options.sandbox) {
     for (const script of scripts) {
       vm.runInContext(fs.readFileSync(path.join(contentDir, script), 'utf8'), options.sandbox);

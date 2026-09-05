@@ -153,6 +153,11 @@ const String _moduleScript = r'''
   // A render and the page it belongs to have the same shape. Beyond this the
   // registration belongs to something the reader has since replaced.
   var ASPECT_TOLERANCE = 0.08;
+  // A render is its page plus annotations, so the two look alike at a glance.
+  // Measured on real pages: a page against its own render differs by 0.05, and
+  // against a different page by 0.90.
+  var SIGNATURE_SIZE = 16;
+  var SIGNATURE_TOLERANCE = 0.5;
 
   var state = {
     enabled: true,
@@ -322,6 +327,11 @@ const String _moduleScript = r'''
       if (warm.naturalHeight > 0) {
         state.aspects[pageId] = warm.naturalWidth / warm.naturalHeight;
       }
+      if (depicts(warm, target)) return;
+      // The render is of some other page. Showing it would be worse than
+      // showing nothing: it reads as a translation of what is on screen.
+      releaseSource(pageId);
+      console.warn('[Frank] discarded a render that does not match its page: ' + pageId);
     });
     warm.src = blobUrl;
 
@@ -339,6 +349,48 @@ const String _moduleScript = r'''
         w: Math.round(rect.width), h: Math.round(rect.height)
       }
     });
+  }
+
+  // A coarse, brightness-independent fingerprint of what something looks like.
+  // Returns null when the pixels cannot be read, in which case the caller
+  // trusts the binding rather than dropping a good render.
+  function signature(source) {
+    try {
+      var canvas = document.createElement('canvas');
+      canvas.width = SIGNATURE_SIZE;
+      canvas.height = SIGNATURE_SIZE;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(source, 0, 0, SIGNATURE_SIZE, SIGNATURE_SIZE);
+      var data = ctx.getImageData(0, 0, SIGNATURE_SIZE, SIGNATURE_SIZE).data;
+      var luma = [];
+      for (var i = 0; i < data.length; i += 4) {
+        luma.push((0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255);
+      }
+      var sum = 0;
+      for (var j = 0; j < luma.length; j++) sum += luma[j];
+      var mean = sum / luma.length;
+      var varSum = 0;
+      for (var k = 0; k < luma.length; k++) varSum += (luma[k] - mean) * (luma[k] - mean);
+      var dev = Math.sqrt(varSum / luma.length) || 1e-6;
+      var out = [];
+      for (var n = 0; n < luma.length; n++) out.push((luma[n] - mean) / dev);
+      return out;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Whether a render depicts the page it is about to be bound to. Every other
+  // link in the chain — blob URL, page id, element identity — can point at the
+  // wrong page; this compares the two directly.
+  function depicts(render, target) {
+    var a = signature(render);
+    var b = signature(target);
+    if (!a || !b) return true;
+    var total = 0;
+    for (var i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i]);
+    return (total / a.length) <= SIGNATURE_TOLERANCE;
   }
 
   function markPending(el) {
