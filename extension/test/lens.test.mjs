@@ -463,3 +463,26 @@ test('a tap that never becomes a peek is left entirely alone', async () => {
   assert.equal(selection.cleared, 0, 'the reader keeps its own gestures');
   assert.equal(img.dispatched.length, 0);
 });
+
+test('the cancel dispatched at the reader does not end our own peek', async () => {
+  // The pointercancel that aborts Kindle's selection is dispatched at the page
+  // element, and capture phase starts at the window — so without a guard our
+  // own handler treats it as a release, leaving the lens on screen but frozen
+  // and no longer swallowing moves.
+  const img = makeImage({ left: 100, top: 50, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = setup([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 300, 350));
+  await wait(260);
+  assert.equal(lens.isOpen(), true);
+
+  const move = pointer('pointermove', 320, 360);
+  fire('pointermove', move);
+
+  const el = lensElement(document);
+  const radius = Number.parseFloat(el.style.width) / 2;
+  const [bgX] = el.style.backgroundPosition.split(' ').map(Number.parseFloat);
+  assert.equal(bgX, radius - (320 - 100) * 2, 'the lens must still track the pointer');
+  assert.equal(move.propagationStopped, true, 'and still take moves from the page');
+});

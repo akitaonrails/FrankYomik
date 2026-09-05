@@ -30,7 +30,13 @@ export function makeElement(tag) {
     appendChild(child) { this.children.push(child); return child; },
     addEventListener() {},
     dispatched: [],
-    dispatchEvent(event) { this.dispatched.push(event); return true; },
+    dispatchEvent(event) {
+      this.dispatched.push(event);
+      // Capture phase starts at the window, so document-level listeners see
+      // a dispatched event exactly as they see a real one.
+      this._deliver?.(event.type, event);
+      return true;
+    },
     contains(other) { return other === this; },
     // Enough of a canvas for capture paths to bail out cleanly.
     getContext: () => null,
@@ -154,6 +160,7 @@ export function loadContentScripts(scripts, images, options = {}) {
   const fire = (type, event) => {
     for (const fn of listeners.get(type) || []) fn(event);
   };
+  for (const el of [...images, body, document.documentElement]) el._deliver = fire;
   const pointer = (type, x, y, extra = {}) => ({
     type,
     clientX: x,

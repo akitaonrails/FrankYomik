@@ -44,6 +44,9 @@
     target: null,
     suppressClick: false,
     suppressTimer: null,
+    // Set while we dispatch the cancel below. Capture phase starts at the
+    // window, so our own listeners see that event before the reader does.
+    cancelling: false,
   };
 
   window.FrankLens = {
@@ -251,18 +254,28 @@
   function abortReaderGesture(target, pointerType, x, y) {
     clearSelection();
     if (typeof PointerEvent !== 'function' || !target?.dispatchEvent) return;
+    const cancel = new PointerEvent('pointercancel', {
+      bubbles: true,
+      cancelable: false,
+      pointerId: state.pointerId ?? 1,
+      pointerType: pointerType || 'mouse',
+      clientX: x,
+      clientY: y,
+    });
+    cancel.frankSynthetic = true;
+    state.cancelling = true;
     try {
-      target.dispatchEvent(new PointerEvent('pointercancel', {
-        bubbles: true,
-        cancelable: false,
-        pointerId: state.pointerId ?? 1,
-        pointerType: pointerType || 'mouse',
-        clientX: x,
-        clientY: y,
-      }));
+      target.dispatchEvent(cancel);
     } catch {
       // Synthetic pointer events are a courtesy; never break the peek over one.
+    } finally {
+      state.cancelling = false;
     }
+  }
+
+  /// Our own cancel, coming back to us through the capture phase.
+  function isOurs(event) {
+    return state.cancelling || event?.frankSynthetic === true;
   }
 
   function clearSelection() {
@@ -386,6 +399,7 @@
   }
 
   function onPointerMove(event) {
+    if (isOurs(event)) return;
     if (state.pointerId !== null && event.pointerId !== state.pointerId) return;
     if (state.holdTimer) {
       if (Math.hypot(event.clientX - state.startX, event.clientY - state.startY) > MOVE_CANCEL_PX) cancelHold();
@@ -400,6 +414,8 @@
   }
 
   function onPointerUp(event) {
+    // A peek must survive the cancel it sends to the reader.
+    if (isOurs(event)) return;
     if (state.pointerId !== null && event.pointerId !== state.pointerId) return;
     state.pointerId = null;
     const wasHolding = state.holding;
@@ -418,6 +434,7 @@
   // Touch also generates compatibility mouse events after pointerup, and Kindle
   // turns pages on those as readily as on click.
   function onSyntheticMouse(event) {
+    if (isOurs(event)) return;
     if (state.holding) {
       swallow(event);
       return;

@@ -38,7 +38,13 @@ function makeElement(tag) {
     appendChild(child) { this.children.push(child); return child; },
     addEventListener() {},
     dispatched: [],
-    dispatchEvent(event) { this.dispatched.push(event); return true; },
+    dispatchEvent(event) {
+      this.dispatched.push(event);
+      // Capture phase starts at the window, so a dispatched event reaches
+      // document-level listeners exactly as a real one does.
+      this._deliver?.(event.type, event);
+      return true;
+    },
     getBoundingClientRect() {
       const r = this._rect || { left: 0, top: 0, width: 0, height: 0 };
       return { ...r, right: r.left + r.width, bottom: r.top + r.height };
@@ -130,6 +136,7 @@ function buildSandbox(images) {
   const fire = (type, event) => {
     for (const fn of listeners.get(type) || []) fn(event);
   };
+  for (const el of images) el._deliver = fire;
   const pointer = (type, x, y, extra = {}) => ({
     type, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', button: 0,
     cancelable: true, defaultPrevented: false,
@@ -514,4 +521,23 @@ test('a tap that never becomes a peek is left entirely alone', async () => {
 
   assert.equal(selection.cleared, 0);
   assert.equal(img.dispatched.length, 0);
+});
+
+test('the cancel dispatched at the reader does not end our own peek', async () => {
+  const img = makeImage({ left: 100, top: 50, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  fire('pointerdown', pointer('pointerdown', 300, 350));
+  await wait(260);
+  assert.equal(lens.isOpen(), true);
+
+  const move = pointer('pointermove', 320, 360);
+  fire('pointermove', move);
+
+  const el = lensEl(document);
+  const r = parseFloat(el.style.width) / 2;
+  const [bgX] = el.style.backgroundPosition.split(' ').map(parseFloat);
+  assert.equal(bgX, r - (320 - 100) * 2, 'the lens must still track the pointer');
+  assert.equal(move.propagationStopped, true, 'and still take moves from the page');
 });

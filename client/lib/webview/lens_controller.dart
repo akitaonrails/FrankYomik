@@ -172,6 +172,9 @@ const String _moduleScript = r'''
     lastX: 0,
     lastY: 0,
     target: null,
+    // Set while we dispatch the cancel below. Capture phase starts at the
+    // window, so our own listeners see that event before the reader does.
+    cancelling: false,
     suppressClick: false
   };
 
@@ -433,18 +436,28 @@ const String _moduleScript = r'''
   function abortReaderGesture(target, pointerType, x, y) {
     clearSelection();
     if (typeof PointerEvent !== 'function' || !target || !target.dispatchEvent) return;
+    var cancel = new PointerEvent('pointercancel', {
+      bubbles: true,
+      cancelable: false,
+      pointerId: state.pointerId === null ? 1 : state.pointerId,
+      pointerType: pointerType || 'mouse',
+      clientX: x,
+      clientY: y
+    });
+    cancel.frankSynthetic = true;
+    state.cancelling = true;
     try {
-      target.dispatchEvent(new PointerEvent('pointercancel', {
-        bubbles: true,
-        cancelable: false,
-        pointerId: state.pointerId === null ? 1 : state.pointerId,
-        pointerType: pointerType || 'mouse',
-        clientX: x,
-        clientY: y
-      }));
+      target.dispatchEvent(cancel);
     } catch (e) {
       // Synthetic pointer events are a courtesy; never break the peek over one.
+    } finally {
+      state.cancelling = false;
     }
+  }
+
+  // Our own cancel, coming back to us through the capture phase.
+  function isOurs(e) {
+    return state.cancelling || (e && e.frankSynthetic === true);
   }
 
   function clearSelection() {
@@ -571,6 +584,7 @@ const String _moduleScript = r'''
   }
 
   function onPointerMove(e) {
+    if (isOurs(e)) return;
     if (state.pointerId !== null && e.pointerId !== state.pointerId) return;
     if (state.holdTimer) {
       var dx = e.clientX - state.startX;
@@ -587,6 +601,8 @@ const String _moduleScript = r'''
   }
 
   function onPointerUp(e) {
+    // A peek must survive the cancel it sends to the reader.
+    if (isOurs(e)) return;
     if (state.pointerId !== null && e.pointerId !== state.pointerId) return;
     state.pointerId = null;
     var wasHolding = state.holding;
@@ -601,6 +617,7 @@ const String _moduleScript = r'''
   // Touch also generates compatibility mouse events after pointerup, and the
   // reader turns pages on those as readily as on click.
   function onSyntheticMouseCapture(e) {
+    if (isOurs(e)) return;
     if (state.holding) { swallow(e); return; }
     if (!state.suppressClick) return;
     if (e.type === 'click') state.suppressClick = false;
