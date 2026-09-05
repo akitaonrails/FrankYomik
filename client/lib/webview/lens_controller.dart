@@ -129,6 +129,9 @@ const String _moduleScript = r'''
   var LENS_MIN_D = 180;
   var LENS_MAX_D = 360;
   var TOUCH_LIFT_PX = 28;       // keep the lens clear of the fingertip
+  // Webtoon keeps many pages on screen, so nothing calls setActivePage there;
+  // retention is bounded by count instead.
+  var MAX_REGISTRATIONS = 8;
 
   var state = {
     enabled: true,
@@ -269,6 +272,10 @@ const String _moduleScript = r'''
 
     releaseSource(pageId);
     state.sources[pageId] = blobUrl;
+    var registered = Object.keys(state.sources);
+    while (registered.length > MAX_REGISTRATIONS) {
+      releaseSource(registered.shift());
+    }
     target.dataset.frankLensSrc = blobUrl;
     target.dataset.frankLensPageId = pageId;
     if (!target.dataset.frankOriginalSrc && target.src) {
@@ -522,6 +529,7 @@ const String _moduleScript = r'''
       }
     },
     has: function(pageId) { return !!state.sources[String(pageId)]; },
+    registeredPages: function() { return Object.keys(state.sources); },
     setZoom: function(z) {
       var n = Number(z);
       if (isFinite(n) && n > 0) state.zoom = n;

@@ -66,20 +66,27 @@ There are three pipelines:
 3. The client captures each image through JS `fetch()` first, then falls back to an app-side HTTP fetch if needed.
 4. The worker runs the webtoon pipeline and returns the translated image.
 
-## Reading modes (Flutter client)
+## Reading modes
 
-The client shows the **original** page by default and reveals the translation
+Both clients show the **original** page by default and reveal the translation
 through a magnifier lens. Full-page replacement is still there as a mode.
 
 - **Lens (default)**: the reader's own image is never touched. A finished
-  translation is registered against the page element in `lens_controller.dart`
-  and revealed only under a circular magnifier. Press and hold for 200ms to
-  open it; it tracks the pointer and closes on release. Magnification cycles
-  through 1.5x / 2x / 3x from the in-page toolbar and persists in
-  `SharedPreferences` (`reader_lens_mode`, `reader_lens_zoom`).
-- **Full page**: the older behavior — `overlay_controller.dart` swaps
-  `img.src` for the translated render, with the reapply/recovery timers that
-  keep it stuck against Kindle repaints.
+  translation is registered against the page element and revealed only under a
+  circular magnifier. Press and hold for 200ms to open it; it tracks the
+  pointer and closes on release. Magnification is 1.5x / 2x / 3x.
+- **Full page**: the older behavior — the translated render replaces
+  `img.src`, with the reapply/recovery timers that keep it stuck against
+  Kindle repaints.
+
+Where the pieces live:
+
+| | Flutter client | Chromium extension |
+|---|---|---|
+| lens module | `client/lib/webview/lens_controller.dart` (injected JS) | `extension/src/content/lens.js` |
+| mode routing | `reader_screen.dart` -> `_registerLens` | `extension/src/content/overlay.js` |
+| controls | in-page toolbar (mode + zoom buttons) | options page (`readerMode`, `lensZoom`) |
+| persistence | `SharedPreferences` (`reader_lens_mode`, `reader_lens_zoom`) | extension storage, live via `chrome.storage.onChanged` |
 
 Gesture rules that keep the reader usable:
 
@@ -95,14 +102,49 @@ Gesture rules that keep the reader usable:
 The pipeline is unchanged: pages are still captured, queued and rendered the
 same way. Only the presentation differs.
 
-Behavior lives in the injected JS module inside `lens_controller.dart`, tested
-against a DOM stub in `client/test/js/lens_module.test.mjs` (run by
-`flutter test` through `client/test/lens_test.dart` when node is installed).
+Both lens modules are tested against a DOM stub rather than a live reader:
 
-**The Chromium extension does not have the lens yet** — it still swaps the full
-page. This is a deliberate, user-approved divergence from the sync rule below;
-port `lens_controller.dart` into `extension/src/content/` when the extension
-needs to match.
+- `client/test/js/lens_module.test.mjs`, run by `flutter test` through
+  `client/test/lens_test.dart` when node is installed
+- `extension/test/lens.test.mjs` and `extension/test/overlay.test.mjs`, sharing
+  `extension/test/helpers/dom-stub.mjs`
+
+The two implementations are separate files and must be kept in step: the
+gesture thresholds, the magnifier math and the retention rules are the same
+contract on both sides.
+
+## Memory retention
+
+Translated pages are whole PNGs, so nothing may hold them for the life of a
+session:
+
+- **Flutter jobs** (`jobs_provider.dart`): `pruneJobs` keeps bytes for the 20
+  most recent renders and records for 200 pages; the captured source is
+  released as soon as its render reaches the local cache. Jobs in flight are
+  never evicted.
+- **Lens registrations**: capped at 8 pages in both clients. Kindle also
+  releases every non-active page on each page turn (`setActivePage`), which is
+  what stops a reused `<img>` from peeking the page just left.
+- **Extension full-page renders** (`overlay.js`): object URLs are tracked per
+  page, capped at 8, revoked on page turn and on mode switch — not held until
+  the tab closes.
+- **Extension debug entries**: metadata for 40 pages, but whole-page data URLs
+  only for the 3 most recent (the debug export only ever acts on the current
+  page).
+
+## Prefetch depth
+
+A page takes tens of seconds to translate, so the submitted frontier has to run
+ahead of the reader:
+
+- **Webtoon (Flutter)**: batches of 8, refilled when the reader comes within 4
+  pages of the frontier.
+- **Webtoon (extension)**: images within 2400px of the viewport are queued,
+  3 at a time; the options page offers whole-episode prefetch instead.
+- **Kindle**: nothing can be prefetched — only the page the reader has open is
+  rendered in the DOM, so there is nothing to capture ahead. Lens mode softens
+  this: the original page is always readable while its translation is still in
+  the queue.
 
 ## Cache model
 

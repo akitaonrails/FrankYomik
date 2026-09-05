@@ -26,6 +26,18 @@ final jobsProvider = StateNotifierProvider<JobsNotifier, Map<String, PageJob>>((
 });
 
 class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
+  /// Translated pages are full PNGs — a few MB each. A long Kindle session
+  /// would otherwise hold every page it ever rendered, so only the most recent
+  /// ones keep their bytes; the job records themselves stay (they are tiny and
+  /// carry the status the UI reports).
+  static const _maxRetainedImages = 20;
+
+  /// Records for pages the reader left long ago are dropped outright. Kindle
+  /// pageIds carry a per-session counter, so an evicted page never comes back
+  /// under the same id; a webtoon page that scrolls back into view is
+  /// re-submitted and served from the server cache.
+  static const _maxRetainedJobs = 200;
+
   final Ref _ref;
   Timer? _pollTimer;
   final Set<String> _downloadingJobIds = {};
@@ -197,6 +209,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
             job.cached = true;
             job.imageUrl = imageUrl;
             state = {...state};
+            _evictStaleJobs();
             cacheDownloaded = true;
 
             // Save to local cache
@@ -208,6 +221,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
               chapter: chapter,
               pageNumber: pageNumber,
             );
+            _releaseSourceImage(job);
           } catch (e) {
             debugPrint(
               '[Jobs] Cache download failed for $pageId, resubmitting: $e',
@@ -313,6 +327,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       job.translatedImage = img;
       job.status = PageJobStatus.completed;
       state = {...state};
+      _evictStaleJobs();
 
       // Save to local cache
       if (job.originalImage != null) {
@@ -330,6 +345,7 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           chapter: job.chapter,
           pageNumber: job.pageNumber,
         );
+        _releaseSourceImage(job);
       }
     } catch (e) {
       job.status = PageJobStatus.failed;
@@ -399,6 +415,64 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         }
       }
     });
+  }
+
+  /// The captured source is only needed until its render reaches the cache.
+  void _releaseSourceImage(PageJob job) {
+    job.originalImage = null;
+  }
+
+  /// Release the memory held by pages the reader has moved well past.
+  void _evictStaleJobs() {
+    state = pruneJobs(
+      state,
+      onDropped: (job) {
+        if (job.jobId != null) _ws.unsubscribeFromJobs([job.jobId!]);
+      },
+    );
+  }
+
+  /// Drop page bytes the reader is unlikely to need again.
+  ///
+  /// Insertion order is reading order, so the tail of the map is what is worth
+  /// keeping: the newest [maxImages] renders keep their bytes, older completed
+  /// pages keep only their record, and the oldest records beyond [maxJobs] are
+  /// dropped entirely. Jobs still in flight are never touched.
+  @visibleForTesting
+  static Map<String, PageJob> pruneJobs(
+    Map<String, PageJob> jobs, {
+    int maxImages = _maxRetainedImages,
+    int maxJobs = _maxRetainedJobs,
+    void Function(PageJob job)? onDropped,
+  }) {
+    final entries = jobs.entries.toList();
+    var withImages = 0;
+    for (final entry in entries) {
+      if (entry.value.translatedImage != null) withImages++;
+    }
+    final dropBytesBefore = withImages - maxImages;
+    final dropRecordsBefore = entries.length - maxJobs;
+    if (dropBytesBefore <= 0 && dropRecordsBefore <= 0) return jobs;
+
+    final next = <String, PageJob>{};
+    var seenWithImages = 0;
+    for (var i = 0; i < entries.length; i++) {
+      final job = entries[i].value;
+      final settled = job.isComplete || job.isFailed;
+      if (settled && i < dropRecordsBefore) {
+        onDropped?.call(job);
+        continue;
+      }
+      if (job.translatedImage != null) {
+        seenWithImages++;
+        if (seenWithImages <= dropBytesBefore) {
+          job.translatedImage = null;
+          job.originalImage = null;
+        }
+      }
+      next[entries[i].key] = job;
+    }
+    return next;
   }
 
   /// Clear all tracked jobs (used when wiping the local cache).

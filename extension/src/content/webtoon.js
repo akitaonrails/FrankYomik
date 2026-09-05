@@ -11,8 +11,12 @@
     'swebtoon-phinf.pstatic.net',
   ]);
   const MAX_CONCURRENT = 3;
+  // A webtoon page takes tens of seconds to translate, so the queue has to run
+  // further ahead of the scroll than "just off screen" to stay useful.
+  const NEARBY_PREFETCH_PX = 2400;
   const RESCAN_MS = 2000;
   const MAX_DEBUG_ENTRIES = 20;
+  const MAX_DEBUG_PAYLOADS = 3;
 
   let started = false;
   let settings = {};
@@ -109,7 +113,7 @@
 
       if (settings.webtoonPrefetch === 'episode') {
         queueImage(img, index, 'episode');
-      } else if (settings.webtoonPrefetch !== 'off' && isNearViewport(img, 1600)) {
+      } else if (settings.webtoonPrefetch !== 'off' && isNearViewport(img, NEARBY_PREFETCH_PX)) {
         queueImage(img, index, 'nearby');
       } else if (isInViewport(img)) {
         queueImage(img, index, 'visible');
@@ -119,7 +123,7 @@
         img.dataset.frankLoadListener = 'true';
         img.addEventListener('load', () => {
           const currentIndex = findPageImages().indexOf(img);
-          if (currentIndex >= 0 && (isNearViewport(img, 1600) || settings.webtoonPrefetch === 'episode')) {
+          if (currentIndex >= 0 && (isNearViewport(img, NEARBY_PREFETCH_PX) || settings.webtoonPrefetch === 'episode')) {
             queueImage(img, currentIndex, 'loaded');
             pumpQueue();
           }
@@ -350,7 +354,27 @@
       const oldestKey = debugEntries.keys().next().value;
       debugEntries.delete(oldestKey);
     }
+    trimDebugPayloads();
   }
+
+  // Debug payloads are whole-page data URLs — megabytes each. Only the pages
+  // the debug export can still act on need them; the rest keep their metadata.
+  function trimDebugPayloads() {
+    const unique = [];
+    const seen = new Set();
+    for (const entry of debugEntries.values()) {
+      if (seen.has(entry)) continue;
+      seen.add(entry);
+      unique.push(entry);
+    }
+    unique.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    for (const entry of unique.slice(MAX_DEBUG_PAYLOADS)) {
+      delete entry.originalDataUrl;
+      delete entry.translatedDataUrl;
+      delete entry.originalSides;
+    }
+  }
+
 
   function debugEntryForImage(img) {
     const pageId = img.dataset.frankPageId || (img.dataset.frankIndex ? `wt-${img.dataset.frankIndex}` : '');
@@ -371,7 +395,7 @@
   function rootMarginForPrefetch() {
     if (settings.webtoonPrefetch === 'off') return '0px';
     if (settings.webtoonPrefetch === 'episode') return '4000px 0px';
-    return '1600px 0px';
+    return `${NEARBY_PREFETCH_PX}px 0px`;
   }
 
   function blobToDataUrl(blob) {

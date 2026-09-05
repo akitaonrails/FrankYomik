@@ -104,8 +104,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   String? _currentAsin;
 
   // --- Webtoon batching state ---
-  static const _batchSize = 5;
-  static const _prefetchThreshold = 2;
+  // Webtoon pages take tens of seconds each, so the submitted frontier has to
+  // stay well ahead of the scroll or the reader catches up with the queue.
+  static const _batchSize = 8;
+  static const _prefetchThreshold = 4;
 
   /// All detected webtoon page infos, keyed by index.
   final Map<int, Map<String, dynamic>> _detectedWebtoonPages = {};
@@ -1208,6 +1210,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     });
 
     if (ok) {
+      _cancelLensRetriesFor(pageId);
       _setLensReady(true);
       _updateInPageStatus(
         'Lens ready — hold to peek',

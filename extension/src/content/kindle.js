@@ -17,6 +17,7 @@
   const LOADER_VISIBLE_OVERLAP_PX2 = 1600;
   const NO_TARGET_REPORT_INTERVAL_MS = 15000;
   const MAX_DEBUG_ENTRIES = 20;
+  const MAX_DEBUG_PAYLOADS = 3;
 
   let started = false;
   let settings = {};
@@ -32,6 +33,7 @@
   let submitDebounceTimer = null;
   let lastNoTargetReportAt = 0;
   const processedBlobs = new Set();
+  const MAX_PROCESSED_BLOBS = 200;
   const spreadGroups = new Map();
   const debugEntries = new Map();
 
@@ -146,6 +148,10 @@
       kindlePage: findKindlePage(),
     };
     report('info', `Detected Kindle ${pageMode} page ${pageCounter}`);
+    // Kindle reuses the same <img> across turns: retarget before the new
+    // page's translation lands, so a peek cannot magnify the page just left,
+    // and the previous render is released instead of accumulating.
+    window.FrankOverlay?.releasePagesExcept(pageId);
     scheduleSubmit(detection);
   }
 
@@ -185,6 +191,9 @@
     const target = findImageBySrc(detection.imgSrc) || findVisibleBlob();
     if (!target) return;
     processedBlobs.add(detection.imgSrc);
+    while (processedBlobs.size > MAX_PROCESSED_BLOBS) {
+      processedBlobs.delete(processedBlobs.values().next().value);
+    }
 
     try {
       if (detection.pageMode === 'spread') {
@@ -308,8 +317,12 @@
     if (ok) {
       rememberDebug(message.pageId, { pageId: message.pageId, site: 'kindle', translatedDataUrl: message.imageDataUrl, capture: message.capture });
       report('info', `Kindle translated image applied: ${message.pageId || 'unknown page'}`);
-      for (const delay of REAPPLY_DELAYS_MS) {
-        window.setTimeout(() => window.FrankOverlay?.applyKindleResult(message), delay);
+      // Nothing is swapped into the DOM in lens mode, so a Kindle repaint has
+      // nothing to clobber and there is nothing to re-apply.
+      if (!window.FrankOverlay?.isLensMode()) {
+        for (const delay of REAPPLY_DELAYS_MS) {
+          window.setTimeout(() => window.FrankOverlay?.applyKindleResult(message), delay);
+        }
       }
     }
     if (!ok) report('error', `Kindle translated image was ready but could not be applied: ${message.pageId || 'unknown page'}`);
@@ -505,7 +518,27 @@
       const oldestKey = debugEntries.keys().next().value;
       debugEntries.delete(oldestKey);
     }
+    trimDebugPayloads();
   }
+
+  // Debug payloads are whole-page data URLs — megabytes each. Only the pages
+  // the debug export can still act on need them; the rest keep their metadata.
+  function trimDebugPayloads() {
+    const unique = [];
+    const seen = new Set();
+    for (const entry of debugEntries.values()) {
+      if (seen.has(entry)) continue;
+      seen.add(entry);
+      unique.push(entry);
+    }
+    unique.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    for (const entry of unique.slice(MAX_DEBUG_PAYLOADS)) {
+      delete entry.originalDataUrl;
+      delete entry.translatedDataUrl;
+      delete entry.originalSides;
+    }
+  }
+
 
   function debugEntryForImage(img) {
     return debugEntries.get(img.dataset.frankPageId)

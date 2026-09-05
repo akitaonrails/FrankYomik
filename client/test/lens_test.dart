@@ -1,6 +1,9 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:frank_client/models/page_job.dart';
+import 'package:frank_client/providers/jobs_provider.dart';
 
 /// The lens has two halves: Dart plumbing and an injected JS module. The JS
 /// half is covered by test/js/lens_module.test.mjs against a DOM stub; this
@@ -70,6 +73,79 @@ void main() {
 
     test('page turns retarget the lens before the next translation lands', () {
       expect(reader, contains('_lens.setActivePage(controller, pageId)'));
+    });
+  });
+
+  group('job retention', () {
+    PageJob completed(String pageId, {bool withImage = true}) => PageJob(
+      pageId: pageId,
+      status: PageJobStatus.completed,
+      translatedImage: withImage ? Uint8List(1024) : null,
+      originalImage: withImage ? Uint8List(1024) : null,
+    );
+
+    Map<String, PageJob> mapOf(Iterable<PageJob> jobs) => {
+      for (final job in jobs) job.pageId: job,
+    };
+
+    test('keeps everything while under the retention limit', () {
+      final jobs = mapOf([for (var i = 0; i < 5; i++) completed('kindle-$i')]);
+      final pruned = JobsNotifier.pruneJobs(jobs);
+      expect(pruned, same(jobs));
+      expect(pruned.values.every((j) => j.translatedImage != null), isTrue);
+    });
+
+    test('drops the bytes of pages the reader has moved past', () {
+      final jobs = mapOf([for (var i = 0; i < 6; i++) completed('kindle-$i')]);
+
+      final pruned = JobsNotifier.pruneJobs(jobs, maxImages: 2, maxJobs: 100);
+
+      expect(pruned.length, 6, reason: 'records are cheap; keep them');
+      expect(pruned['kindle-0']!.translatedImage, isNull);
+      expect(pruned['kindle-0']!.originalImage, isNull);
+      expect(pruned['kindle-4']!.translatedImage, isNotNull);
+      expect(pruned['kindle-5']!.translatedImage, isNotNull);
+    });
+
+    test('drops the oldest records once the map itself grows too long', () {
+      final jobs = mapOf([for (var i = 0; i < 6; i++) completed('kindle-$i')]);
+      final dropped = <String>[];
+
+      final pruned = JobsNotifier.pruneJobs(
+        jobs,
+        maxImages: 2,
+        maxJobs: 4,
+        onDropped: (job) => dropped.add(job.pageId),
+      );
+
+      expect(pruned.keys, ['kindle-2', 'kindle-3', 'kindle-4', 'kindle-5']);
+      expect(dropped, ['kindle-0', 'kindle-1']);
+    });
+
+    test('never evicts a job that is still in flight', () {
+      final inFlight = PageJob(
+        pageId: 'kindle-0',
+        status: PageJobStatus.processing,
+      );
+      final jobs = mapOf([
+        inFlight,
+        for (var i = 1; i < 6; i++) completed('kindle-$i'),
+      ]);
+
+      final pruned = JobsNotifier.pruneJobs(jobs, maxImages: 1, maxJobs: 2);
+
+      expect(pruned.containsKey('kindle-0'), isTrue);
+    });
+  });
+
+  group('webtoon prefetch', () {
+    late String reader;
+
+    setUpAll(() => reader = _read('lib/screens/reader_screen.dart'));
+
+    test('keeps a batch of pages queued ahead of the reader', () {
+      expect(reader, contains('_batchSize = 8'));
+      expect(reader, contains('_prefetchThreshold = 4'));
     });
   });
 

@@ -8,9 +8,12 @@ class PageJob {
   final String? pageNumber;
   final String? sourceUrl;
   final String? pipeline;
-  final Uint8List? originalImage;
 
   String? jobId;
+  /// The captured source page. Cleared once the translated render has been
+  /// written to the local cache — holding both halves of every page read is
+  /// what makes a long session grow.
+  Uint8List? originalImage;
   PageJobStatus status;
   String? stage;
   String? detail;
