@@ -267,13 +267,36 @@ happily encode the same wrong assumption as the code.
 
 A book on the wrong pipeline used to be silent and confusing: the manga
 pipeline clears balloons it thinks it found and redraws their text, so run over
-a novel it returns a page rearranged beyond recognition, which the render check
-then refuses. Both directions now fix themselves, per book:
+a novel it returns a page rearranged beyond recognition. Both directions now
+fix themselves, per book, from what the worker measured rather than from what
+the render looked like afterwards:
 
-- Two renders in a row that do not depict their page, while a manga pipeline is
-  in use, switch that book to `book_furigana`.
+- The manga pipelines report `page_kind` for every page they process. Two
+  `prose` verdicts in a row switch that book to `book_furigana`.
 - The server refusing a page as "not typeset prose" switches that book back to
   a manga pipeline instead of counting towards the failure stop.
+- A book is corrected once. A volume with pages of both kinds would otherwise
+  be switched back and forth for as long as it stayed open.
+
+## A page that moves under a job in flight
+
+A reflowable book re-paginates while a job is running — Kindle is still
+settling for several seconds after a load — so the render that comes back is a
+real render of a page the reader has already left. Discarding it is right;
+leaving the reader with nothing is not, so a mismatch re-captures whatever is
+on screen now, at most twice before giving up until the next page turn.
+
+The thresholds come from measurement, not intuition, and the middle case is
+the one that matters:
+
+| compared | difference |
+|---|---|
+| a page and its own render | 0.06 |
+| two different pages of the same novel | 0.65 |
+| pages from different books | 0.88 |
+
+A stale render of the previous page therefore lands near 0.65, which is why
+the threshold sits at 0.5 rather than somewhere looser.
 
 Content scripts can set the pipeline for the book they are reading through
 `SET_BOOK_PIPELINE`, which validates the ASIN shape and the pipeline name;

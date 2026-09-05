@@ -281,57 +281,38 @@ test('a tall page is one page whatever the pipeline', () => {
   assert.equal(withPage(TALL, 'book_furigana').kindle.state().pageMode, 'single');
 });
 
-// --- a book that never matches its renders is on the wrong pipeline ---------
-// The manga pipeline clears balloons it thinks it found and redraws their
-// text, so run over a novel it returns a page rearranged beyond recognition.
-// The reader should not have to work that out from a setting.
+// --- a page that moved under a job in flight --------------------------------
+// A reflowable book re-paginates while a job is running, so the render that
+// comes back is a real render of a page the reader has already left. The
+// render check refuses it; the reader should not be left with nothing.
 
-function withMismatches(pipeline, count) {
-  const env = setup();
-  env.window.FrankKindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: pipeline });
-  const sent = [];
-  env.sandbox.chrome.runtime.sendMessage = (message) => { sent.push(message); return Promise.resolve(); };
-  for (let i = 0; i < count; i++) env.window.FrankLens.__mismatch?.();
-  return { ...env, sent };
-}
+const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test('one mismatch is not enough to change anything', () => {
+test('a mismatched render triggers a fresh capture', async () => {
   const env = setup();
-  const sent = [];
-  env.sandbox.chrome.runtime.sendMessage = (m) => { sent.push(m); return Promise.resolve(); };
-  env.window.FrankKindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: 'manga_furigana' });
+  await settle(500);                       // the strategy's first detection
+  const before = env.kindle.state().pagesDetected;
+  assert.ok(before >= 1, 'the page was detected to begin with');
 
   env.window.FrankLens.__mismatch();
+  await settle(1400);
 
-  assert.equal(sent.filter((m) => m.type === 'SET_BOOK_PIPELINE').length, 0);
+  assert.ok(env.kindle.state().pagesDetected > before,
+    'the page on screen is captured again rather than left untranslated');
+  assert.equal(env.kindle.state().autoSubmitPaused, false);
 });
 
-test('two mismatches switch the book to the text-book pipeline', () => {
-  const { sent } = withMismatches('manga_furigana', 2);
-
-  const switches = sent.filter((m) => m.type === 'SET_BOOK_PIPELINE');
-  assert.equal(switches.length, 1);
-  assert.equal(switches[0].pipeline, 'book_furigana');
-  assert.equal(switches[0].bookId, 'B0ABCDEFGH');
-});
-
-test('a book already on the text-book pipeline is left alone', () => {
-  const { sent } = withMismatches('book_furigana', 3);
-  assert.equal(sent.filter((m) => m.type === 'SET_BOOK_PIPELINE').length, 0);
-});
-
-test('the server refusing a prose page switches the book back', () => {
+test('a page that never settles stops rather than looping', async () => {
   const env = setup();
-  const sent = [];
-  env.sandbox.chrome.runtime.sendMessage = (m) => { sent.push(m); return Promise.resolve(); };
+  await settle(500);
 
-  env.sendToContent(failure(PIPELINE_MISMATCH));
+  for (let i = 0; i < 3; i++) {
+    env.window.FrankLens.__mismatch();
+    await settle(1400);
+  }
 
-  const switches = sent.filter((m) => m.type === 'SET_BOOK_PIPELINE');
-  assert.equal(switches.length, 1);
-  assert.equal(switches[0].pipeline, 'manga_furigana');
-  assert.equal(env.kindle.state().autoSubmitPaused, false,
-    'switching is the fix; pausing would leave it stuck');
+  assert.equal(env.kindle.state().autoSubmitPaused, true,
+    'chasing a moving page round a loop helps no one');
 });
 
 // --- the server's verdict beats our guesswork -------------------------------

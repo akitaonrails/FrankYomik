@@ -28,7 +28,10 @@
   const LOADER_VISIBLE_OVERLAP_PX2 = 1600;
   const NO_TARGET_REPORT_INTERVAL_MS = 15000;
   const MAX_CONSECUTIVE_FAILURES = 3;
-  const MISMATCHES_BEFORE_SWITCH = 2;
+  // A re-paginating book settles in a few seconds; a page that never settles
+  // is not worth chasing round a loop.
+  const MAX_RECAPTURES = 2;
+  const RECAPTURE_DELAY_MS = 1200;
   const PROSE_VERDICTS_BEFORE_SWITCH = 2;
   // A loader that never goes away is not a loader. The selector below is loose
   // enough to match unrelated furniture, and a false match used to disable
@@ -58,7 +61,7 @@
   let autoSubmitPaused = false;
   // Renders that came back describing something other than the page they were
   // bound to. Two in a row on a manga pipeline means the book is prose.
-  let renderMismatches = 0;
+  let recaptures = 0;
   let proseVerdicts = 0;
   // A book is corrected at most once. A volume with pages of both kinds would
   // otherwise be switched back and forth for as long as it is open.
@@ -92,7 +95,7 @@
     settings = nextSettings || {};
     if (effectivePipeline() === previous) return;
     resumeAutoSubmit();
-    renderMismatches = 0;
+    recaptures = 0;
     // Re-detect the page in front of the reader under the new pipeline, and
     // drop what the old one produced: it answers a different question.
     lastBlob = '';
@@ -135,6 +138,7 @@
   function noteNavigation() {
     if (location.href === lastHref) return;
     lastHref = location.href;
+    recaptures = 0;
     lastBlob = '';
     lastRect = null;
     processedBlobs.clear();
@@ -171,22 +175,24 @@
       ?.catch?.(() => {});
   }
 
-  /// A render that does not depict its page usually means the wrong pipeline.
+  /// A render arrived that does not depict the page it was bound to.
   ///
-  /// The manga pipeline clears balloons it thinks it found and redraws their
-  /// text, so run over a novel it returns a page rearranged beyond recognition.
-  /// Rather than leave the reader to notice and fix a setting, switch the book
-  /// once the evidence repeats.
+  /// A reflowable book re-paginates while a job is in flight — Kindle is still
+  /// settling for seconds after a load — so the page that comes back is a real
+  /// render of a page the reader has already left. Discarding it is right;
+  /// leaving the reader with nothing is not. Capture what is on screen now.
   function noteRenderMismatch() {
-    renderMismatches += 1;
-    if (renderMismatches < MISMATCHES_BEFORE_SWITCH) return;
-    const pipeline = effectivePipeline();
-    const book = bookId();
-    if (!book || !pipeline.startsWith('manga_')) return;
-    renderMismatches = 0;
-    switchBookPipeline('book_furigana',
-      `Pages of ${book} do not survive the ${pipeline} pipeline; switching this `
-      + 'book to the text-book pipeline.');
+    recaptures += 1;
+    if (recaptures > MAX_RECAPTURES) {
+      report('error',
+        'The page keeps changing under each render; stopping until you turn a page.');
+      autoSubmitPaused = true;
+      return;
+    }
+    report('info', 'The page changed while it was being translated; capturing it again.');
+    lastBlob = '';
+    processedBlobs.clear();
+    window.setTimeout(detectPageChange, RECAPTURE_DELAY_MS);
   }
 
   function resumeAutoSubmit() {
