@@ -32,6 +32,12 @@
   // is not worth chasing round a loop.
   const MAX_RECAPTURES = 2;
   const RECAPTURE_DELAY_MS = 1200;
+  // A reflowable book is laid out progressively: Kindle paints a provisional
+  // page, then replaces it once it has finished paginating. Capturing during
+  // that produces a page the reader never sees — deterministically, so every
+  // such capture is byte-identical and cache-hits the same stale render.
+  // Fixed-layout manga settles at once and is unaffected by the wait.
+  const SETTLE_MS = 1500;
   const PROSE_VERDICTS_BEFORE_SWITCH = 2;
   // A loader that never goes away is not a loader. The selector below is loose
   // enough to match unrelated furniture, and a false match used to disable
@@ -402,6 +408,22 @@
   /// and we notice within half a second, so capturing straight away yields the
   /// page before this one — every time, byte for byte, which is why those
   /// captures cache-hit and why their renders never matched the page.
+  /// What the element is currently showing, as a value that changes whenever
+  /// the page does.
+  function frameId(target) {
+    return `${target.src}|${target.naturalWidth}x${target.naturalHeight}`;
+  }
+
+  /// Wait for the page to stop changing before capturing it.
+  ///
+  /// Returns false if it is still moving, in which case the next detection
+  /// picks it up — better than submitting a layout the reader never sees.
+  async function settled(target) {
+    const before = frameId(target);
+    await new Promise((resolve) => window.setTimeout(resolve, SETTLE_MS));
+    return frameId(target) === before;
+  }
+
   async function decoded(target, expectedSrc) {
     if (expectedSrc && target.src !== expectedSrc) return false;
     if (typeof target.decode !== 'function') return target.complete !== false;
@@ -416,10 +438,11 @@
   async function submitDetection(detection, force = false) {
     const target = findImageBySrc(detection.imgSrc) || findVisibleBlob();
     if (!target) return;
-    if (!await decoded(target, target.src)) {
-      report('info', 'The page was still loading; leaving it for the next detection.');
+    if (!await decoded(target, target.src) || !await settled(target)) {
+      report('info', 'The page was still being laid out; leaving it for the next detection.');
       return;
     }
+    if (!await decoded(target, target.src)) return;
     // Remember which element this capture came from. Scoring cannot tell one
     // page image from its neighbour: they are the same size, in the same
     // place, and both visible during a turn.

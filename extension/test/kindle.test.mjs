@@ -414,3 +414,43 @@ test('a page whose decode is abandoned is left for the next detection', async ()
   assert.equal(env.kindle.state().pagesSubmitted, before,
     'better to wait than to submit the previous page');
 });
+
+// --- a reflowable book is laid out progressively -----------------------------
+// Kindle paints a provisional page, then replaces it once it has finished
+// paginating. Capturing during that yields a page the reader never sees —
+// deterministically, so every such capture is byte-identical and cache-hits
+// the same stale render. Fixed-layout manga settles at once.
+
+function recordSubmissions(env) {
+  const sent = [];
+  const original = env.sandbox.chrome.runtime.sendMessage;
+  env.sandbox.chrome.runtime.sendMessage = (message) => {
+    sent.push(message);
+    return original?.(message) ?? Promise.resolve();
+  };
+  return sent;
+}
+
+test('a page still being laid out is not captured', async () => {
+  const env = setup();
+  const sent = recordSubmissions(env);
+  // Kindle replaces the provisional page midway through the settle window
+  // (detection fires at 400ms, the submit debounce ends near 950ms, and the
+  // page must then hold still for 1500ms).
+  setTimeout(() => { env.page.src = 'blob:page-final'; }, 1500);
+
+  await settle(2800);
+
+  assert.equal(sent.filter((m) => m.type === 'SUBMIT_CAPTURE').length, 0,
+    'a layout the reader never sees must not be submitted');
+});
+
+test('a settled page is captured', async () => {
+  const env = setup();
+  const sent = recordSubmissions(env);
+
+  await settle(2600);
+
+  assert.equal(sent.filter((m) => m.type === 'SUBMIT_CAPTURE').length, 1,
+    'a page that stops changing is captured normally');
+});

@@ -278,6 +278,24 @@ the render looked like afterwards:
 - A book is corrected once. A volume with pages of both kinds would otherwise
   be switched back and forth for as long as it stayed open.
 
+## A reflowable book is laid out progressively
+
+This is why the novel behaved differently from manga, and why it looked like
+one bug when it was two. Kindle paints a *provisional* page for a reflowable
+book and replaces it once pagination finishes — the reader sees "Learning
+reading speed…" while that happens. Capturing during it yields a page nobody
+ever sees: on the sample novel, the text sits in the top 60% of the image with
+black below.
+
+It is deterministic, which is what made the symptom so confusing: every such
+capture is byte-identical, so they all hash the same, hit the client cache, and
+come back as the same stale render — a constant 0.71 against the settled page,
+never varying, surviving every reload. Fixed-layout manga has no provisional
+stage, which is why manga worked throughout.
+
+A capture therefore waits for the page to hold still (`SETTLE_MS`) before it is
+taken, and a page that moves during that window is left for the next detection.
+
 ## Capture only what the page has actually decoded
 
 An `<img>` keeps painting its previous frame until a new `src` decodes, and

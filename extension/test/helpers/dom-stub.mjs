@@ -42,19 +42,22 @@ export function makeElement(tag) {
       return true;
     },
     contains(other) { return other === this; },
-    // Enough of a canvas for the capture paths and the page/render comparison.
+    // A canvas good enough for both the capture path and the page/render
+    // comparison. What it draws is the source's last decoded frame, which is
+    // what a real canvas copies.
+    toDataURL: () => 'data:image/png;base64,iVBORw0KGgo=',
     getContext(kind) {
-      if (kind !== '2d' || !canvasPixels) return null;
+      if (kind !== '2d') return null;
       let drawn = null;
       return {
         drawImage(source) { drawn = source; },
         getImageData(_x, _y, w, h) {
-          const key = drawn?.src ?? '';
+          const key = drawn?.decodedSrc ?? drawn?.src ?? '';
           // The value is a page identity: two sources sharing one look alike,
           // as a page and its render do, and different ones do not. Brightness
           // alone would not work — the signature normalises that away on
           // purpose, so a dark and a light copy of one page still match.
-          const page = canvasPixels[key] ?? canvasPixels.default ?? 0;
+          const page = canvasPixels?.[key] ?? canvasPixels?.default ?? 0;
           const data = new Uint8ClampedArray(w * h * 4);
           for (let i = 0; i < w * h; i++) {
             const base = ((i * Math.abs(page)) % 251 + (key.length % 3)) % 256;
