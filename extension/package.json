@@ -4,8 +4,9 @@
   "version": "0.5.0",
   "type": "module",
   "scripts": {
-    "test": "npm run validate && npm run check:js && npm run test:unit",
+    "test": "npm run validate && npm run check:js && npm run test:unit && npm run test:browser",
     "test:unit": "node --test test/*.test.mjs",
+    "test:browser": "node --test test/browser/*.test.mjs",
     "validate": "node scripts/validate.mjs",
     "check:js": "node --check src/background/service_worker.js && node --check src/options/options.js && node --check src/content/bootstrap.js && node --check src/content/lens.js && node --check src/content/kindle.js && node --check src/content/webtoon.js && node --check src/content/overlay.js && node --check src/shared/config.js && node --check src/shared/policy.js && node --check test/config.test.mjs && node --check test/policy.test.mjs && node --check test/lens.test.mjs && node --check test/overlay.test.mjs && node --check test/kindle.test.mjs && node --check test/helpers/dom-stub.mjs",
     "package": "node scripts/package.mjs"

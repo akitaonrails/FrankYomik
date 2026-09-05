@@ -1,0 +1,169 @@
+// The render check, measured in a real browser.
+//
+// This exists because a DOM stub cannot answer the question that matters:
+// how Chromium samples an image when it is reduced to a 16-pixel signature.
+// Offline, using a properly filtered resize, a page and its own render measure
+// 0.096 — comfortably a match. In the reader they measured 0.70, and the
+// correct translation was refused for hours on the strength of that number.
+//
+// The fixtures are the real thing: a page captured from the Kindle reader and
+// the render the server made from that exact capture, both pulled out of the
+// server's object store.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { chromiumPath, inBrowser } from './chromium.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const lensSource = readFileSync(join(here, '../../src/content/lens.js'), 'utf8');
+
+function dataUrl(name) {
+  const bytes = readFileSync(join(here, 'fixtures', name));
+  return `data:image/png;base64,${bytes.toString('base64')}`;
+}
+
+/// Run the module's own signature/compare code against two images.
+async function measure(a, b) {
+  return inBrowser(async ({ source, imageA, imageB }) => {
+    // The lens module guards on window.FrankLens and needs a chrome.runtime to
+    // decide it is alive; give it just enough to install itself.
+    window.chrome = { runtime: { id: 'test' } };
+    // eslint-disable-next-line no-eval
+    eval(source);
+    return window.FrankLens.compare(imageA, imageB);
+  }, { source: lensSource, imageA: a, imageB: b });
+}
+
+const available = Boolean(chromiumPath());
+
+test('a page and its own render are recognised as the same page', { skip: !available }, async () => {
+  const difference = await measure(dataUrl('page.png'), dataUrl('render-of-page.png'));
+
+  assert.ok(difference !== null, 'the pixels were readable');
+  assert.ok(difference < 0.5,
+    `a page and its own render measured ${difference?.toFixed(3)} in a real browser; `
+    + 'the reader would be shown nothing');
+});
+
+test('an image is identical to itself', { skip: !available }, async () => {
+  const difference = await measure(dataUrl('page.png'), dataUrl('page.png'));
+  assert.ok(difference < 0.01, `expected ~0, got ${difference}`);
+});
+
+test('the measure survives being given the same page at a different size',
+  { skip: !available }, async () => {
+    // The render comes back at the capture's size while the page element keeps
+    // its own natural size, so the two are never scaled alike. That difference
+    // alone must not read as a different page.
+    const difference = await inBrowser(async ({ source, image }) => {
+      window.chrome = { runtime: { id: 'test' } };
+      // eslint-disable-next-line no-eval
+      eval(source);
+      const load = (src) => new Promise((resolve) => {
+        const img = new Image();
+        img.addEventListener('load', () => resolve(img));
+        img.src = src;
+      });
+      const original = await load(image);
+      // Re-encode the same page at two thirds of its size.
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(original.naturalWidth * 0.66);
+      canvas.height = Math.round(original.naturalHeight * 0.66);
+      const context = canvas.getContext('2d');
+      context.drawImage(original, 0, 0, canvas.width, canvas.height);
+      return window.FrankLens.compare(image, canvas.toDataURL('image/png'));
+    }, { source: lensSource, image: dataUrl('page.png') });
+
+    assert.ok(difference < 0.5,
+      `the same page at a different size measured ${difference?.toFixed(3)}`);
+  });
+
+test('a different page of the same book is still refused', { skip: !available }, async () => {
+  // The case the check exists for. Shifting the page by a few columns stands
+  // in for the next page: same typeface, same layout, different text.
+  const difference = await inBrowser(async ({ source, image }) => {
+    window.chrome = { runtime: { id: 'test' } };
+    // eslint-disable-next-line no-eval
+    eval(source);
+    const load = (src) => new Promise((resolve) => {
+      const img = new Image();
+      img.addEventListener('load', () => resolve(img));
+      img.src = src;
+    });
+    const page = await load(image);
+    const canvas = document.createElement('canvas');
+    canvas.width = page.naturalWidth;
+    canvas.height = page.naturalHeight;
+    canvas.getContext('2d').drawImage(page, -260, 0);
+    return window.FrankLens.compare(image, canvas.toDataURL('image/png'));
+  }, { source: lensSource, image: dataUrl('page.png') });
+
+  assert.ok(difference > 0.25,
+    `a different page measured only ${difference?.toFixed(3)}; it would be shown as this one`);
+});
+
+test('the render is matched against the page at the size the element holds it',
+  { skip: !available }, async () => {
+    // This is the comparison the reader actually makes, and the one that
+    // failed: the render comes back at the capture's size (2200px) while the
+    // page element keeps its natural size (2986px). The content differs too —
+    // the render has furigana in the gutters. Both differences at once are
+    // what tipped a near-black page into apparent mismatch.
+    const difference = await inBrowser(async ({ source, page, render }) => {
+      window.chrome = { runtime: { id: 'test' } };
+      // eslint-disable-next-line no-eval
+      eval(source);
+      const load = (src) => new Promise((resolve) => {
+        const img = new Image();
+        img.addEventListener('load', () => resolve(img));
+        img.src = src;
+      });
+      const original = await load(page);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(original.naturalWidth * 1.357);
+      canvas.height = Math.round(original.naturalHeight * 1.357);
+      const context = canvas.getContext('2d');
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+      context.drawImage(original, 0, 0, canvas.width, canvas.height);
+      return window.FrankLens.compare(render, canvas.toDataURL('image/png'));
+    }, { source: lensSource, page: dataUrl('page.png'), render: dataUrl('render-of-page.png') });
+
+    assert.ok(difference < 0.25,
+      `the reader's own page measured ${difference?.toFixed(3)} against its own render; `
+      + 'they would be shown an empty lens');
+  });
+
+test('a dark page is not mistaken for a featureless one', { skip: !available }, async () => {
+  // A novel page is almost entirely black: its signature deviation is about
+  // 0.02. Treating that as "nothing to compare" made the check blind, and
+  // dividing by it made the check hysterical. Both were real.
+  const stats = await inBrowser(async ({ image }) => {
+    const load = (src) => new Promise((resolve) => {
+      const img = new Image();
+      img.addEventListener('load', () => resolve(img));
+      img.src = src;
+    });
+    const page = await load(image);
+    const canvas = document.createElement('canvas');
+    canvas.width = 16;
+    canvas.height = 16;
+    const context = canvas.getContext('2d');
+    context.imageSmoothingEnabled = true;
+    context.drawImage(page, 0, 0, 16, 16);
+    const { data } = context.getImageData(0, 0, 16, 16);
+    const luma = [];
+    for (let i = 0; i < data.length; i += 4) {
+      luma.push((0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255);
+    }
+    const mean = luma.reduce((a, b) => a + b, 0) / luma.length;
+    return Math.sqrt(luma.reduce((a, b) => a + (b - mean) ** 2, 0) / luma.length);
+  }, { image: dataUrl('page.png') });
+
+  assert.ok(stats < 0.05,
+    `this fixture should be low contrast; measured ${stats.toFixed(4)}`);
+  const difference = await measure(dataUrl('page.png'), dataUrl('render-of-page.png'));
+  assert.ok(difference !== null, 'a low-contrast page must still be readable');
+});

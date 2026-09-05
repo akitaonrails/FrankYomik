@@ -48,11 +48,17 @@ export function makeElement(tag) {
     toDataURL: () => 'data:image/png;base64,iVBORw0KGgo=',
     getContext(kind) {
       if (kind !== '2d') return null;
-      let drawn = null;
+      const canvas = this;
       return {
-        drawImage(source) { drawn = source; },
+        imageSmoothingEnabled: true,
+        imageSmoothingQuality: 'low',
+        // A canvas remembers which page was drawn into it, so it can be the
+        // source of the next reduction — which is how the signature works.
+        drawImage(source) {
+          canvas.pageKey = source?.pageKey ?? source?.decodedSrc ?? source?.src ?? '';
+        },
         getImageData(_x, _y, w, h) {
-          const key = drawn?.decodedSrc ?? drawn?.src ?? '';
+          const key = canvas.pageKey ?? '';
           // The value is a page identity: two sources sharing one look alike,
           // as a page and its render do, and different ones do not. Brightness
           // alone would not work — the signature normalises that away on

@@ -160,7 +160,25 @@ Gesture rules that keep the reader usable:
 The pipeline is unchanged: pages are still captured, queued and rendered the
 same way. Only the presentation differs.
 
-Both lens modules are tested against a DOM stub rather than a live reader:
+Some behaviour cannot be judged outside a browser. `extension/test/browser/`
+drives a real headless Chromium over the DevTools protocol — no dependencies,
+skipped when no Chromium is present — using a real captured page and the real
+render the server made from it as fixtures.
+
+That is where the render check's thresholds come from, and it is the only place
+they can be established. A dark novel page reduced to a 16-pixel signature has
+a standard deviation of about 0.02; normalising by that turned sampling
+differences into apparent mismatch, so a correct render measured 0.70 against
+its own page. Manga, with high-contrast balloons, never hit it. Measured in the
+browser with a deviation floor of 0.05:
+
+| compared | difference |
+|---|---|
+| a page and its own render | 0.05 |
+| the same page at the element's natural size | 0.14 |
+| a different page of the same book | 0.31 |
+
+Both lens modules are also tested against a DOM stub rather than a live reader:
 
 - `client/test/js/lens_module.test.mjs`, run by `flutter test` through
   `client/test/lens_test.dart` when node is installed

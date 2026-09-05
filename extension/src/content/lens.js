@@ -40,8 +40,36 @@
   // against a different page by 0.90. Half way between leaves room for a
   // re-captured page (0.33) without admitting another one.
   const SIGNATURE_SIZE = 16;
-  const SIGNATURE_TOLERANCE = 0.5;
-  const FLAT_IMAGE_DEVIATION = 0.02;
+  // Two thresholds, because this check has a poor record and a real job.
+  //
+  // Its job is to stop a render of a *different* page being shown as a
+  // translation of this one. Binding by element identity — the capture stamps
+  // the element it came from — is what actually prevents that now; this is a
+  // second opinion formed from pixels.
+  //
+  // And it is a weak opinion. Measured offline: a page against its own render
+  // 0.06, against another page of the same book 0.65, against another book
+  // 0.88. But the same pair of images that measure 0.096 offline measured 0.70
+  // in the browser, and a downscale to 16 pixels cannot be reproduced faithfully
+  // outside it. So a render is only refused when it is unmistakably a different
+  // page; anything merely suspicious is reported and shown, because an empty
+  // lens has proved far more costly to the reader than a stale one.
+  // A dark novel page is almost entirely black: measured in a real browser, its
+  // 16-pixel signature has a standard deviation of about 0.02. Normalising by
+  // that amplified every sampling difference into apparent mismatch, which is
+  // why a correct render measured 0.70 against its own page — and why manga,
+  // with its high-contrast balloons, was never affected. The floor stops a
+  // low-contrast page being magnified into noise.
+  const MIN_DEVIATION = 0.05;
+  // With that floor, measured on a real page and its real render:
+  //   the page and its own render          0.05
+  //   the same page at the element's size  0.14
+  //   a different page of the same book    0.31
+  const SIGNATURE_SUSPICIOUS = 0.18;
+  const SIGNATURE_TOLERANCE = 0.25;
+  // Only a genuinely uniform image; a dark page of text sits near 0.02 and is
+  // perfectly readable.
+  const FLAT_IMAGE_DEVIATION = 0.002;
   const INVERTED_CORRELATION = -0.3;
   // A render arrives while the reader may be mid-repaint, and comparing then
   // measures the page against a frame it is halfway through drawing. Uploading
@@ -183,6 +211,11 @@
     warm.addEventListener('load', async () => {
       if (warm.naturalHeight > 0) entry.aspect = warm.naturalWidth / warm.naturalHeight;
       const match = await depictsSettled(warm, target);
+      if (match.ok && match.difference > SIGNATURE_SUSPICIOUS) {
+        report(`Render for ${pageId} looks unlike its page `
+          + `(${match.difference.toFixed(2)}) but is being shown anyway; `
+          + 'it is bound to the element the capture came from.');
+      }
       if (match.ok) {
         entry.verified = true;
         // If the reader is still holding on this page, waiting for it, the
@@ -243,6 +276,19 @@
     });
   }
 
+  /// Draw a source into a canvas of the given size, smoothing as it goes.
+  function drawInto(source, width, height) {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return null;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(source, 0, 0, width, height);
+    return canvas;
+  }
+
   /// A coarse, brightness-independent fingerprint of what something looks like.
   ///
   /// Returns null when the pixels cannot be read — a tainted canvas, an image
@@ -250,12 +296,25 @@
   /// than dropping a good render.
   function signature(source) {
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = SIGNATURE_SIZE;
-      canvas.height = SIGNATURE_SIZE;
+      // Reduce in halving steps rather than in one leap. A page is thousands
+      // of pixels wide and the signature is 16: asked for that in a single
+      // drawImage, a browser samples a tiny neighbourhood, which on a page of
+      // fine text is noise — and two images of different sizes sample
+      // different noise. Halving averages the whole page into the result, so
+      // the same page measures the same whatever size it arrived at.
+      let surface = source;
+      let width = source.naturalWidth || source.width || SIGNATURE_SIZE;
+      let height = source.naturalHeight || source.height || SIGNATURE_SIZE;
+      while (width > SIGNATURE_SIZE * 2 || height > SIGNATURE_SIZE * 2) {
+        width = Math.max(SIGNATURE_SIZE, Math.round(width / 2));
+        height = Math.max(SIGNATURE_SIZE, Math.round(height / 2));
+        surface = drawInto(surface, width, height);
+        if (!surface) return null;
+      }
+
+      const canvas = drawInto(surface, SIGNATURE_SIZE, SIGNATURE_SIZE);
+      if (!canvas) return null;
       const context = canvas.getContext('2d', { willReadFrequently: true });
-      if (!context) return null;
-      context.drawImage(source, 0, 0, SIGNATURE_SIZE, SIGNATURE_SIZE);
       const { data } = context.getImageData(0, 0, SIGNATURE_SIZE, SIGNATURE_SIZE);
       const luma = [];
       for (let i = 0; i < data.length; i += 4) {
@@ -264,10 +323,14 @@
       const mean = luma.reduce((a, b) => a + b, 0) / luma.length;
       const variance = luma.reduce((a, b) => a + (b - mean) ** 2, 0) / luma.length;
       const deviation = Math.sqrt(variance);
-      // A flat image carries no structure to compare — an undecoded element,
-      // a blank canvas. Treat it as unreadable rather than as "different".
+      // Genuinely featureless — an undecoded element, a blank canvas. There is
+      // nothing to compare, so say so rather than call it a different page.
       if (deviation < FLAT_IMAGE_DEVIATION) return null;
-      return luma.map((value) => (value - mean) / deviation);
+      // Scale by the page's own contrast, but never by less than the floor:
+      // dividing a near-black page by its own tiny deviation turns sampling
+      // noise into structure.
+      const scale = Math.max(deviation, MIN_DEVIATION);
+      return luma.map((value) => (value - mean) / scale);
     } catch {
       return null;   // reading the pixels is a courtesy, not a requirement
     }

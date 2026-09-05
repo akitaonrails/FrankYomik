@@ -154,3 +154,18 @@ The popup also has **Export settings** and **Import settings** actions. The expo
 - Chrome for Android is not a target; use the existing Android app there.
 - If Kindle or Naver changes their DOM/image loading behavior, the content strategies may need updates.
 - Existing reader tabs may need a reload after extension install/update because static content scripts only inject on page load.
+
+## Tests
+
+```bash
+cd extension
+npm test          # manifest validation, syntax, unit tests, browser tests
+```
+
+The unit tests run against a DOM stub. The browser tests drive a real headless
+Chromium over the DevTools protocol — no dependencies, and skipped
+automatically if no Chromium is installed. They exist because some behaviour
+cannot be judged outside a browser: how Chromium samples an image when it is
+reduced to a 16-pixel signature is what decides whether a translated page is
+recognised as belonging to the page on screen, and a stub cannot model it. The
+fixtures are a real captured page and the real render the server made from it.

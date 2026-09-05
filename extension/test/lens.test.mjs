@@ -926,3 +926,21 @@ test('the ring becomes the lens only once the render is checked', async () => {
     'a render that has not been checked must not be shown');
   assert.match(el.style.animation, /frankLensWaiting/, 'the ring stays until it is');
 });
+
+// The stub's pages are either identical or maximally unlike, so the band
+// between them cannot be expressed here. Real pages, real renders and real
+// browser downscaling are measured in test/browser/signature.test.mjs, which
+// is where the thresholds come from.
+
+test('a render from another book is still refused', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const env = loadContentScripts(['lens.js'], [img], {
+    pixels: { 'blob:page': 3, 'blob:frank-1': 211 },   // nothing alike
+  });
+
+  await env.window.FrankLens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);
+
+  assert.equal(env.window.FrankLens.has('kindle-1'), false,
+    'a page from another book is never a translation of this one');
+});
