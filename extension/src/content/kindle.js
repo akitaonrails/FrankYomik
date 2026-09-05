@@ -112,6 +112,7 @@
       pageImageSize: target
         ? `${Math.round(target.getBoundingClientRect().width)}x${Math.round(target.getBoundingClientRect().height)}`
         : null,
+      pageMode: target ? spreadMode(target.getBoundingClientRect()) : null,
       pagesDetected: pageCounter,
       pagesSubmitted: processedBlobs.size,
     };
@@ -245,7 +246,7 @@
     lastEmitAt = now;
     pageCounter += 1;
 
-    const pageMode = rect.width > rect.height * SPREAD_THRESHOLD ? 'spread' : 'single';
+    const pageMode = spreadMode(rect);
     const pageId = `kindle-${sessionId}-${pageCounter}${pageMode === 'spread' ? '-spread' : ''}`;
     const detection = {
       pageId,
@@ -633,7 +634,7 @@
     return {
       pageId,
       index: pageCounter || 0,
-      pageMode: rect.width > rect.height * SPREAD_THRESHOLD ? 'spread' : 'single',
+      pageMode: spreadMode(rect),
       navIntent,
       imgSrc: target.dataset.frankOriginalSrc || target.src,
       naturalWidth: target.naturalWidth,
@@ -776,6 +777,17 @@
 
   /// The volume being read, as Kindle's ASIN. Also the key a per-book
   /// pipeline choice is stored under.
+  /// Whether a page image holds two facing pages.
+  ///
+  /// A wide image is two manga pages side by side — but a novel is typeset to
+  /// the window, so on a landscape screen a single prose page is wide too.
+  /// Splitting one in half cuts its columns down the middle, annotates each
+  /// half as if it were a page, and stitches something that matches nothing.
+  function spreadMode(rect) {
+    if (effectivePipeline() === 'book_furigana') return 'single';
+    return rect.width > rect.height * SPREAD_THRESHOLD ? 'spread' : 'single';
+  }
+
   function bookId() {
     return /[/=](B[A-Z0-9]{9})/.exec(location.href)?.[1] || '';
   }

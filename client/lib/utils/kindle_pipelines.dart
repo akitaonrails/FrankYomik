@@ -30,4 +30,19 @@ class KindlePipelines {
 
   /// Whether [pipeline] annotates a rasterised prose page rather than manga.
   static bool isBook(String pipeline) => pipeline == bookFurigana;
+
+  /// The page mode to actually use, given what detection saw.
+  ///
+  /// A wide page image is two manga pages side by side — but a novel is
+  /// typeset to the window, so on a landscape screen a single prose page is
+  /// wide too. Splitting one cuts its columns down the middle, annotates each
+  /// half as if it were a page, and stitches something that matches no page.
+  static String pageModeFor(String pipeline, String? detected) {
+    if (isBook(pipeline)) return 'single';
+    return detected == 'spread' ? 'spread' : 'single';
+  }
+
+  /// The page id without the marker detection adds for a spread.
+  static String pageIdFor(String pipeline, String pageId) =>
+      isBook(pipeline) ? pageId.replaceFirst(RegExp(r'-spread$'), '') : pageId;
 }

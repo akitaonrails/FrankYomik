@@ -33,6 +33,27 @@ void main() {
       expect(KindlePipelines.isBook('manga_translate'), isFalse);
     });
 
+    test('a text book is never split into facing pages', () {
+      // A novel typeset to a landscape window is wide, but it is one page:
+      // splitting it cuts the columns down the middle.
+      expect(KindlePipelines.pageModeFor('book_furigana', 'spread'), 'single');
+      expect(KindlePipelines.pageModeFor('book_furigana', 'single'), 'single');
+    });
+
+    test('manga keeps the spread it was detected as', () {
+      expect(KindlePipelines.pageModeFor('manga_furigana', 'spread'), 'spread');
+      expect(KindlePipelines.pageModeFor('manga_translate', 'spread'), 'spread');
+      expect(KindlePipelines.pageModeFor('manga_furigana', 'single'), 'single');
+      expect(KindlePipelines.pageModeFor('manga_furigana', null), 'single');
+    });
+
+    test('a text book page id drops the spread marker', () {
+      expect(KindlePipelines.pageIdFor('book_furigana', 'kindle-a-1-spread'),
+          'kindle-a-1');
+      expect(KindlePipelines.pageIdFor('manga_furigana', 'kindle-a-1-spread'),
+          'kindle-a-1-spread');
+    });
+
     test('matches the pipelines the server accepts', () {
       // server/worker/job.py VALID_PIPELINES, minus webtoon which is not a
       // Kindle pipeline.

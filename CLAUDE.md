@@ -189,6 +189,13 @@ ahead of the reader:
 
 ## Text books (`book_furigana`)
 
+A wide page image means two facing pages in manga, so detection splits it. A
+novel is typeset to the window, so on a landscape screen a single prose page is
+wide too — splitting one cuts its columns down the middle, annotates each half
+as if it were a page, and stitches something that matches no page at all. Book
+pages are therefore never split, in either client.
+
+
 Kindle rasterises reflowable novels exactly like manga: the page is one
 blob-backed `<img>` inside `#kr-renderer`, with no text in the DOM (the only
 Japanese there is the title in the reader chrome). So a book cannot be

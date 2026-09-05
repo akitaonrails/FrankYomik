@@ -246,3 +246,33 @@ test('opening another book clears what the last one registered', async () => {
   assert.equal(win.FrankLens.has('kindle-1'), false,
     'the previous book must not be peekable in this one');
 });
+
+// --- a novel is not a two-page spread ---------------------------------------
+// A wide page image is two manga pages side by side, but a novel is typeset to
+// the window: on a landscape screen a single prose page is wide too. Splitting
+// one cuts its columns down the middle and stitches something that matches no
+// page at all — which is what the render check started rejecting.
+
+function withPage(rect, pipeline) {
+  const page = makeImage(rect);
+  const env = loadContentScripts(['lens.js', 'overlay.js', 'kindle.js'], [page]);
+  env.window.FrankKindle.start({ ...READER_SETTINGS, mangaPipeline: pipeline });
+  return { ...env, kindle: env.window.FrankKindle, page };
+}
+
+const WIDE = { left: 0, top: 0, width: 1600, height: 900 };
+const TALL = { left: 0, top: 0, width: 700, height: 1000 };
+
+test('a wide manga page is two facing pages', () => {
+  assert.equal(withPage(WIDE, 'manga_furigana').kindle.state().pageMode, 'spread');
+});
+
+test('a wide text-book page is one page', () => {
+  // This is the case that was breaking: a novel typeset to a landscape window.
+  assert.equal(withPage(WIDE, 'book_furigana').kindle.state().pageMode, 'single');
+});
+
+test('a tall page is one page whatever the pipeline', () => {
+  assert.equal(withPage(TALL, 'manga_furigana').kindle.state().pageMode, 'single');
+  assert.equal(withPage(TALL, 'book_furigana').kindle.state().pageMode, 'single');
+});

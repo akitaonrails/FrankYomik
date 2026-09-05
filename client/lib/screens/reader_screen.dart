@@ -355,8 +355,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   }
 
   Future<void> _onPageDetected(Map<String, dynamic> pageInfo) async {
-    final pageId = pageInfo['pageId'] as String?;
+    var pageId = pageInfo['pageId'] as String?;
     if (pageId == null) return;
+
+    // Detection classifies a wide page image as two facing pages, which is
+    // right for manga and wrong for a novel typeset to a landscape window.
+    if (_jsBridge.activeStrategy?.siteName == 'kindle') {
+      final mode = KindlePipelines.pageModeFor(
+        _kindlePipeline,
+        pageInfo['pageMode'] as String?,
+      );
+      pageInfo = {...pageInfo, 'pageMode': mode};
+      pageId = KindlePipelines.pageIdFor(_kindlePipeline, pageId);
+      pageInfo['pageId'] = pageId;
+    }
 
     // Track current Kindle page so overlays only apply to the visible page
     if (_jsBridge.activeStrategy?.siteName == 'kindle') {
