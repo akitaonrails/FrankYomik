@@ -20,6 +20,7 @@ test('attach keeps the reader image untouched', async () => {
   const { lens } = setup([img]);
 
   assert.equal(await lens.attach(img, 'kindle-1', DATA_URL), true);
+  await wait(2700);   // verification runs asynchronously
 
   assert.equal(img.src, 'blob:page', 'the original page must stay on screen');
   assert.match(img.dataset.frankLensSrc, /^blob:frank-/);
@@ -171,6 +172,7 @@ test('re-attaching a page revokes the render it replaces', async () => {
   const firstUrl = img.dataset.frankLensSrc;
 
   await lens.attach(other, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
 
   assert.deepEqual(revoked, [firstUrl]);
   assert.equal(lens.registeredPages().length, 1);
@@ -183,6 +185,7 @@ test('re-attaching the same element is a no-op', async () => {
   const url = img.dataset.frankLensSrc;
 
   assert.equal(await lens.attach(img, 'kindle-1', DATA_URL), true);
+  await wait(2700);   // verification runs asynchronously
 
   assert.equal(img.dataset.frankLensSrc, url);
   assert.deepEqual(revoked, []);
@@ -398,6 +401,7 @@ test('a translation that lands mid-hold opens the lens where the pointer is', as
   assert.equal(lens.isOpen(), false);
 
   await lens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
 
   assert.equal(lens.isOpen(), true, 'the reader is still holding — just show it');
   const el = lensElement(document);
@@ -453,6 +457,7 @@ test('state reports why a hold did or did not open the lens', async () => {
   assert.equal(lens.state().awaitingTranslation, 1);
 
   await lens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
   assert.equal(lens.state().awaitingTranslation, 0, 'no longer waiting once it lands');
   assert.deepEqual([...lens.state().registered], ['kindle-1']);
 });
@@ -646,6 +651,7 @@ test('a render whose page has been replaced is dropped, not shown', async () => 
   const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
   const { lens, fire, pointer } = setup([img]);
   await lens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
   assert.equal(lens.has('kindle-1'), true);
 
   // The reader loads a different book into the same element.
@@ -753,6 +759,7 @@ test('a render of this page is bound', async () => {
   const lens = env.window.FrankLens;
 
   await lens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
 
   assert.equal(lens.has('kindle-1'), true);
 });
@@ -765,6 +772,7 @@ test('a render of another page is discarded, not shown', async () => {
   const lens = env.window.FrankLens;
 
   await lens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
 
   assert.equal(lens.has('kindle-1'), false, 'better nothing than the wrong page');
   assert.equal(env.revoked.length, 1, 'and it is freed');
@@ -777,6 +785,7 @@ test('unreadable pixels leave the binding alone', async () => {
   const lens = env.window.FrankLens;
 
   await lens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
 
   assert.equal(lens.has('kindle-1'), true);
 });
@@ -791,6 +800,7 @@ test('a page that reads as blank is not called a mismatch', async () => {
   });
 
   await env.window.FrankLens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
 
   assert.equal(env.window.FrankLens.has('kindle-1'), true);
 });
@@ -807,6 +817,7 @@ test('an inverted render is named as a pipeline mismatch', async () => {
   });
 
   await env.window.FrankLens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
 
   assert.equal(env.window.FrankLens.has('kindle-1'), false);
   assert.match(warned.join(' '), /text book run through a manga pipeline/);
@@ -839,6 +850,7 @@ test('a mismatch hands back a render the caller can still load', async () => {
   env.window.FrankLens.onRenderMismatch((detail) => seen.push(detail));
 
   await env.window.FrankLens.attach(img, 'kindle-1', DATA_URL);
+  await wait(2700);   // verification runs asynchronously
 
   assert.equal(seen.length, 1);
   assert.equal(seen[0].renderUrl, DATA_URL, 'a data URL survives the release');

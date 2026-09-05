@@ -278,6 +278,25 @@ the render looked like afterwards:
 - A book is corrected once. A volume with pages of both kinds would otherwise
   be switched back and forth for as long as it stayed open.
 
+## One look is not a verdict
+
+The render check compares a render against the page it is bound to at the
+moment the render arrives — which can be while the reader is mid-repaint.
+Uploading both images a moment later, through the debug pair, showed them
+matching at 0.096: the render was right, the capture was right, and the
+comparison had simply looked at the wrong instant.
+
+So a failed comparison is now retried (250ms, 750ms, 1500ms) before the render
+is refused, and a registration is *unverified* until it passes — a peek before
+then shows the waiting ring rather than a render that may yet be thrown away.
+A render of a genuinely different page stays different however long you look,
+so nothing is weakened by waiting.
+
+The debug pair is what settled this, after five hypotheses died against the
+same number. `exportDebugPair` now snapshots the element as it is rather than
+the copy kept from capture time, which is what makes the two images comparable
+at all.
+
 ## Capture the page the reader can see, not one parked beside it
 
 Kindle keeps the pages either side of the current one in the DOM, laid out

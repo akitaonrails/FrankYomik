@@ -43,6 +43,11 @@
   const SIGNATURE_TOLERANCE = 0.5;
   const FLAT_IMAGE_DEVIATION = 0.02;
   const INVERTED_CORRELATION = -0.3;
+  // A render arrives while the reader may be mid-repaint, and comparing then
+  // measures the page against a frame it is halfway through drawing. Uploading
+  // both a moment later showed them matching at 0.096, so the answer is to
+  // look again rather than to refuse on the first glance.
+  const MATCH_RETRY_MS = [250, 750, 1500];
 
   // pageId -> { el, url }. Registrations own their object URL and revoke it,
   // so a long reading session cannot accumulate translated pages.
@@ -156,7 +161,9 @@
 
     release(pageId);
     pending.delete(target);
-    const entry = { el: target, url, aspect: null };
+    // Unverified until the render is shown to depict this page: a peek before
+    // then shows the waiting ring rather than a render that may be refused.
+    const entry = { el: target, url, aspect: null, verified: false };
     entries.set(pageId, entry);
     while (entries.size > MAX_REGISTRATIONS) {
       release(entries.keys().next().value);
@@ -167,10 +174,13 @@
     // Warm the decode so the first peek does not stutter, and record the
     // render's shape while we are at it.
     const warm = new Image();
-    warm.addEventListener('load', () => {
+    warm.addEventListener('load', async () => {
       if (warm.naturalHeight > 0) entry.aspect = warm.naturalWidth / warm.naturalHeight;
-      const match = depicts(warm, target);
-      if (match.ok) return;
+      const match = await depictsSettled(warm, target);
+      if (match.ok) {
+        entry.verified = true;
+        return;
+      }
       // The render is of some other page. Showing it would be worse than
       // showing nothing: it reads as a translation of what is on screen.
       const rect = target.getBoundingClientRect();
@@ -254,6 +264,21 @@
     }
   }
 
+  /// Whether a render depicts its page, allowing the page time to settle.
+  ///
+  /// A single look can catch the reader mid-repaint; a page that is really a
+  /// different one stays different however long you wait.
+  async function depictsSettled(render, target) {
+    let match = depicts(render, target);
+    for (const delay of MATCH_RETRY_MS) {
+      if (match.ok) return match;
+      await new Promise((resolve) => window.setTimeout(resolve, delay));
+      if (!target.isConnected) return match;
+      match = depicts(render, target);
+    }
+    return match;
+  }
+
   /// Whether a render depicts the page it is about to be bound to.
   ///
   /// Every other link in the chain — blob URL, page id, element identity — has
@@ -306,8 +331,9 @@
     for (const pageId of Array.from(entries.keys())) release(pageId);
   }
 
+  /// Whether a page has a render that has been checked against it.
   function has(pageId) {
-    return entries.has(String(pageId));
+    return entries.get(String(pageId))?.verified === true;
   }
 
   // Kindle shows one page at a time and reuses the same <img> across turns, so
