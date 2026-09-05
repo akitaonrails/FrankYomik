@@ -496,3 +496,102 @@ test('the module loads before the document has a head or body', () => {
   assert.equal(typeof env.window.FrankLens?.attach, 'function');
   assert.equal(env.window.FrankLens.state().enabled, true);
 });
+
+// --- taking the press, and giving taps back --------------------------------
+// Kindle starts selecting from the pointerdown itself, so nothing swallowed
+// afterwards stops the highlight menu. The press has to be taken before the
+// reader sees it, which means page turns have to be handed back by hand.
+
+function pressCapturing(images) {
+  const env = setup(images);
+  env.lens.setPressCapture(true);
+  return env;
+}
+
+test('a mouse press over a peekable page is taken from the reader', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = pressCapturing([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  const down = pointer('pointerdown', 200, 300);
+  fire('pointerdown', down);
+
+  assert.equal(down.propagationStopped, true);
+  assert.equal(down.defaultPrevented, true);
+});
+
+test('the compatibility mousedown is taken too', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = pressCapturing([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  const mouseDown = pointer('mousedown', 200, 300);
+  fire('mousedown', mouseDown);
+
+  assert.equal(mouseDown.propagationStopped, true,
+    'otherwise the reader starts the same gesture again');
+});
+
+test('a tap is handed back so the page still turns', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = pressCapturing([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(60);
+  fire('pointerup', pointer('pointerup', 200, 300));
+
+  const replayed = img.dispatched.filter((e) => e.frankSynthetic).map((e) => e.type);
+  assert.deepEqual(replayed, ['mousedown', 'mouseup', 'click']);
+  assert.equal(img.dispatched.at(-1).clientX, 200);
+});
+
+test('a peek is not handed back — that would turn the page', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = pressCapturing([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  assert.equal(lens.isOpen(), true);
+  fire('pointerup', pointer('pointerup', 200, 300));
+
+  assert.equal(img.dispatched.filter((e) => e.type === 'click').length, 0);
+});
+
+test('a replayed tap does not come back to us as a new press', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = pressCapturing([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(60);
+  fire('pointerup', pointer('pointerup', 200, 300));
+  await wait(260);
+
+  assert.equal(lens.isOpen(), false, 'the replay must not arm another hold');
+});
+
+test('touch presses are left alone, because scrolling cannot be handed back', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = pressCapturing([img]);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+
+  const down = pointer('pointerdown', 200, 300, { pointerType: 'touch' });
+  fire('pointerdown', down);
+
+  assert.equal(down.propagationStopped, undefined);
+  assert.equal(down.defaultPrevented, false);
+});
+
+test('without the opt-in the press is untouched', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = setup([img]);   // webtoon never opts in
+  await lens.attach(img, 'wt-0', DATA_URL);
+
+  const down = pointer('pointerdown', 200, 300);
+  fire('pointerdown', down);
+
+  assert.equal(down.propagationStopped, undefined);
+});

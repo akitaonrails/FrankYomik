@@ -109,11 +109,14 @@ Gesture rules that keep the reader usable:
   render lands while the press is still down, the lens opens under the pointer.
   Kindle marks the page on screen through `setActivePage`; webtoon marks each
   page as it is submitted.
-- The press that becomes a peek is let through, so the reader has already
-  started its own long-press selection by the time the lens opens. Opening
-  therefore dispatches a `pointercancel` at the page element and clears the
-  selection — otherwise releasing pops Kindle's highlight/copy/note menu over
-  the page. A tap that never becomes a peek is left entirely alone.
+- Kindle starts selecting from the press itself, so nothing swallowed after it
+  stops the highlight/copy/note menu: neither `preventDefault`, nor a
+  `pointercancel` at the page element, nor registering our listeners first at
+  `document_start` (all three were tried against a real reader). The extension
+  therefore takes the pointerdown before the reader sees it and hands a tap
+  back as a synthetic click, so pages still turn — mouse only, since a touch
+  press is also how the reader scrolls and swipes, and that cannot be handed
+  back. Only the Kindle strategy opts in; webtoon presses are untouched.
 - Kindle reuses the same `<img>` across page turns, so `setActivePage` releases
   the previous page's translation on every detection. Without it a peek could
   magnify the page the reader already left.

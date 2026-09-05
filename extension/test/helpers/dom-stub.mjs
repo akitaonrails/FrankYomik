@@ -154,6 +154,12 @@ export function loadContentScripts(scripts, images, options = {}) {
         onMessage: { addListener: (fn) => messageListeners.push(fn) },
       },
     },
+    MouseEvent: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        Object.assign(this, init);
+      }
+    },
     PointerEvent: class {
       constructor(type, init = {}) {
         this.type = type;

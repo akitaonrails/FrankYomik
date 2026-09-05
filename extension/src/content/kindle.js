@@ -102,6 +102,9 @@
     if (started) return;
     started = true;
     settings = nextSettings || {};
+    // Kindle begins selecting from the press itself, so the lens has to take
+    // mouse presses before the reader sees them and hand back the taps.
+    window.FrankLens?.setPressCapture?.(true);
     installListeners();
     window.setInterval(detectPageChange, DETECT_INTERVAL_MS);
     window.setTimeout(detectPageChange, 400);

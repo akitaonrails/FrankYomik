@@ -44,15 +44,20 @@
     target: null,
     suppressClick: false,
     suppressTimer: null,
-    // Set while we dispatch the cancel below. Capture phase starts at the
-    // window, so our own listeners see that event before the reader does.
+    // Set while we dispatch events of our own. Capture phase starts at the
+    // window, so our own listeners see them before the reader does.
     cancelling: false,
+    // Whether this press was taken from the reader before it saw it.
+    pressCaptured: false,
+    // Opt-in: only the Kindle strategy asks for this, and only mice get it.
+    pressCapture: false,
   };
 
   window.FrankLens = {
     attach,
     release,
     markPending,
+    setPressCapture,
     setActivePage,
     setZoom,
     setEnabled,
@@ -159,6 +164,43 @@
       if (registered !== id) release(registered);
     }
     if (state.open && state.target && state.target.dataset.frankLensPageId !== id) closeLens();
+  }
+
+  /// Take the press itself, not just what follows it.
+  ///
+  /// Kindle starts its long-press selection from the pointerdown, so nothing
+  /// swallowed afterwards can stop the highlight menu — the press has to not
+  /// reach it at all. A tap is then handed back as a synthetic click so pages
+  /// still turn. Mouse only: a touch press is also how the reader scrolls and
+  /// swipes, and those cannot be handed back.
+  function setPressCapture(enabled) {
+    state.pressCapture = !!enabled;
+  }
+
+  /// Give the reader back the tap we took.
+  function replayTap(x, y, target) {
+    const element = document.elementFromPoint?.(x, y) || target;
+    if (!element?.dispatchEvent || typeof MouseEvent !== 'function') return;
+    state.cancelling = true;
+    try {
+      for (const type of ['mousedown', 'mouseup', 'click']) {
+        const event = new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          detail: 1,
+          button: 0,
+          clientX: x,
+          clientY: y,
+        });
+        event.frankSynthetic = true;
+        element.dispatchEvent(event);
+      }
+    } catch {
+      // Replaying a tap is best effort; never break the peek over it.
+    } finally {
+      state.cancelling = false;
+    }
   }
 
   function setZoom(zoom) {
@@ -389,6 +431,9 @@
     state.startY = event.clientY;
     state.lastX = event.clientX;
     state.lastY = event.clientY;
+    // A mouse press over a page we can peek is ours from the start.
+    state.pressCaptured = state.pressCapture && event.pointerType === 'mouse';
+    if (state.pressCaptured) swallow(event);
     const { clientX, clientY, pointerType } = event;
     cancelHold();
     state.holdTimer = window.setTimeout(() => {
@@ -419,8 +464,19 @@
     if (state.pointerId !== null && event.pointerId !== state.pointerId) return;
     state.pointerId = null;
     const wasHolding = state.holding;
+    const captured = state.pressCaptured;
+    const target = state.target;
+    state.pressCaptured = false;
     endHold();
-    if (!wasHolding) return;
+
+    if (!wasHolding) {
+      // A tap: the reader never saw the press, so hand it back.
+      if (captured) {
+        swallow(event);
+        replayTap(event.clientX, event.clientY, target);
+      }
+      return;
+    }
     // The press was a peek, not a page turn: swallow what it would spawn.
     state.suppressClick = true;
     swallow(event);
@@ -435,6 +491,12 @@
   // turns pages on those as readily as on click.
   function onSyntheticMouse(event) {
     if (isOurs(event)) return;
+    // The compatibility mousedown would restart the very gesture the captured
+    // pointerdown was taken to prevent.
+    if (state.pressCaptured) {
+      swallow(event);
+      return;
+    }
     if (state.holding) {
       swallow(event);
       return;
