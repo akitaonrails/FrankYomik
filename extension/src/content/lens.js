@@ -54,9 +54,14 @@
   const entries = new Map();
 
   // Elements the reader knows are pages but that have no translation yet. A
-  // hold on one is still our gesture: it shows nothing, but it must not fall
-  // through and turn the page while the reader waits for the render.
-  const pending = new Set();
+  // hold on one is still our gesture: it shows a waiting ring, and must not
+  // fall through and turn the page while the reader waits for the render.
+  //
+  // Each carries the time it was marked. A page whose render never arrives
+  // stops promising one, because a ring that waits forever is a worse answer
+  // than nothing at all.
+  const pending = new Map();
+  const PENDING_TTL_MS = 90_000;
 
   const state = {
     enabled: true,
@@ -99,6 +104,7 @@
     attach,
     release,
     markPending,
+    clearPending,
     setPressCapture,
     setActivePage,
     setZoom,
@@ -304,10 +310,32 @@
   /// Note an element as a page whose translation has not arrived yet.
   function markPending(el) {
     if (!el) return;
-    pending.add(el);
+    pending.set(el, Date.now());
     while (pending.size > MAX_REGISTRATIONS) {
-      pending.delete(pending.values().next().value);
+      pending.delete(pending.keys().next().value);
     }
+  }
+
+  /// Pages still plausibly waiting on a render.
+  function stillPending() {
+    const now = Date.now();
+    const live = [];
+    for (const [el, since] of pending) {
+      if (now - since > PENDING_TTL_MS) pending.delete(el);
+      else live.push(el);
+    }
+    return live;
+  }
+
+  /// Nothing is coming: stop showing the waiting ring.
+  function clearPending() {
+    pending.clear();
+    if (state.holding && !state.open) endHoldQuietly();
+  }
+
+  function endHoldQuietly() {
+    state.pendingEl = null;
+    if (state.el) state.el.style.display = 'none';
   }
 
   function release(pageId) {
@@ -469,6 +497,7 @@
   /// The page under the pointer, and whether its translation is ready.
   function candidateAt(x, y) {
     const registered = [];
+    const awaiting = [];
     for (const [pageId, entry] of entries) {
       if (state.activePage && pageId !== state.activePage) continue;
       if (!stillMatches(entry)) {
@@ -476,11 +505,16 @@
         release(pageId);
         continue;
       }
+      if (!entry.verified) {
+        // Still being checked against the page: not yet something to show.
+        awaiting.push(entry.el);
+        continue;
+      }
       registered.push(entry.el);
     }
     const ready = smallestCovering(registered, x, y);
     if (ready) return { el: ready, ready: true };
-    const waiting = smallestCovering(pending, x, y);
+    const waiting = smallestCovering([...awaiting, ...stillPending()], x, y);
     return waiting ? { el: waiting, ready: false } : null;
   }
 

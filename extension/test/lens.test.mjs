@@ -857,3 +857,33 @@ test('a mismatch hands back a render the caller can still load', async () => {
   assert.ok(!env.revoked.includes(seen[0].renderUrl));
   assert.match(seen[0].natural, /^\d+x\d+$/, 'and says what the element holds');
 });
+
+test('a ring that nothing will fill stops being shown', async () => {
+  // A page whose render never arrives must stop promising one: a ring that
+  // waits forever is a worse answer than nothing, and it was left on screen
+  // permanently once submission gave up.
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = setup([img]);
+  lens.markPending(img);
+  lens.clearPending();
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+
+  assert.equal(lensElement(document)?.style.display ?? 'none', 'none',
+    'no ring once nothing is in flight');
+});
+
+test('a hold still in progress is ended when the wait is abandoned', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  assert.equal(lensElement(document).style.display, 'block', 'the ring is up');
+
+  lens.clearPending();
+
+  assert.equal(lensElement(document).style.display, 'none');
+});

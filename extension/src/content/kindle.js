@@ -221,6 +221,10 @@
       report('error',
         'The page keeps changing under each render; stopping until you turn a page.');
       autoSubmitPaused = true;
+      // Nothing is coming, so the reader should not be left holding on a ring
+      // that promises otherwise.
+      window.FrankLens?.clearPending?.();
+      window.FrankStatus?.set('failed');
       return;
     }
     report('info', 'The page changed while it was being translated; capturing it again.');
@@ -343,7 +347,6 @@
       if (dw < REPAINT_GEOMETRY_TOLERANCE && dh < REPAINT_GEOMETRY_TOLERANCE && now - lastEmitAt < REPAINT_SUPPRESS_MS) return;
     }
 
-    window.FrankStatus?.set('idle');
     lastBlob = blobSrc;
     lastRect = { width: rect.width, height: rect.height };
     lastEmitAt = now;
@@ -446,6 +449,7 @@
     if (!target) return;
     if (!await decoded(target, target.src) || !await settled(target)) {
       report('info', 'The page was still being laid out; leaving it for the next detection.');
+      window.FrankStatus?.set('idle');
       return;
     }
     if (!await decoded(target, target.src)) return;

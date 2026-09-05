@@ -491,3 +491,34 @@ test('state reports the page image it would capture', () => {
   const env = withHiddenNeighbour();
   assert.equal(env.kindle.state().pageImageFound, true);
 });
+
+// --- the status dot ---------------------------------------------------------
+// It reports where a page is: amber while translating, green once peekable,
+// red when refused. Kindle churns blobs several times a second, and resetting
+// the dot on every detection hid it before its fade-in ever finished.
+
+test('detecting a page does not hide the dot', async () => {
+  const env = setup();
+  const states = [];
+  env.window.FrankStatus = { set: (s) => states.push(s), alive: () => true };
+
+  await settle(600);
+
+  assert.ok(!states.includes('idle'),
+    `a new page should go straight to working, saw ${states.join(' -> ')}`);
+  assert.ok(states.includes('working'), 'and should say it is working');
+});
+
+test('giving up on a page shows that it failed', async () => {
+  const env = setup();
+  await settle(500);
+  const states = [];
+  env.window.FrankStatus = { set: (s) => states.push(s), alive: () => true };
+
+  for (let i = 0; i < 3; i++) {
+    env.window.FrankLens.__mismatch();
+    await settle(1400);
+  }
+
+  assert.ok(states.includes('failed'), `expected a failure state, saw ${states.join(' -> ')}`);
+});

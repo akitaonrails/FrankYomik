@@ -85,9 +85,19 @@ through a magnifier lens. Full-page replacement is still there as a mode.
 
 Two passive marks are made on the page, and nothing else: the magnifier, and a
 9px status dot in the corner — amber while a page is being translated, green
-when it can be peeked, red when the server refused it. Holding before a render
+when it can be peeked, red when it was given up on. Holding before a render
 arrives shows an empty pulsing ring, because a hold that returns nothing is
 indistinguishable from a broken lens.
+
+Both need care about *when* they stop:
+
+- The dot is not reset on detection. Kindle churns blob URLs several times a
+  second, and hiding the dot on each one meant it never survived its own
+  fade-in — which is why it appeared to do nothing at all.
+- The waiting ring is only shown for pages still plausibly waiting. A pending
+  mark expires, and giving up on a page clears it, because a ring that waits
+  for ever is a worse answer than no ring: it was left on screen permanently
+  once submission stopped.
 
 Where the pieces live:
 
