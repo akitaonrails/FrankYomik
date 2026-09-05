@@ -94,6 +94,13 @@ Both need care about *when* they stop:
 - The dot is not reset on detection. Kindle churns blob URLs several times a
   second, and hiding the dot on each one meant it never survived its own
   fade-in — which is why it appeared to do nothing at all.
+- Closing hides the element whether it was showing a render or the ring. The
+  ring never sets the "open" flag, so an early return on that flag left the
+  circle on screen after the reader let go.
+- The ring becomes the lens only once the render has been checked against the
+  page. Opening as soon as a render arrives means opening before it is known
+  to depict the page, and closing again when it turns out not to — which reads
+  as the lens flickering out from under the reader.
 - The waiting ring is only shown for pages still plausibly waiting. A pending
   mark expires, and giving up on a page clears it, because a ring that waits
   for ever is a worse answer than no ring: it was left on screen permanently

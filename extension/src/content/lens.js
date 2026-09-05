@@ -185,6 +185,13 @@
       const match = await depictsSettled(warm, target);
       if (match.ok) {
         entry.verified = true;
+        // If the reader is still holding on this page, waiting for it, the
+        // ring becomes the lens now — once the render is known to depict it,
+        // never before, or it opens only to be taken away again.
+        if (state.holding && !state.open && state.pendingEl === target) {
+          state.pendingEl = null;
+          openLens(state.lastX, state.lastY, target, state.pointerType);
+        }
         return;
       }
       // The render is of some other page. Showing it would be worse than
@@ -215,10 +222,6 @@
     });
     warm.src = url;
 
-    // The reader may already be holding on this page, waiting for it.
-    if (state.holding && !state.open && state.pendingEl === target) {
-      openLens(state.lastX, state.lastY, target, state.pointerType);
-    }
     return true;
   }
 
@@ -634,7 +637,9 @@
 
   function closeLens() {
     cancelHold();
-    if (!state.open) return;
+    // The element is hidden whether it was showing a render or the waiting
+    // ring: the ring never set `open`, so an early return here left it on
+    // screen after the reader had let go.
     state.open = false;
     state.target = null;
     if (state.el) state.el.style.display = 'none';

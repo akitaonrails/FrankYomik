@@ -887,3 +887,42 @@ test('a hold still in progress is ended when the wait is abandoned', async () =>
 
   assert.equal(lensElement(document).style.display, 'none');
 });
+
+test('releasing removes the waiting ring, not just the lens', async () => {
+  // closeLens used to return early when the lens was not "open" — which the
+  // ring never sets — so the circle stayed on screen after the reader let go.
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, document, fire, pointer } = setup([img]);
+  lens.markPending(img);
+
+  fire('pointerdown', pointer('pointerdown', 200, 300));
+  await wait(260);
+  assert.equal(lensElement(document).style.display, 'block', 'the ring is up');
+
+  fire('pointerup', pointer('pointerup', 200, 300));
+
+  assert.equal(lensElement(document).style.display, 'none',
+    'letting go must take the ring with it');
+});
+
+test('the ring becomes the lens only once the render is checked', async () => {
+  // Opening as soon as the render arrives means opening before it is known to
+  // depict the page — and then closing again when it turns out not to, which
+  // reads as the lens flickering out from under the reader.
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const env = loadContentScripts(['lens.js'], [img], {
+    pixels: { 'blob:page': 7, 'blob:frank-1': 31 },   // the render will be refused
+  });
+  const lens = env.window.FrankLens;
+  lens.markPending(img);
+
+  env.fire('pointerdown', env.pointer('pointerdown', 200, 300));
+  await wait(260);
+  await lens.attach(img, 'kindle-1', DATA_URL);
+  await wait(100);
+
+  const el = lensElement(env.document);
+  assert.equal(el.style.backgroundImage, 'none',
+    'a render that has not been checked must not be shown');
+  assert.match(el.style.animation, /frankLensWaiting/, 'the ring stays until it is');
+});
