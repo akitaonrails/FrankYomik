@@ -174,6 +174,13 @@
       // The render is of some other page. Showing it would be worse than
       // showing nothing: it reads as a translation of what is on screen.
       const rect = target.getBoundingClientRect();
+      onMismatch?.({
+        pageId,
+        difference: match.difference,
+        // The data URL, not the object URL: release() revokes the latter.
+        renderUrl: imageDataUrl,
+        natural: `${target.naturalWidth || '?'}x${target.naturalHeight || '?'}`,
+      });
       release(pageId);
       // An inverted render means the page's own text was redrawn — a manga
       // pipeline clearing balloons on a page that has none. Say so, because
@@ -186,14 +193,9 @@
         `Discarded a render that does not match its page (${pageId}). ${diagnosis} `
         + `[difference ${match.difference.toFixed(2)} of max ${SIGNATURE_TOLERANCE}, `
         + `render ${warm.naturalWidth}x${warm.naturalHeight}, `
-        + `page ${Math.round(rect.width)}x${Math.round(rect.height)}]`,
+        + `page ${Math.round(rect.width)}x${Math.round(rect.height)} `
+        + `natural ${target.naturalWidth || '?'}x${target.naturalHeight || '?'}]`,
       );
-      onMismatch?.({
-        pageId,
-        difference: match.difference,
-        // The render itself, so a caller can ask what it does match.
-        renderUrl: url,
-      });
     });
     warm.src = url;
 

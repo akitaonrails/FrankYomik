@@ -827,3 +827,21 @@ test('compare answers what a render actually matches', async () => {
   assert.ok(same <= 0.5, `the same page should compare low, got ${same}`);
   assert.ok(different > 0.5, `different pages should compare high, got ${different}`);
 });
+
+test('a mismatch hands back a render the caller can still load', async () => {
+  // release() revokes the object URL, so reporting one meant the caller's
+  // follow-up comparison silently loaded nothing and said nothing.
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const env = loadContentScripts(['lens.js'], [img], {
+    pixels: { 'blob:page': 7, 'blob:frank-1': 31 },
+  });
+  const seen = [];
+  env.window.FrankLens.onRenderMismatch((detail) => seen.push(detail));
+
+  await env.window.FrankLens.attach(img, 'kindle-1', DATA_URL);
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].renderUrl, DATA_URL, 'a data URL survives the release');
+  assert.ok(!env.revoked.includes(seen[0].renderUrl));
+  assert.match(seen[0].natural, /^\d+x\d+$/, 'and says what the element holds');
+});
