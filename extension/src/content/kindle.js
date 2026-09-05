@@ -181,7 +181,27 @@
   /// settling for seconds after a load — so the page that comes back is a real
   /// render of a page the reader has already left. Discarding it is right;
   /// leaving the reader with nothing is not. Capture what is on screen now.
-  function noteRenderMismatch() {
+  /// Which side of the mismatch is wrong.
+  ///
+  /// The render is compared against the image that was actually submitted. If
+  /// they match, the render is good and the page moved underneath it — a
+  /// reflowable book re-paginating while the job ran. If they do not, the
+  /// result belongs to some other capture entirely, which is a different bug
+  /// and worth saying so.
+  async function explainMismatch(detail) {
+    const captured = debugEntries.get(detail.pageId)?.originalDataUrl;
+    if (!captured || !detail.renderUrl || !window.FrankLens?.compare) return;
+    const difference = await window.FrankLens.compare(detail.renderUrl, captured);
+    if (difference === null) return;
+    report('info', difference <= 0.5
+      ? `The render matches the page that was submitted (${difference.toFixed(2)}), `
+        + 'so the reader moved on while it was being made.'
+      : `The render does not match the page that was submitted either `
+        + `(${difference.toFixed(2)}); it belongs to a different capture.`);
+  }
+
+  function noteRenderMismatch(detail = {}) {
+    explainMismatch(detail).catch(() => {});
     recaptures += 1;
     if (recaptures > MAX_RECAPTURES) {
       report('error',

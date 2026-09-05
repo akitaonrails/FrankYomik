@@ -88,6 +88,7 @@
     /// Called when a render turns out not to depict the page it was bound to,
     /// so a strategy can decide what that means for the book being read.
     onRenderMismatch(handler) { onMismatch = handler; },
+    compare,
     /// Test seam: the same call the render check makes when it discards one.
     __mismatch(detail = {}) { onMismatch?.({ pageId: 'test', ...detail }); },
     attach,
@@ -187,7 +188,12 @@
         + `render ${warm.naturalWidth}x${warm.naturalHeight}, `
         + `page ${Math.round(rect.width)}x${Math.round(rect.height)}]`,
       );
-      onMismatch?.({ pageId, difference: match.difference, inverted: match.inverted });
+      onMismatch?.({
+        pageId,
+        difference: match.difference,
+        // The render itself, so a caller can ask what it does match.
+        renderUrl: url,
+      });
     });
     warm.src = url;
 
@@ -196,6 +202,24 @@
       openLens(state.lastX, state.lastY, target, state.pointerType);
     }
     return true;
+  }
+
+  /// Compare two images by URL, using the same measure the binding check uses.
+  ///
+  /// Lets a caller ask the question that separates the two causes of a
+  /// mismatch: does the render match what was actually sent for translation?
+  function compare(urlA, urlB) {
+    const load = (url) => new Promise((resolve) => {
+      const image = new Image();
+      image.addEventListener('load', () => resolve(image));
+      image.addEventListener('error', () => resolve(null));
+      image.src = url;
+    });
+    return Promise.all([load(urlA), load(urlB)]).then(([a, b]) => {
+      if (!a || !b) return null;
+      const result = depicts(a, b);
+      return typeof result.difference === 'number' ? result.difference : null;
+    });
   }
 
   /// A coarse, brightness-independent fingerprint of what something looks like.

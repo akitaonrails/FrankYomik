@@ -811,3 +811,19 @@ test('an inverted render is named as a pipeline mismatch', async () => {
   assert.equal(env.window.FrankLens.has('kindle-1'), false);
   assert.match(warned.join(' '), /text book run through a manga pipeline/);
 });
+
+test('compare answers what a render actually matches', async () => {
+  // The measure that separates "the page moved" from "this is someone else's
+  // render": the same one the binding check uses, exposed for the caller.
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const env = loadContentScripts(['lens.js'], [img], {
+    pixels: { 'blob:a': 7, 'blob:b': 7, 'blob:c': 31 },
+  });
+  const lens = env.window.FrankLens;
+
+  const same = await lens.compare('blob:a', 'blob:b');
+  const different = await lens.compare('blob:a', 'blob:c');
+
+  assert.ok(same <= 0.5, `the same page should compare low, got ${same}`);
+  assert.ok(different > 0.5, `different pages should compare high, got ${different}`);
+});
