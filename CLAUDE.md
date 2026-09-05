@@ -42,6 +42,7 @@ There are three pipelines:
 - `client/lib/services/websocket_service.dart`: realtime progress/completion feed
 - `client/lib/providers/jobs_provider.dart`: job state, cache lookup, polling fallback
 - `client/lib/webview/js_bridge.dart`: JS handler registration and strategy selection
+- `client/lib/webview/lens_controller.dart`: magnifier lens — the default way translations are shown
 - `client/lib/webview/strategies/kindle_strategy.dart`: Kindle page detection and capture
 - `client/lib/webview/strategies/naver_webtoon_strategy.dart`: Naver detection and capture
 
@@ -64,6 +65,44 @@ There are three pipelines:
 2. `NaverWebtoonStrategy` discovers page images and reports them back to Dart.
 3. The client captures each image through JS `fetch()` first, then falls back to an app-side HTTP fetch if needed.
 4. The worker runs the webtoon pipeline and returns the translated image.
+
+## Reading modes (Flutter client)
+
+The client shows the **original** page by default and reveals the translation
+through a magnifier lens. Full-page replacement is still there as a mode.
+
+- **Lens (default)**: the reader's own image is never touched. A finished
+  translation is registered against the page element in `lens_controller.dart`
+  and revealed only under a circular magnifier. Press and hold for 200ms to
+  open it; it tracks the pointer and closes on release. Magnification cycles
+  through 1.5x / 2x / 3x from the in-page toolbar and persists in
+  `SharedPreferences` (`reader_lens_mode`, `reader_lens_zoom`).
+- **Full page**: the older behavior — `overlay_controller.dart` swaps
+  `img.src` for the translated render, with the reapply/recovery timers that
+  keep it stuck against Kindle repaints.
+
+Gesture rules that keep the reader usable:
+
+- A tap under 200ms is left alone, so Kindle page turns still work.
+- More than 12px of travel before the hold elapses reclassifies the press as a
+  scroll or swipe, so webtoon scrolling still works.
+- A peek swallows the `click`/`mouseup` it would otherwise spawn, so releasing
+  the lens does not also turn the page.
+- Kindle reuses the same `<img>` across page turns, so `setActivePage` releases
+  the previous page's translation on every detection. Without it a peek could
+  magnify the page the reader already left.
+
+The pipeline is unchanged: pages are still captured, queued and rendered the
+same way. Only the presentation differs.
+
+Behavior lives in the injected JS module inside `lens_controller.dart`, tested
+against a DOM stub in `client/test/js/lens_module.test.mjs` (run by
+`flutter test` through `client/test/lens_test.dart` when node is installed).
+
+**The Chromium extension does not have the lens yet** — it still swaps the full
+page. This is a deliberate, user-approved divergence from the sync rule below;
+port `lens_controller.dart` into `extension/src/content/` when the extension
+needs to match.
 
 ## Cache model
 

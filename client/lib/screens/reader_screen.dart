@@ -12,6 +12,7 @@ import '../services/image_capture_service.dart';
 import '../utils/kindle_priority.dart';
 import '../webview/dom_inspector.dart';
 import '../webview/js_bridge.dart';
+import '../webview/lens_controller.dart';
 import '../webview/overlay_controller.dart';
 import '../webview/platform/app_webview.dart';
 import '../webview/platform/app_webview_controller.dart';
@@ -57,12 +58,25 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   final _jsBridge = JsBridge();
   final _inspector = DomInspector();
   final _overlay = OverlayController();
+  final _lens = LensController();
   final _capture = ImageCaptureService();
 
   String _currentUrl = '';
   String _lastLoadStopUrl = '';
   final bool _inspectorMode = false;
   final bool _showOverlay = true;
+
+  /// Reading mode. In lens mode the original page stays on screen and the
+  /// translation is revealed through a long-press magnifier; in full mode the
+  /// translated render replaces the page image outright (the older behavior).
+  bool _lensMode = true;
+  double _lensZoom = 2.0;
+  static const _lensZoomSteps = <double>[1.5, 2.0, 3.0];
+  static const _lensModePrefKey = 'reader_lens_mode';
+  static const _lensZoomPrefKey = 'reader_lens_zoom';
+
+  /// Retry timers for lens registrations that landed mid-repaint.
+  final Map<String, List<Timer>> _lensRetryTimers = {};
 
   /// The pageId of the currently visible Kindle page (for overlay gating).
   String? _currentKindlePageId;
@@ -116,6 +130,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _kindlePipeline = ref.read(settingsProvider).pipeline;
+    _restoreLensPrefs();
+  }
+
+  Future<void> _restoreLensPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _lensMode = prefs.getBool(_lensModePrefKey) ?? true;
+      _lensZoom = prefs.getDouble(_lensZoomPrefKey) ?? 2.0;
+    });
+    _syncLensButtonState();
   }
 
   @override
@@ -125,6 +150,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _progressSyncTimer?.cancel();
     _kindleCaptureDebounceTimer?.cancel();
     _cancelKindleReapplies();
+    _cancelLensRetries();
     for (final sub in _completionListeners.values) {
       sub.close();
     }
@@ -182,6 +208,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               );
               _currentKindlePageId = null;
               _currentAsin = null;
+              _cancelLensRetries();
+              _lens.clear(controller);
               _kindleBlobByPageId.clear();
               _kindleRectByPageId.clear();
               _cancelKindleReapplies();
@@ -198,10 +226,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             _lastLoadStopUrl = urlStr;
             _jsBridge.onUrlChanged(controller, urlStr);
             _injectDesktopViewportFit(controller);
+            _lens.inject(controller).then((_) => _syncLensButtonState());
             // Sync toolbar button states after injection
             Future.delayed(const Duration(milliseconds: 500), () {
               _syncPipelineButtonState();
               _syncTranslateButtonState();
+              _syncLensButtonState();
             });
             if (_inspectorMode) {
               _inspector.inject(controller);
@@ -328,6 +358,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         _closeStaleKindleListeners(keepPageId: pageId);
       }
       _cancelKindleReapplies(keepPageId: pageId);
+      if (_currentKindlePageId != pageId) {
+        // Retarget the lens before the new page's translation lands, so a
+        // peek can never magnify the page the reader just turned away from.
+        final controller = _webController;
+        if (controller != null) {
+          _lens.setActivePage(controller, pageId);
+          _setLensReady(false);
+        }
+      }
       _currentKindlePageId = pageId;
       _lastKindlePageInfo = pageInfo;
       final blobSrc = pageInfo['imgSrc'] as String?;
@@ -930,6 +969,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         originalSrc = _detectedWebtoonPages[index]?['src'] as String?;
       }
       if (originalSrc != null && originalSrc.isNotEmpty) {
+        if (_lensMode) {
+          await _registerLens(
+            pageId: pageId,
+            imageBytes: imageBytes,
+            originalSrc: originalSrc,
+          );
+          return;
+        }
         try {
           await _overlay.replaceImageBySrc(
             controller,
@@ -960,6 +1007,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (_jsBridge.activeStrategy?.siteName != 'kindle') return;
     final expectedBlob = _kindleBlobByPageId[pageId];
     final expectedRect = _kindleRectByPageId[pageId];
+    if (_lensMode) {
+      // Nothing is swapped into the DOM, so none of the reapply/recovery
+      // machinery below applies: Kindle repainting the page cannot clobber a
+      // lens source the way it clobbers a replaced img.src.
+      await _registerLens(
+        pageId: pageId,
+        imageBytes: imageBytes,
+        expectedBlobSrc: expectedBlob,
+        expectedRect: expectedRect,
+      );
+      return;
+    }
     final overlayToken = 'ov-$pageId-${DateTime.now().millisecondsSinceEpoch}';
     final postStageOk = isSpread ? 'post_spread_ok' : 'post_ok';
     final postStageFail = isSpread ? 'post_spread_fail' : 'post_fail';
@@ -1085,6 +1144,133 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       imageBytes: stitched,
       isSpread: true,
     );
+  }
+
+  /// Hand a finished translation to the in-page lens.
+  ///
+  /// Registration binds the render to the DOM element it magnifies, so it can
+  /// fail while the reader is still painting; [_scheduleLensRetry] covers that.
+  Future<void> _registerLens({
+    required String pageId,
+    required Uint8List imageBytes,
+    String? expectedBlobSrc,
+    Map<String, num>? expectedRect,
+    String? originalSrc,
+    int attempt = 0,
+  }) async {
+    final controller = _webController;
+    if (controller == null) return;
+    if (attempt == 0) _cancelLensRetriesFor(pageId);
+
+    final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
+    var ok = false;
+    try {
+      ok = await _lens.register(
+        controller,
+        pageId: pageId,
+        imageBytes: imageBytes,
+        expectedBlobSrc: expectedBlobSrc,
+        expectedRect: expectedRect,
+        originalSrc: originalSrc,
+      );
+      if (!ok && expectedBlobSrc != null && attempt >= 1) {
+        // Kindle churns blob URLs during load; drop the anchor and take the
+        // best visible page image instead.
+        ok = await _lens.register(
+          controller,
+          pageId: pageId,
+          imageBytes: imageBytes,
+          expectedRect: expectedRect,
+          originalSrc: originalSrc,
+        );
+      }
+    } catch (e) {
+      debugPrint('[Lens] register threw: $e');
+    }
+
+    if (isKindle) {
+      if (ok) {
+        _kindleOverlayOk++;
+      } else {
+        _kindleOverlayFail++;
+      }
+      _pushKindleDebugHudToPage();
+    }
+    debugPrint(
+      '[Lens] $pageId register=${ok ? 'OK' : 'FAIL'} attempt=$attempt '
+      'bytes=${imageBytes.length}',
+    );
+    _logKindle('kindle_lens_register', {
+      'pageId': pageId,
+      'attempt': attempt,
+      'expectedBlob': expectedBlobSrc,
+      'success': ok,
+    });
+
+    if (ok) {
+      _setLensReady(true);
+      _updateInPageStatus(
+        'Lens ready — hold to peek',
+        clearAfter: const Duration(seconds: 2),
+      );
+      return;
+    }
+    _scheduleLensRetry(
+      pageId: pageId,
+      imageBytes: imageBytes,
+      expectedBlobSrc: expectedBlobSrc,
+      expectedRect: expectedRect,
+      originalSrc: originalSrc,
+      attempt: attempt,
+    );
+  }
+
+  /// Retry lens registration while the reader settles. Mirrors the overlay
+  /// recovery cadence: fast repaint, page-turn animation, lazy decode.
+  void _scheduleLensRetry({
+    required String pageId,
+    required Uint8List imageBytes,
+    String? expectedBlobSrc,
+    Map<String, num>? expectedRect,
+    String? originalSrc,
+    required int attempt,
+  }) {
+    const delays = <int>[200, 600, 1200];
+    if (attempt >= delays.length) return;
+    final timer = Timer(Duration(milliseconds: delays[attempt]), () {
+      if (!mounted) return;
+      if (_jsBridge.activeStrategy?.siteName == 'kindle' &&
+          _currentKindlePageId != pageId) {
+        return;
+      }
+      if (!_lensMode) return;
+      _registerLens(
+        pageId: pageId,
+        imageBytes: imageBytes,
+        expectedBlobSrc: expectedBlobSrc,
+        expectedRect: expectedRect,
+        originalSrc: originalSrc,
+        attempt: attempt + 1,
+      );
+    });
+    (_lensRetryTimers[pageId] ??= <Timer>[]).add(timer);
+  }
+
+  void _cancelLensRetries() {
+    for (final timers in _lensRetryTimers.values) {
+      for (final t in timers) {
+        t.cancel();
+      }
+    }
+    _lensRetryTimers.clear();
+  }
+
+  void _cancelLensRetriesFor(String pageId) {
+    final timers = _lensRetryTimers.remove(pageId);
+    if (timers == null) return;
+    for (final t in timers) {
+      t.cancel();
+    }
   }
 
   /// Kindle can repaint the visible page shortly after we replace the img src.
@@ -1289,6 +1475,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   bar.innerHTML =
     '<button id="__frankBack" title="Back">&#x2190;</button>' +
     '<button id="__frankPipeline" title="Switch pipeline" style="display:none;"></button>' +
+    '<button id="__frankMode" title="Reading mode: lens peek or full-page translation"></button>' +
+    '<button id="__frankZoom" title="Lens magnification"></button>' +
+    '<span id="__frankLensReady" title="Translation ready — hold on the page to peek" ' +
+      'style="display:none;font-size:13px;">&#x1F50D;</span>' +
     '<button id="__frankTranslate" title="Translate current page" style="display:none;">&#x1F30D; Translate</button>' +
     '<button id="__frankReload" title="Reload page">&#x21BB; Reload</button>' +
     '<button id="__frankCopyDbg" title="Copy debug" style="display:none;">Copy Debug</button>' +
@@ -1333,11 +1523,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   var backBtn = document.getElementById('__frankBack');
   var pipeBtn = document.getElementById('__frankPipeline');
   var translateBtn = document.getElementById('__frankTranslate');
+  var modeBtn = document.getElementById('__frankMode');
+  var zoomBtn = document.getElementById('__frankZoom');
   var reloadBtn = document.getElementById('__frankReload');
   var copyDbgBtn = document.getElementById('__frankCopyDbg');
   if (backBtn) backBtn.style.cssText = btnStyle;
   if (pipeBtn) pipeBtn.style.cssText = btnStyle + 'display:none;';
   if (translateBtn) translateBtn.style.cssText = btnStyle + 'display:none;';
+  if (modeBtn) modeBtn.style.cssText = btnStyle;
+  if (zoomBtn) zoomBtn.style.cssText = btnStyle;
   if (reloadBtn) reloadBtn.style.cssText = btnStyle;
   if (copyDbgBtn) copyDbgBtn.style.cssText = btnStyle + 'display:none;';
 
@@ -1366,6 +1560,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   if (translateBtn) translateBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     window.flutter_inappwebview.callHandler('onToolbarAction', 'translate');
+  });
+  if (modeBtn) modeBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'toggle_reader_mode');
+  });
+  if (zoomBtn) zoomBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    window.flutter_inappwebview.callHandler('onToolbarAction', 'cycle_lens_zoom');
   });
   if (reloadBtn) reloadBtn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -1412,6 +1614,25 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       el.style.color = '#64b5f6';
     }
   };
+  window.__frankSetReaderMode = function(isLens, zoomLabel) {
+    var el = document.getElementById('__frankMode');
+    if (el) {
+      el.textContent = isLens ? '\uD83D\uDD0D Lens' : 'Full page';
+      el.style.borderColor = isLens ? '#ffb74d' : 'rgba(255,255,255,0.3)';
+      el.style.color = isLens ? '#ffb74d' : '#fff';
+    }
+    var z = document.getElementById('__frankZoom');
+    if (z) {
+      z.textContent = zoomLabel || '2x';
+      z.style.display = isLens ? '' : 'none';
+    }
+    var ready = document.getElementById('__frankLensReady');
+    if (ready && !isLens) ready.style.display = 'none';
+  };
+  window.__frankSetLensReady = function(ready) {
+    var el = document.getElementById('__frankLensReady');
+    if (el) el.style.display = ready ? '' : 'none';
+  };
   window.__frankSetTranslateBtn = function(visible) {
     var el = document.getElementById('__frankTranslate');
     if (el) el.style.display = visible ? '' : 'none';
@@ -1444,6 +1665,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             break;
           case 'translate':
             _translateCurrentPage();
+            break;
+          case 'toggle_reader_mode':
+            _toggleReaderMode();
+            break;
+          case 'cycle_lens_zoom':
+            _cycleLensZoom();
             break;
           case 'reload':
             _reloadPage();
@@ -1491,6 +1718,102 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _kindleCaptureDebounceTimer?.cancel();
     if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
       _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
+    }
+  }
+
+  /// Switch between lens peeking and full-page translation.
+  void _toggleReaderMode() {
+    setState(() => _lensMode = !_lensMode);
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setBool(_lensModePrefKey, _lensMode);
+    });
+    _syncLensButtonState();
+    _cancelLensRetries();
+
+    final controller = _webController;
+    if (controller == null) return;
+    if (_lensMode) {
+      // Put the original artwork back before the lens takes over.
+      _overlay.restoreOriginals(controller);
+      _setLensReady(false);
+    } else {
+      _lens.clear(controller);
+    }
+    _updateInPageStatus(
+      _lensMode ? 'Lens mode — hold to peek' : 'Full-page translation',
+      clearAfter: const Duration(seconds: 2),
+    );
+    unawaited(_reapplyCurrentTranslations());
+  }
+
+  /// Cycle lens magnification through 1.5x / 2x / 3x.
+  void _cycleLensZoom() {
+    final idx = _lensZoomSteps.indexOf(_lensZoom);
+    final next = _lensZoomSteps[(idx + 1) % _lensZoomSteps.length];
+    setState(() => _lensZoom = next);
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setDouble(_lensZoomPrefKey, next);
+    });
+    _syncLensButtonState();
+    _updateInPageStatus(
+      'Lens ${_lensZoomLabel(next)}',
+      clearAfter: const Duration(seconds: 2),
+    );
+  }
+
+  String _lensZoomLabel(double zoom) =>
+      zoom == zoom.roundToDouble() ? '${zoom.toInt()}x' : '${zoom}x';
+
+  /// Push mode, zoom and gesture-arming state into the page.
+  void _syncLensButtonState() {
+    final controller = _webController;
+    if (controller == null) return;
+    controller.evaluateJavascript(
+      source:
+          'if(window.__frankSetReaderMode) window.__frankSetReaderMode('
+          "$_lensMode, '${_lensZoomLabel(_lensZoom)}');",
+    );
+    _lens.setZoom(controller, _lensZoom);
+    _lens.setEnabled(controller, _lensMode);
+  }
+
+  void _setLensReady(bool ready) {
+    _webController?.evaluateJavascript(
+      source: 'if(window.__frankSetLensReady) window.__frankSetLensReady($ready);',
+    );
+  }
+
+  /// Re-run overlay application for whatever is already translated, so a mode
+  /// switch takes effect on the page in front of the reader.
+  Future<void> _reapplyCurrentTranslations() async {
+    final jobs = ref.read(jobsProvider);
+    final pageId = _currentKindlePageId;
+    if (pageId != null) {
+      if (pageId.endsWith('-spread')) {
+        final left = jobs['$pageId-L'];
+        final right = jobs['$pageId-R'];
+        if (left?.translatedImage != null && right?.translatedImage != null) {
+          await _applySpreadOverlay(
+            pageId,
+            left!.translatedImage!,
+            right!.translatedImage!,
+          );
+        }
+        return;
+      }
+      final job = jobs[pageId];
+      if (job?.translatedImage != null) {
+        await _applyOverlay(pageId, job!.translatedImage!);
+      }
+      return;
+    }
+    for (final info in _detectedWebtoonPages.values) {
+      final id = info['pageId'] as String?;
+      if (id == null) continue;
+      final job = jobs[id];
+      if (job?.translatedImage != null) {
+        await _applyOverlay(id, job!.translatedImage!);
+      }
     }
   }
 

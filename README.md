@@ -39,7 +39,7 @@ Image → EasyOCR text detection → cluster into bubbles → Ollama translation
 
 The protected debug API can also store original/translated page pairs uploaded from the Chromium extension. List recent pairs with `GET /api/v1/debug/pages`.
 
-**Flutter client**: Wraps Kindle (read.amazon.co.jp) and Naver Webtoon in a WebView, captures pages, submits them to the API, and overlays translated images in real-time. Supports auto-translate or manual translate-on-demand, per-volume pipeline selection (furigana vs English), and local SQLite caching.
+**Flutter client**: Wraps Kindle (read.amazon.co.jp) and Naver Webtoon in a WebView, captures pages, submits them to the API, and reveals the translation through a magnifier lens — the original page stays on screen and a 200ms press-and-hold peeks at the translated render underneath (1.5x/2x/3x), with full-page replacement available as a mode. Supports auto-translate or manual translate-on-demand, per-volume pipeline selection (furigana vs English), and local SQLite caching.
 
 **Chromium extension**: Runs on desktop Chrome/Chromium, Brave, and Edge. It keeps Kindle and Naver pages visually close to stock: the content script detects the current page image, sends it to your self-hosted server, then swaps in the completed translated/furigana image. All settings live in the extension popup; the bearer token stays in the extension service worker and is never exposed to page scripts.
 

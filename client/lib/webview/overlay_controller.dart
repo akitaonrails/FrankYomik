@@ -70,6 +70,7 @@ class OverlayController {
   var blob = new Blob([bytes], { type: 'image/png' });
   var blobUrl = URL.createObjectURL(blob);
 
+  if (!img.dataset.frankOriginalSrc && img.src) img.dataset.frankOriginalSrc = img.src;
   img.src = blobUrl;
   img.dataset.frankTranslated = 'true';
   if ('${pageId ?? ''}') img.dataset.frankPageId = '${pageId ?? ''}';
@@ -282,6 +283,9 @@ class OverlayController {
   var blobUrl = URL.createObjectURL(blob);
   console.log('[Frank] Created blob: ' + blobUrl + ' (' + binary.length + ' bytes)');
 
+  if (!target.dataset.frankOriginalSrc && target.src) {
+    target.dataset.frankOriginalSrc = target.src;
+  }
   target.src = blobUrl;
   target.dataset.frankTranslated = 'true';
   if ('${pageId ?? ''}') target.dataset.frankPageId = '${pageId ?? ''}';
@@ -686,6 +690,37 @@ class OverlayController {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Put the reader's own images back after a full-page swap.
+  ///
+  /// Only elements that recorded a `frankOriginalSrc` can be restored; a page
+  /// the reader has since repainted on its own needs nothing from us.
+  Future<int> restoreOriginals(AppWebViewController controller) async {
+    final result = await controller.evaluateJavascript(
+      source: '''
+(function() {
+  var imgs = document.querySelectorAll('img[data-frank-translated="true"]');
+  var restored = 0;
+  for (var i = 0; i < imgs.length; i++) {
+    var img = imgs[i];
+    var original = img.dataset.frankOriginalSrc;
+    if (!original) continue;
+    img.src = original;
+    delete img.dataset.frankTranslated;
+    delete img.dataset.frankTranslatedSrc;
+    delete img.dataset.frankOverlayToken;
+    img.style.outline = '';
+    img.style.outlineOffset = '';
+    restored++;
+  }
+  return restored;
+})();
+''',
+    );
+    final count = result is num ? result.toInt() : int.tryParse('$result') ?? 0;
+    debugPrint('[Overlay] restored $count original image(s)');
+    return count;
   }
 
   /// Legacy index-based replace (kept for non-webtoon use).
