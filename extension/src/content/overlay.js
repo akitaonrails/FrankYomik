@@ -12,17 +12,89 @@
   const RECT_SIZE_PENALTY = 500_000;
   const COMPOSITOR_NUDGE_OPACITY = '0.999';
 
-  const objectUrls = new Set();
+  // pageId -> object URL handed to an <img> in full-page mode. Tracked per
+  // page so a long session can drop the renders it no longer shows instead of
+  // holding every translated page until the tab closes.
+  const objectUrls = new Map();
+  const MAX_RETAINED_PAGES = 8;
 
-  window.addEventListener('pagehide', () => {
-    for (const url of objectUrls) URL.revokeObjectURL(url);
-    objectUrls.clear();
-  });
+  let readerMode = 'lens';
+
+  window.addEventListener('pagehide', releaseAll);
 
   window.FrankOverlay = {
     applyKindleResult,
     applyWebtoonResult,
+    applyReaderPreferences,
+    restoreOriginals,
+    releasePagesExcept,
+    isLensMode: () => readerMode === 'lens',
+    retainedPages: () => Array.from(objectUrls.keys()),
   };
+
+  /// Reading mode and magnification come from extension settings.
+  function applyReaderPreferences(preferences = {}) {
+    const nextMode = preferences.readerMode === 'full' ? 'full' : 'lens';
+    const changed = nextMode !== readerMode;
+    readerMode = nextMode;
+
+    window.FrankLens?.setZoom(preferences.lensZoom ?? 2);
+    window.FrankLens?.setEnabled(readerMode === 'lens');
+    if (!changed) return;
+    if (readerMode === 'lens') {
+      // Put the reader's own artwork back before the lens takes over.
+      restoreOriginals();
+    } else {
+      window.FrankLens?.clear();
+    }
+  }
+
+  /// Undo full-page swaps. Only images that recorded an original can be
+  /// restored; anything the reader has since repainted needs nothing from us.
+  function restoreOriginals() {
+    let restored = 0;
+    for (const img of document.querySelectorAll('img[data-frank-translated="true"]')) {
+      const original = img.dataset.frankOriginalSrc;
+      if (!original) continue;
+      img.src = original;
+      delete img.dataset.frankTranslated;
+      delete img.dataset.frankTranslatedSrc;
+      restored += 1;
+    }
+    releaseAll();
+    return restored;
+  }
+
+  function releasePage(pageId) {
+    const url = objectUrls.get(pageId);
+    if (!url) return;
+    URL.revokeObjectURL(url);
+    objectUrls.delete(pageId);
+  }
+
+  /// Drop every retained render except [pageId] — Kindle shows one page at a
+  /// time, so the rest are dead weight the moment the reader turns.
+  function releasePagesExcept(pageId) {
+    for (const retained of Array.from(objectUrls.keys())) {
+      if (retained !== pageId) releasePage(retained);
+    }
+    window.FrankLens?.setActivePage(pageId);
+  }
+
+  function releaseAll() {
+    for (const url of objectUrls.values()) URL.revokeObjectURL(url);
+    objectUrls.clear();
+  }
+
+  /// Webtoon keeps several pages on screen at once, so retention is bounded by
+  /// count rather than by which page is active.
+  function retain(pageId, url) {
+    releasePage(pageId);
+    objectUrls.set(pageId, url);
+    while (objectUrls.size > MAX_RETAINED_PAGES) {
+      releasePage(objectUrls.keys().next().value);
+    }
+  }
 
   async function applyKindleResult(result) {
     if (!result?.imageDataUrl) return false;
@@ -30,12 +102,22 @@
     const target = findKindleTarget(capture, result.pageId);
     if (!target) return false;
 
+    if (!target.dataset.frankOriginalSrc && target.src) target.dataset.frankOriginalSrc = capture.imgSrc || target.src;
+
+    if (readerMode === 'lens') {
+      // The page keeps showing the original; only the magnifier reveals the
+      // translation, so nothing is swapped into the DOM here.
+      return window.FrankLens
+        ? window.FrankLens.attach(target, result.pageId, result.imageDataUrl)
+        : false;
+    }
+
     if (target.dataset.frankPageId === result.pageId && target.dataset.frankTranslatedSrc) {
       return true;
     }
 
-    if (!target.dataset.frankOriginalSrc && target.src) target.dataset.frankOriginalSrc = capture.imgSrc || target.src;
     const blobUrl = await objectUrlFromDataUrl(result.imageDataUrl);
+    retain(result.pageId, blobUrl);
     target.src = blobUrl;
     target.dataset.frankTranslated = 'true';
     target.dataset.frankPageId = result.pageId || '';
@@ -98,7 +180,15 @@
     const img = findWebtoonTarget(result.pageId, capture.originalSrc, capture.index);
     if (!img) return false;
     if (!img.dataset.frankOriginalSrc && (capture.originalSrc || img.src)) img.dataset.frankOriginalSrc = capture.originalSrc || img.src;
+
+    if (readerMode === 'lens') {
+      return window.FrankLens
+        ? window.FrankLens.attach(img, result.pageId, result.imageDataUrl)
+        : false;
+    }
+
     const blobUrl = await objectUrlFromDataUrl(result.imageDataUrl);
+    retain(result.pageId, blobUrl);
     img.src = blobUrl;
     img.dataset.frankTranslated = 'true';
     img.dataset.frankPageId = result.pageId || '';
@@ -195,9 +285,7 @@
   async function objectUrlFromDataUrl(dataUrl) {
     const response = await fetch(dataUrl);
     const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    objectUrls.add(objectUrl);
-    return objectUrl;
+    return URL.createObjectURL(blob);
   }
 
   function nudgeCompositor(img) {

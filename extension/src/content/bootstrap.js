@@ -30,6 +30,9 @@
   }
 
   function handleSettings(settings) {
+    // Reading mode applies even before a strategy starts, so a mode change
+    // while the reader is open takes effect without a reload.
+    applyReaderPreferences(settings);
     if (!settings.configured) {
       console.info('[Frank] extension is installed but not configured');
       scheduleRetry();
@@ -56,6 +59,24 @@
     console.info(`[Frank] ${site} extension bootstrap ready; strategy not loaded yet`);
     scheduleRetry();
   }
+
+  function applyReaderPreferences(settings) {
+    window.FrankOverlay?.applyReaderPreferences({
+      readerMode: settings.readerMode,
+      lensZoom: settings.lensZoom,
+    });
+  }
+
+  // Settings live in extension storage; watching it keeps the lens in step
+  // with the options page without another message round trip.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'sync' && area !== 'local') return;
+    if (!Object.prototype.hasOwnProperty.call(changes, 'frankSettings')) return;
+    chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (response) => {
+      if (chrome.runtime.lastError || !response?.ok) return;
+      applyReaderPreferences(response.settings || {});
+    });
+  });
 
   function scheduleRetry() {
     if (retryTimer) return;

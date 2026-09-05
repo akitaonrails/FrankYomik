@@ -11,6 +11,8 @@ const fields = {
   mangaPipeline: document.querySelector('#manga-pipeline'),
   targetLanguage: document.querySelector('#target-language'),
   webtoonPrefetch: document.querySelector('#webtoon-prefetch'),
+  readerMode: document.querySelector('#reader-mode'),
+  lensZoom: document.querySelector('#lens-zoom'),
 };
 const activeJobsEl = document.querySelector('#active-jobs');
 const diagnosticsListEl = document.querySelector('#diagnostics-list');
@@ -158,6 +160,8 @@ function applySettings(settings) {
   fields.mangaPipeline.value = settings.mangaPipeline || 'manga_translate';
   fields.targetLanguage.value = settings.targetLanguage || 'en';
   fields.webtoonPrefetch.value = settings.webtoonPrefetch || 'nearby';
+  fields.readerMode.value = settings.readerMode || 'lens';
+  fields.lensZoom.value = String(settings.lensZoom ?? 2);
 }
 
 function readSettings() {
@@ -169,6 +173,8 @@ function readSettings() {
     mangaPipeline: fields.mangaPipeline.value,
     targetLanguage: fields.targetLanguage.value,
     webtoonPrefetch: fields.webtoonPrefetch.value,
+    readerMode: fields.readerMode.value,
+    lensZoom: Number(fields.lensZoom.value),
   };
 }
 

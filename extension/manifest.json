@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Frank Yomik",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Translate Kindle and Naver Webtoon pages through a self-hosted Frank Yomik server.",
   "icons": {
     "16": "assets/icons/icon-16.png",
@@ -51,6 +51,7 @@
         "https://read.kindle.co.jp/*"
       ],
       "js": [
+        "src/content/lens.js",
         "src/content/overlay.js",
         "src/content/kindle.js",
         "src/content/bootstrap.js"
@@ -64,6 +65,7 @@
         "https://m.comic.naver.com/*"
       ],
       "js": [
+        "src/content/lens.js",
         "src/content/overlay.js",
         "src/content/webtoon.js",
         "src/content/bootstrap.js"

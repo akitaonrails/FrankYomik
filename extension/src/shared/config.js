@@ -6,6 +6,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   mangaPipeline: 'manga_translate',
   targetLanguage: 'en',
   webtoonPrefetch: 'nearby',
+  readerMode: 'lens',
+  lensZoom: 2,
 });
 
 export const STORAGE_KEYS = Object.freeze({
@@ -18,6 +20,8 @@ export const KINDLE_HOSTS = new Set(['read.amazon.co.jp', 'read.kindle.co.jp']);
 export const NAVER_WEBTOON_HOSTS = new Set(['comic.naver.com', 'm.comic.naver.com']);
 export const VALID_TARGET_LANGUAGES = new Set(['en', 'pt-br']);
 export const VALID_MANGA_PIPELINES = new Set(['manga_translate', 'manga_furigana']);
+export const VALID_READER_MODES = new Set(['lens', 'full']);
+export const VALID_LENS_ZOOMS = Object.freeze([1.5, 2, 3]);
 
 export function normalizeSettings(raw = {}) {
   return {
@@ -31,7 +35,14 @@ export function normalizeSettings(raw = {}) {
       : 'nearby',
     kindleEnabled: raw.kindleEnabled !== false,
     webtoonEnabled: raw.webtoonEnabled !== false,
+    readerMode: raw.readerMode === 'full' ? 'full' : 'lens',
+    lensZoom: normalizeLensZoom(raw.lensZoom),
   };
+}
+
+export function normalizeLensZoom(value) {
+  const zoom = Number(value);
+  return VALID_LENS_ZOOMS.includes(zoom) ? zoom : 2;
 }
 
 export function normalizeApiBaseUrl(value) {

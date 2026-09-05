@@ -2,11 +2,21 @@
 
 Manifest V3 extension for using a self-hosted Frank Yomik server from desktop Chrome/Chromium.
 
-The extension intentionally keeps Kindle and Naver pages close to vanilla: it does not add in-page buttons, panels, HUDs, or settings overlays. Controls live in the extension popup/options page. Content scripts only detect/capture page images and replace the page image after a translated result is ready.
+The extension intentionally keeps Kindle and Naver pages close to vanilla: it does not add in-page buttons, panels, HUDs, or settings overlays. Controls live in the extension popup/options page. Content scripts only detect and capture page images, and present the translated result.
+
+## Reading modes
+
+By default the page is left in its original language and the translation is revealed through a magnifier lens: **press and hold for 200ms** anywhere on a translated page and a circular lens follows the pointer until you let go. It is meant for reading in Japanese or Korean and peeking only at the balloon you cannot parse.
+
+- A quick tap is untouched, so Kindle still turns pages and webtoons still scroll.
+- The magnification (1.5x / 2x / 3x) and the mode are set in the popup and apply immediately, without reloading the page.
+- **Full page** mode is the older behavior: the translated render replaces the page image.
+
+The lens is the only element the extension puts on the page, it appears only while you hold, and it disappears on release.
 
 ![Frank Yomik extension popup on Amazon Manga](docs/chromium-extension-popup.png)
 
-The popup configures the self-hosted API URL, bearer token, enabled sites, manga pipeline, target language, and webtoon prefetch behavior. Settings autosave when you leave a field or change a checkbox/select; **Save now** is retained as a fallback and to trigger browser permission prompts when needed.
+The popup configures the self-hosted API URL, bearer token, enabled sites, manga pipeline, target language, reading mode, lens magnification, and webtoon prefetch behavior. Settings autosave when you leave a field or change a checkbox/select; **Save now** is retained as a fallback and to trigger browser permission prompts when needed.
 
 ![Kindle page translated by the Chromium extension](docs/kindle-extension-translation.png)
 
@@ -48,7 +58,7 @@ Use this path when you only want to install the extension, not develop it.
 9. Set:
    - API base URL, for example `https://frank.example.net` or a trusted-LAN URL.
    - auth token matching server `AUTH_TOKEN`.
-   - enabled sites, manga pipeline, target language, and webtoon prefetch settings.
+   - enabled sites, manga pipeline, target language, reading mode, lens magnification, and webtoon prefetch settings.
 10. Leave each field or click **Save now** to save, then allow the exact API-origin permission when Chromium asks.
 11. Click **Check server**.
 12. Reload any Kindle/Naver tabs that were already open before installing or updating the extension.

@@ -36,3 +36,18 @@ test('normalizeSettings clamps enum-like settings to supported values', () => {
   assert.equal(settings.kindleEnabled, false);
   assert.equal(settings.webtoonEnabled, true);
 });
+
+test('normalizeSettings defaults to lens reading at 2x', () => {
+  const settings = normalizeSettings({});
+  assert.equal(settings.readerMode, 'lens');
+  assert.equal(settings.lensZoom, 2);
+});
+
+test('normalizeSettings clamps reader mode and magnification', () => {
+  assert.equal(normalizeSettings({ readerMode: 'full' }).readerMode, 'full');
+  assert.equal(normalizeSettings({ readerMode: 'sideways' }).readerMode, 'lens');
+  assert.equal(normalizeSettings({ lensZoom: 1.5 }).lensZoom, 1.5);
+  assert.equal(normalizeSettings({ lensZoom: 3 }).lensZoom, 3);
+  assert.equal(normalizeSettings({ lensZoom: 12 }).lensZoom, 2);
+  assert.equal(normalizeSettings({ lensZoom: 'huge' }).lensZoom, 2);
+});

@@ -1,13 +1,13 @@
 {
   "name": "frank-yomik-extension",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "test": "npm run validate && npm run check:js && npm run test:unit",
     "test:unit": "node --test test/*.test.mjs",
     "validate": "node scripts/validate.mjs",
-    "check:js": "node --check src/background/service_worker.js && node --check src/options/options.js && node --check src/content/bootstrap.js && node --check src/content/kindle.js && node --check src/content/webtoon.js && node --check src/content/overlay.js && node --check src/shared/config.js && node --check src/shared/policy.js && node --check test/config.test.mjs && node --check test/policy.test.mjs",
+    "check:js": "node --check src/background/service_worker.js && node --check src/options/options.js && node --check src/content/bootstrap.js && node --check src/content/lens.js && node --check src/content/kindle.js && node --check src/content/webtoon.js && node --check src/content/overlay.js && node --check src/shared/config.js && node --check src/shared/policy.js && node --check test/config.test.mjs && node --check test/policy.test.mjs && node --check test/lens.test.mjs && node --check test/overlay.test.mjs && node --check test/helpers/dom-stub.mjs",
     "package": "node scripts/package.mjs"
   }
 }
