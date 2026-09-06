@@ -1,7 +1,7 @@
 {
   "name": "frank-yomik-extension",
   "private": true,
-  "version": "0.5.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "test": "npm run validate && npm run check:js && npm run test:unit && npm run test:browser",
