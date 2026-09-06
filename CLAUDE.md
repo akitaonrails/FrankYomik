@@ -279,8 +279,11 @@ from metadata — there are no editable regions, only gutter annotations.
 Which pipeline a Kindle title needs cannot be told from the page, since manga
 and prose arrive the same way, so the reader chooses, and both clients remember
 the choice per volume (ASIN): the Flutter toolbar cycles Furigana -> English ->
-Book, and the extension popup has "Pipeline for this book" under Current page.
-The global setting is the default for volumes that have not been given one.
+Book, and the extension's popup has one pipeline select whose meaning follows
+the reader — with a Kindle book open it sets that book's pipeline and the hint
+names the book, otherwise it sets the default new books start from. A second,
+separate per-book control was tried first and was worse: readers changed the
+obvious one at the top, which was still global.
 Without per-volume memory, moving from a novel to a manga left the manga on the
 book pipeline, and the server refused every page of it.
 

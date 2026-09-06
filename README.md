@@ -36,6 +36,12 @@ the page, so the reader underneath keeps working as it always did.
 Full-page replacement is still there as a mode, in both the app and the
 extension, for when you would rather read the translation outright.
 
+While a page is being translated, a small dot in the corner says where it is —
+amber while it works, green once it can be peeked, red if it could not be
+translated — with a few words on each change. Holding before a translation
+arrives shows the magnifier as an empty ring rather than nothing, so waiting is
+distinguishable from broken.
+
 ## Components
 
 | Directory | Language | Description |
@@ -301,7 +307,7 @@ This is a one-time setup. Future updates signed with the same key install withou
 ```bash
 cd server
 
-# Python unit tests (442 tests)
+# Python unit tests (444 tests)
 .venv/bin/pytest tests/unit/ -v
 
 # Python integration tests (34 tests, needs test images in docs/)
@@ -310,12 +316,19 @@ cd server
 # Go API tests (needs Redis for full coverage, skips gracefully without it)
 go test -v .
 
-# Flutter tests (78 tests; the lens suite needs node)
+# Flutter tests (82 tests; the lens suite needs node)
 cd ../client && flutter test
 
-# Chromium extension (74 tests, plus manifest validation)
+# Chromium extension (134 unit + 14 browser tests, plus manifest validation)
 cd ../extension && npm test
 ```
+
+The extension's browser tests drive a real headless Chromium over the DevTools
+protocol — no dependencies, and skipped automatically where no Chromium is
+installed. They cover the things a DOM stub cannot judge: whether the reader's
+own handlers still fire during a peek, whether a page and its translation are
+recognised as the same page once reduced to a signature, and whether the status
+indicator can actually be seen.
 
 ## Configuration
 
