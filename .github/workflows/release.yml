@@ -279,6 +279,13 @@ jobs:
         with:
           node-version: "20"
 
+      # The browser tests answer questions a DOM stub cannot; without a
+      # driveable browser they skip, so give the runner one.
+      - name: Install Chromium for browser tests
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
       - name: Test extension
         working-directory: extension
         run: npm test

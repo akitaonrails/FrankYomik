@@ -8,14 +8,41 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 
 const CHROMIUM_CANDIDATES = [
+  process.env.CHROME_PATH,          // what setup-chrome and similar tools set
   '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
   '/usr/bin/google-chrome',
   '/usr/bin/google-chrome-stable',
-];
+].filter(Boolean);
 
 export function chromiumPath() {
   return CHROMIUM_CANDIDATES.find(existsSync) ?? null;
+}
+
+let usable = null;
+
+/// Whether a browser is present *and* can actually be driven here.
+///
+/// A binary existing is not the same as being usable: a sandboxed or
+/// containerised runner may have Chrome installed and still refuse to expose a
+/// debugging port. These tests are an instrument for questions a DOM stub
+/// cannot answer, not a gate on every environment, so an undriveable browser
+/// skips them rather than failing the build. Locally, where they earn their
+/// keep, a real failure still fails.
+export async function browserUsable() {
+  if (usable !== null) return usable;
+  if (!chromiumPath()) {
+    usable = false;
+    return usable;
+  }
+  try {
+    const answer = await inBrowser(() => 1 + 1, {}, { timeoutMs: 20_000 });
+    usable = answer === 2;
+  } catch (error) {
+    console.warn(`[browser tests] skipped: ${error.message}`);
+    usable = false;
+  }
+  return usable;
 }
 
 /// Run one function inside a real browser page and return its result.

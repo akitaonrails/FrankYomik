@@ -92,6 +92,11 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install Chromium for browser tests
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
       - name: Run extension tests
         working-directory: extension
         run: npm test

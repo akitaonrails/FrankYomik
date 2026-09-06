@@ -175,7 +175,10 @@ cost the most today were exactly those. `extension/test/browser/` covers them:
   does still reach it.
 
 Browser tests run serially (`--test-concurrency=1`); several Chromium instances
-at once made them flaky.
+at once made them flaky. They skip when no browser can be *driven* — a binary
+existing is not the same thing, and a runner with Chrome installed but no
+usable debugging port should not fail a release over an instrument. CI installs
+a browser so they actually run rather than quietly skipping.
 
  `extension/test/browser/`
 drives a real headless Chromium over the DevTools protocol — no dependencies,

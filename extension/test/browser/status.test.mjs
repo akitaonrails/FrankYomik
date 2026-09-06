@@ -9,11 +9,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { chromiumPath, inBrowser } from './chromium.mjs';
+import { browserUsable, inBrowser } from './chromium.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, '../../src/content/status.js'), 'utf8');
-const available = Boolean(chromiumPath());
+const available = await browserUsable();
 
 /// Drive the indicator through states and report what is on screen after each.
 function observe(states) {

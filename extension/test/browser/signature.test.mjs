@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { chromiumPath, inBrowser } from './chromium.mjs';
+import { browserUsable, inBrowser } from './chromium.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const lensSource = readFileSync(join(here, '../../src/content/lens.js'), 'utf8');
@@ -37,7 +37,7 @@ async function measure(a, b) {
   }, { source: lensSource, imageA: a, imageB: b });
 }
 
-const available = Boolean(chromiumPath());
+const available = await browserUsable();
 
 test('a page and its own render are recognised as the same page', { skip: !available }, async () => {
   const difference = await measure(dataUrl('page.png'), dataUrl('render-of-page.png'));

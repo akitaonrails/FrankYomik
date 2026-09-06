@@ -10,11 +10,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { chromiumPath, withRealInput } from './chromium.mjs';
+import { browserUsable, withRealInput } from './chromium.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const lensSource = readFileSync(join(here, '../../src/content/lens.js'), 'utf8');
-const available = Boolean(chromiumPath());
+const available = await browserUsable();
 
 /// A page holding one image, with the lens installed and a reader-like
 /// listener counting what reaches the page.
