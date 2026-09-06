@@ -374,7 +374,7 @@
     // and the previous render is released instead of accumulating.
     window.FrankOverlay?.releasePagesExcept(pageId, target);
     if (autoSubmitPaused) return;
-    window.FrankStatus?.set('working');
+    window.FrankStatus?.set('capturing');
     scheduleSubmit(detection);
   }
 
@@ -535,6 +535,8 @@
       force,
     });
     if (!response?.ok) throw new Error(response?.error || 'submit failed');
+    // Handed to the server: from here the wait is theirs, not ours.
+    if (response.status !== 'completed') window.FrankStatus?.set('queued');
     report('info', `Kindle capture submitted: ${pageId} (${response.status || 'unknown'})`);
     return response;
   }

@@ -505,8 +505,8 @@ test('detecting a page does not hide the dot', async () => {
   await settle(600);
 
   assert.ok(!states.includes('idle'),
-    `a new page should go straight to working, saw ${states.join(' -> ')}`);
-  assert.ok(states.includes('working'), 'and should say it is working');
+    `a new page should go straight to capturing, saw ${states.join(' -> ')}`);
+  assert.ok(states.includes('capturing'), 'and should say it is capturing');
 });
 
 test('giving up on a page shows that it failed', async () => {

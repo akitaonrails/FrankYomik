@@ -160,7 +160,24 @@ Gesture rules that keep the reader usable:
 The pipeline is unchanged: pages are still captured, queued and rendered the
 same way. Only the presentation differs.
 
-Some behaviour cannot be judged outside a browser. `extension/test/browser/`
+Some behaviour cannot be judged outside a browser, and the assumptions that
+cost the most today were exactly those. `extension/test/browser/` covers them:
+
+- **The render check** (`signature.test.mjs`) — where the thresholds come from.
+- **The status indicator** (`status.test.mjs`) — whether it can actually be
+  seen. It caught a real one: a CSS animation outranks an inline style for the
+  property it animates, so a pulsing dot could not be hidden at all.
+- **The gestures** (`lens-gesture.test.mjs`) — driven through the browser's own
+  input pipeline via `Input.dispatchMouseEvent`, not synthetic events. A
+  synthetic event carries `isTrusted: false` and skips hit testing, and a test
+  built on one proved the opposite of the truth here twice before real input
+  settled it: a held peek does keep its events from the reader, and a quick tap
+  does still reach it.
+
+Browser tests run serially (`--test-concurrency=1`); several Chromium instances
+at once made them flaky.
+
+ `extension/test/browser/`
 drives a real headless Chromium over the DevTools protocol — no dependencies,
 skipped when no Chromium is present — using a real captured page and the real
 render the server made from it as fixtures.

@@ -73,6 +73,82 @@ async function firstPageTarget(port) {
   return null;
 }
 
+/// Run a function in the page, then send real input, then read a result.
+///
+/// Synthetic events dispatched from script are not the same thing: they carry
+/// isTrusted false, skip the browser's own hit testing, and let a test
+/// accidentally prove something the reader would never experience. Gestures
+/// are therefore driven through the browser's input pipeline.
+export async function withRealInput({ setup, actions, read }, args = {}, { timeoutMs = 30_000 } = {}) {
+  const binary = chromiumPath();
+  if (!binary) throw new Error('no chromium available');
+  const port = 9200 + Math.floor(Math.random() * 500);
+  const chrome = spawn(binary, [
+    '--headless=new', '--disable-gpu', '--no-sandbox', '--mute-audio',
+    '--disable-dev-shm-usage', '--window-size=1000,800',
+    `--remote-debugging-port=${port}`, 'about:blank',
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+  try {
+    await endpoint(chrome, timeoutMs);
+    const pageUrl = await firstPageTarget(port);
+    const session = await connect(pageUrl, timeoutMs);
+    try {
+      await session.send('Runtime.evaluate', {
+        expression: `(${setup.toString()})(${JSON.stringify(args)})`,
+        awaitPromise: true, returnByValue: true,
+      });
+      for (const action of actions) {
+        await session.send('Input.dispatchMouseEvent', action);
+        await new Promise((resolve) => setTimeout(resolve, action.pause ?? 30));
+      }
+      const result = await session.send('Runtime.evaluate', {
+        expression: `(${read.toString()})()`,
+        awaitPromise: true, returnByValue: true,
+      });
+      return result?.result?.result?.value ?? result?.result?.value;
+    } finally {
+      session.close();
+    }
+  } finally {
+    chrome.kill('SIGKILL');
+  }
+}
+
+function connect(wsUrl, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(wsUrl);
+    const pending = new Map();
+    let nextId = 1;
+    const timer = setTimeout(() => reject(new Error('devtools did not connect')), timeoutMs);
+    socket.addEventListener('open', () => {
+      clearTimeout(timer);
+      resolve({
+        send(method, params) {
+          const id = nextId++;
+          socket.send(JSON.stringify({ id, method, params }));
+          return new Promise((res, rej) => {
+            pending.set(id, { res, rej });
+            setTimeout(() => {
+              if (pending.delete(id)) rej(new Error(`${method} timed out`));
+            }, timeoutMs);
+          });
+        },
+        close: () => socket.close(),
+      });
+    });
+    socket.addEventListener('message', (event) => {
+      const message = JSON.parse(event.data);
+      const waiter = pending.get(message.id);
+      if (!waiter) return;
+      pending.delete(message.id);
+      if (message.error) waiter.rej(new Error(message.error.message));
+      else waiter.res(message);
+    });
+    socket.addEventListener('error', () => reject(new Error('devtools socket failed')));
+  });
+}
+
 function evaluate(wsUrl, fn, args, timeoutMs) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(wsUrl);
