@@ -277,7 +277,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       # The browser tests answer questions a DOM stub cannot; without a
       # driveable browser they skip, so give the runner one.

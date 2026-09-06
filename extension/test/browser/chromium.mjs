@@ -7,6 +7,11 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 
+// The DevTools protocol is spoken over a WebSocket, which Node exposes
+// globally only from 21 onwards. Naming the requirement here beats the
+// alternative: every test skipping with "WebSocket is not defined".
+export const REQUIRES_NODE = 21;
+
 const CHROMIUM_CANDIDATES = [
   process.env.CHROME_PATH,          // what setup-chrome and similar tools set
   '/usr/bin/chromium',
@@ -32,6 +37,12 @@ let usable = null;
 export async function browserUsable() {
   if (usable !== null) return usable;
   if (!chromiumPath()) {
+    usable = false;
+    return usable;
+  }
+  if (typeof WebSocket !== 'function') {
+    console.warn(`[browser tests] skipped: node ${process.versions.node} has no global `
+      + `WebSocket; these need node ${REQUIRES_NODE} or newer`);
     usable = false;
     return usable;
   }

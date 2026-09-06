@@ -163,8 +163,10 @@ npm test          # manifest validation, syntax, unit tests, browser tests
 ```
 
 The unit tests run against a DOM stub. The browser tests drive a real headless
-Chromium over the DevTools protocol — no dependencies, and skipped
-automatically if no Chromium is installed. They exist because some behaviour
+Chromium over the DevTools protocol — no dependencies, but they need **Node 21
+or newer** (the protocol is spoken over a WebSocket, which Node exposes
+globally only from 21) and a browser they can actually drive. Where either is
+missing they skip with the reason rather than failing. They exist because some behaviour
 cannot be judged outside a browser: how Chromium samples an image when it is
 reduced to a 16-pixel signature is what decides whether a translated page is
 recognised as belonging to the page on screen, and a stub cannot model it. The

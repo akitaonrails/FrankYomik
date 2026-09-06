@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=21"
+  },
   "scripts": {
     "test": "npm run validate && npm run check:js && npm run test:unit && npm run test:browser",
     "test:unit": "node --test test/*.test.mjs",
