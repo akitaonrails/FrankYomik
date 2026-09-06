@@ -447,7 +447,11 @@
   async function submitDetection(detection, force = false) {
     const target = findImageBySrc(detection.imgSrc) || findVisibleBlob();
     if (!target) return;
-    if (!await decoded(target, target.src) || !await settled(target)) {
+    // Only a reflowable book is laid out progressively; fixed-layout manga is
+    // final as soon as it decodes, and should not pay the settling wait.
+    const reflowable = effectivePipeline() === 'book_furigana';
+    if (!await decoded(target, target.src)
+        || (reflowable && !await settled(target))) {
       report('info', 'The page was still being laid out; leaving it for the next detection.');
       window.FrankStatus?.set('idle');
       return;

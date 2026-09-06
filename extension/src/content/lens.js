@@ -812,7 +812,15 @@
       // A tap: the reader never saw the press, so hand it back.
       if (captured) {
         swallow(event);
+        // The browser will still deliver its own click after this. Only one of
+        // the two should reach the reader, or a single tap turns two pages.
+        state.suppressClick = true;
         replayTap(event.clientX, event.clientY, target);
+        if (state.suppressTimer) window.clearTimeout(state.suppressTimer);
+        state.suppressTimer = window.setTimeout(() => {
+          state.suppressClick = false;
+          state.suppressTimer = null;
+        }, CLICK_SUPPRESS_MS);
       }
       return;
     }

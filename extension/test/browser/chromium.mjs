@@ -94,6 +94,10 @@ export async function withRealInput({ setup, actions, read }, args = {}, { timeo
     const pageUrl = await firstPageTarget(port);
     const session = await connect(pageUrl, timeoutMs);
     try {
+      // The endpoint can answer before the page can run anything, and a test
+      // that starts pressing into a page that is not ready fails for reasons
+      // that have nothing to do with what it is testing.
+      await ready(session, timeoutMs);
       await session.send('Runtime.evaluate', {
         expression: `(${setup.toString()})(${JSON.stringify(args)})`,
         awaitPromise: true, returnByValue: true,
@@ -102,6 +106,8 @@ export async function withRealInput({ setup, actions, read }, args = {}, { timeo
         await session.send('Input.dispatchMouseEvent', action);
         await new Promise((resolve) => setTimeout(resolve, action.pause ?? 30));
       }
+      // Let the page act on the last input before reading the result.
+      await new Promise((resolve) => setTimeout(resolve, 150));
       const result = await session.send('Runtime.evaluate', {
         expression: `(${read.toString()})()`,
         awaitPromise: true, returnByValue: true,
@@ -113,6 +119,23 @@ export async function withRealInput({ setup, actions, read }, args = {}, { timeo
   } finally {
     chrome.kill('SIGKILL');
   }
+}
+
+/// Wait until the page can actually evaluate.
+async function ready(session, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const probe = await session.send('Runtime.evaluate', {
+        expression: 'document.readyState', returnByValue: true,
+      });
+      if (probe?.result?.result?.value) return;
+    } catch {
+      // not listening yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('the page never became ready');
 }
 
 function connect(wsUrl, timeoutMs) {

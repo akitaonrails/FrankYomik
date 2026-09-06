@@ -522,3 +522,17 @@ test('giving up on a page shows that it failed', async () => {
 
   assert.ok(states.includes('failed'), `expected a failure state, saw ${states.join(' -> ')}`);
 });
+
+test('manga is not made to wait for a layout that never moves', async () => {
+  // The settling wait exists for reflowable books, which Kindle paginates
+  // progressively. A manga page is final as soon as it decodes, and paying
+  //1.5s per page for a problem it does not have is a regression.
+  const env = setup();
+  env.window.FrankKindle.updateSettings({ ...READER_SETTINGS, mangaPipeline: 'manga_furigana' });
+  const sent = recordSubmissions(env);
+
+  await settle(1100);          // shorter than the settling wait
+
+  assert.equal(sent.filter((m) => m.type === 'SUBMIT_CAPTURE').length, 1,
+    'a manga page should be submitted without the book pipeline’s wait');
+});
