@@ -15,18 +15,38 @@ import json
 import os
 import re
 import time
+from copy import deepcopy
+from decimal import Decimal
 from typing import Any
 
+from pipeline.document import (
+    PAGE_DOCUMENT_SCHEMA_VERSION,
+    PageDocument,
+    canonical_json_bytes,
+)
+from pipeline.revision import (
+    LEGACY_PIPELINE_REVISION,
+    get_pipeline_revision,
+    validate_pipeline_revision,
+)
 
 _SLUG_RE = re.compile(r"[^a-z0-9\-]")
 _PATH_COMPONENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 
+CACHE_MANIFEST_SCHEMA_VERSION = 3
+METADATA_SCHEMA_VERSION = PAGE_DOCUMENT_SCHEMA_VERSION
+
 
 class PageCache:
-    def __init__(self, root_dir: str):
+    def __init__(self, root_dir: str, pipeline_revision: str | None = None):
         self.root_dir = root_dir
         self.v2_root = os.path.join(root_dir, "v2")
+        self.pipeline_revision = (
+            get_pipeline_revision()
+            if pipeline_revision is None
+            else validate_pipeline_revision(pipeline_revision)
+        )
 
     @staticmethod
     def _slugify(s: str) -> str:
@@ -58,8 +78,16 @@ class PageCache:
         if isinstance(payload, bytes):
             payload = payload.decode("utf-8")
         if isinstance(payload, str):
-            payload = json.loads(payload) if payload.strip() else {}
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            payload = (
+                json.loads(
+                    payload,
+                    parse_float=Decimal,
+                    parse_constant=lambda constant: (_ for _ in ()).throw(
+                        ValueError(f"invalid JSON number: {constant}")),
+                )
+                if payload.strip() else {}
+            )
+        return canonical_json_bytes(payload)
 
     def _object_path(self, sha256_hex: str) -> str:
         return os.path.join(self.v2_root, "objects", sha256_hex[:2], sha256_hex[2:4], sha256_hex)
@@ -131,6 +159,28 @@ class PageCache:
         try:
             with open(path, "rb") as f:
                 manifest = json.load(f)
+            if not isinstance(manifest, dict):
+                return None
+            schema_version = manifest.get("schema_version")
+            if (not isinstance(schema_version, int)
+                    or isinstance(schema_version, bool)
+                    or schema_version not in {2, CACHE_MANIFEST_SCHEMA_VERSION}):
+                return None
+            if (manifest.get("pipeline") != pipeline
+                    or manifest.get("source_hash") != source_hash):
+                return None
+            # Manifests written before pipeline revisioning belong to the
+            # explicitly named legacy revision. This keeps existing caches
+            # readable while making every later revision a cache miss.
+            manifest_revision = manifest.get("pipeline_revision")
+            if schema_version == 2:
+                if manifest_revision is not None:
+                    return None
+                manifest_revision = LEGACY_PIPELINE_REVISION
+            if not isinstance(manifest_revision, str):
+                return None
+            if manifest_revision != self.pipeline_revision:
+                return None
             return manifest
         except (FileNotFoundError, json.JSONDecodeError):
             return None
@@ -183,8 +233,13 @@ class PageCache:
         except (FileNotFoundError, ValueError):
             return None
 
-    def load_metadata_by_hash(self, pipeline: str,
-                              source_hash: str) -> dict[str, Any] | None:
+    def load_metadata_by_hash(
+        self,
+        pipeline: str,
+        source_hash: str,
+        *,
+        document_pipeline: str | None = None,
+    ) -> dict[str, Any] | None:
         manifest = self.load_manifest_by_hash(pipeline, source_hash)
         if not manifest:
             return None
@@ -193,9 +248,65 @@ class PageCache:
             return None
         try:
             payload = self._read_object_verified(sha)
-            return json.loads(payload)
-        except (FileNotFoundError, ValueError, json.JSONDecodeError):
+            metadata = json.loads(
+                payload,
+                parse_float=Decimal,
+                parse_constant=lambda constant: (_ for _ in ()).throw(
+                    ValueError(f"invalid JSON number: {constant}")),
+            )
+            return self._normalize_metadata(
+                metadata, pipeline=document_pipeline or pipeline,
+                source_hash=source_hash)
+        except (
+            FileNotFoundError,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
             return None
+
+    def _normalize_metadata(
+        self,
+        payload: Any,
+        *,
+        pipeline: str,
+        source_hash: str,
+    ) -> dict[str, Any]:
+        """Validate metadata without mutating or falsely upgrading the input.
+
+        Schema 1 is the legacy editable payload and remains schema 1. Schema 2
+        is a complete PageDocument and must pass its full contract validation.
+        Unknown future schemas are rejected instead of being silently rewritten
+        by an older worker.
+        """
+        if not isinstance(payload, dict):
+            raise TypeError("metadata payload must be an object")
+
+        normalized = deepcopy(payload)
+        schema_version = normalized.get("schema_version", 1)
+        if not isinstance(schema_version, int) or isinstance(schema_version, bool):
+            raise TypeError("invalid metadata schema version")
+        if schema_version not in {1, METADATA_SCHEMA_VERSION}:
+            raise ValueError("unsupported metadata schema version")
+
+        stored_pipeline = normalized.get("pipeline")
+        if stored_pipeline not in {None, "", pipeline}:
+            raise ValueError("metadata pipeline mismatch")
+        stored_source_hash = normalized.get("source_hash")
+        if stored_source_hash not in {None, "", source_hash}:
+            raise ValueError("metadata source hash mismatch")
+
+        if schema_version == 1:
+            stored_revision = normalized.get("pipeline_revision")
+            if stored_revision not in {None, "", self.pipeline_revision}:
+                raise ValueError("metadata pipeline revision mismatch")
+            return normalized
+
+        document = PageDocument.from_dict(normalized)
+        if document.pipeline_revision != self.pipeline_revision:
+            raise ValueError("metadata pipeline revision mismatch")
+        return document.to_dict()
 
     def _write_ref(self, pipeline: str, title: str, chapter: str,
                    page_number: str, source_hash: str) -> None:
@@ -221,6 +332,7 @@ class PageCache:
         source_image_bytes: bytes,
         rendered_image_bytes: bytes,
         metadata_payload: Any,
+        document_pipeline: str | None = None,
         title: str = "",
         chapter: str = "",
         page_number: str = "",
@@ -232,6 +344,9 @@ class PageCache:
         if not self._manifest_path(pipeline, source_hash):
             raise ValueError("invalid cache key")
 
+        metadata_payload = self._normalize_metadata(
+            metadata_payload, pipeline=document_pipeline or pipeline,
+            source_hash=source_hash)
         metadata_bytes = self._canonical_json_bytes(metadata_payload)
         source_obj_sha, source_obj_size = self._store_object(source_image_bytes)
         image_obj_sha, image_obj_size = self._store_object(rendered_image_bytes)
@@ -239,13 +354,14 @@ class PageCache:
 
         content_hash = self._hash_bytes(metadata_bytes)
         render_hash = self._hash_bytes(
-            f"v2|{content_hash}|{image_obj_sha}".encode("utf-8"))
+            f"v2|{content_hash}|{image_obj_sha}".encode())
         now_ms = int(time.time() * 1000)
 
         prev = self.load_manifest_by_hash(pipeline, source_hash) or {}
         manifest = {
-            "schema_version": 2,
+            "schema_version": CACHE_MANIFEST_SCHEMA_VERSION,
             "pipeline": pipeline,
+            "pipeline_revision": self.pipeline_revision,
             "source_hash": source_hash,
             "title_slug": self._slugify(title or prev.get("title_slug", "")),
             "chapter": chapter or prev.get("chapter", ""),
@@ -283,6 +399,7 @@ class PageCache:
         source_hash: str,
         metadata_payload: Any,
         base_content_hash: str = "",
+        document_pipeline: str | None = None,
     ) -> dict[str, Any]:
         manifest = self.load_manifest_by_hash(pipeline, source_hash)
         if not manifest:
@@ -290,13 +407,18 @@ class PageCache:
         if base_content_hash and base_content_hash != manifest.get("content_hash"):
             raise ValueError("content hash mismatch")
 
+        metadata_payload = self._normalize_metadata(
+            metadata_payload, pipeline=document_pipeline or pipeline,
+            source_hash=source_hash)
         metadata_bytes = self._canonical_json_bytes(metadata_payload)
         meta_obj_sha, meta_obj_size = self._store_object(metadata_bytes)
+        manifest["schema_version"] = CACHE_MANIFEST_SCHEMA_VERSION
+        manifest["pipeline_revision"] = self.pipeline_revision
         manifest["metadata_object_sha256"] = meta_obj_sha
         manifest["metadata_bytes"] = meta_obj_size
         manifest["content_hash"] = self._hash_bytes(metadata_bytes)
         manifest["render_hash"] = self._hash_bytes(
-            f"v2|{manifest['content_hash']}|{manifest['image_object_sha256']}".encode("utf-8"))
+            f"v2|{manifest['content_hash']}|{manifest['image_object_sha256']}".encode())
         manifest["image_stale"] = True
         manifest["updated_at_unix_ms"] = int(time.time() * 1000)
         self._atomic_write(

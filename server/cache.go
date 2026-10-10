@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,14 +31,25 @@ import (
 //
 // v2 is authoritative when present.
 type Cache struct {
-	dir string
+	dir              string
+	pipelineRevision string
 }
+
+const (
+	cacheManifestSchemaVersion = 3
+	legacyPipelineRevision     = "legacy-v1"
+)
+
+var pipelineRevisionRe = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
+var errPipelineRevisionMismatch = errors.New("pipeline revision mismatch")
 
 // CacheManifest is the authoritative per-page record in cache v2.
 type CacheManifest struct {
-	SchemaVersion int    `json:"schema_version"`
-	Pipeline      string `json:"pipeline"`
-	SourceHash    string `json:"source_hash"`
+	SchemaVersion    int    `json:"schema_version"`
+	Pipeline         string `json:"pipeline"`
+	PipelineRevision string `json:"pipeline_revision,omitempty"`
+	SourceHash       string `json:"source_hash"`
 
 	TitleSlug string `json:"title_slug,omitempty"`
 	Chapter   string `json:"chapter,omitempty"`
@@ -69,7 +84,24 @@ type cacheRef struct {
 
 // NewCache creates a Cache backed by the given directory.
 func NewCache(dir string) *Cache {
-	return &Cache{dir: dir}
+	return NewCacheWithRevision(dir, configuredPipelineRevision())
+}
+
+func configuredPipelineRevision() string {
+	revision, err := resolveConfiguredPipelineRevision()
+	if err != nil {
+		panic(err)
+	}
+	return revision
+}
+
+// NewCacheWithRevision creates a cache scoped to one pipeline implementation.
+// A revision change deliberately turns existing entries into cache misses.
+func NewCacheWithRevision(dir, pipelineRevision string) *Cache {
+	if !pipelineRevisionRe.MatchString(pipelineRevision) {
+		panic(fmt.Sprintf("invalid pipeline revision %q", pipelineRevision))
+	}
+	return &Cache{dir: dir, pipelineRevision: pipelineRevision}
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9\-]`)
@@ -118,18 +150,230 @@ func isValidSHA256Hex(s string) bool {
 }
 
 func canonicalJSON(raw []byte) ([]byte, error) {
-	var v interface{}
 	if len(raw) == 0 {
 		return []byte("{}"), nil
 	}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, err
-	}
-	out, err := json.Marshal(v)
+	v, err := decodeJSONValue(raw)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	return marshalCanonicalJSON(v)
+}
+
+func decodeJSONValue(raw []byte) (interface{}, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value interface{}
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("multiple JSON values")
+		}
+		return nil, err
+	}
+	return value, nil
+}
+
+func marshalCanonicalJSON(value interface{}) ([]byte, error) {
+	var buffer bytes.Buffer
+	if err := writeCanonicalJSON(&buffer, value); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+var canonicalNumberRe = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
+
+// normalizeJSONNumber defines Frank Yomik's cross-runtime number spelling.
+// Equivalent exponent and trailing-zero forms collapse to one representation.
+func normalizeJSONNumber(raw string) (string, error) {
+	parts := canonicalNumberRe.FindStringSubmatch(raw)
+	if parts == nil {
+		return "", fmt.Errorf("invalid JSON number: %s", raw)
+	}
+	sign, integer, fraction := parts[1], parts[2], parts[3]
+	digits := strings.TrimLeft(integer+fraction, "0")
+	if digits == "" {
+		return "0", nil
+	}
+	exponent := 0
+	if parts[4] != "" {
+		parsed, err := strconv.Atoi(parts[4])
+		if err != nil {
+			return "", fmt.Errorf("invalid JSON number exponent: %s", raw)
+		}
+		exponent = parsed
+	}
+	exponent -= len(fraction)
+	for strings.HasSuffix(digits, "0") {
+		digits = strings.TrimSuffix(digits, "0")
+		exponent++
+	}
+	point := len(digits) + exponent
+	var rendered string
+	switch {
+	case point > 21 || point <= -6:
+		coefficient := digits[:1]
+		if len(digits) > 1 {
+			coefficient += "." + digits[1:]
+		}
+		rendered = coefficient + "e" + strconv.Itoa(point-1)
+	case point <= 0:
+		rendered = "0." + strings.Repeat("0", -point) + digits
+	case point >= len(digits):
+		rendered = digits + strings.Repeat("0", point-len(digits))
+	default:
+		rendered = digits[:point] + "." + digits[point:]
+	}
+	return sign + rendered, nil
+}
+
+func writeCanonicalJSONString(buffer *bytes.Buffer, value string) error {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return err
+	}
+	raw := bytes.TrimSuffix(encoded.Bytes(), []byte("\n"))
+	raw = bytes.ReplaceAll(raw, []byte(`\u2028`), []byte("\u2028"))
+	raw = bytes.ReplaceAll(raw, []byte(`\u2029`), []byte("\u2029"))
+	buffer.Write(raw)
+	return nil
+}
+
+func writeCanonicalJSON(buffer *bytes.Buffer, value interface{}) error {
+	switch typed := value.(type) {
+	case nil:
+		buffer.WriteString("null")
+	case bool:
+		if typed {
+			buffer.WriteString("true")
+		} else {
+			buffer.WriteString("false")
+		}
+	case string:
+		return writeCanonicalJSONString(buffer, typed)
+	case json.Number:
+		raw := string(typed)
+		// Schema decimals are represented as binary64 by Python dataclasses.
+		// Round decimal/exponent spellings through the same value domain.
+		if strings.ContainsAny(raw, ".eE") {
+			parsed, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				return err
+			}
+			raw = strconv.FormatFloat(parsed, 'g', -1, 64)
+		}
+		normalized, err := normalizeJSONNumber(raw)
+		if err != nil {
+			return err
+		}
+		buffer.WriteString(normalized)
+	case float64:
+		if typed != typed || typed > 1.7976931348623157e308 || typed < -1.7976931348623157e308 {
+			return errors.New("JSON numbers must be finite")
+		}
+		normalized, err := normalizeJSONNumber(strconv.FormatFloat(typed, 'g', -1, 64))
+		if err != nil {
+			return err
+		}
+		buffer.WriteString(normalized)
+	case int:
+		buffer.WriteString(strconv.Itoa(typed))
+	case int64:
+		buffer.WriteString(strconv.FormatInt(typed, 10))
+	case []interface{}:
+		buffer.WriteByte('[')
+		for index, item := range typed {
+			if index > 0 {
+				buffer.WriteByte(',')
+			}
+			if err := writeCanonicalJSON(buffer, item); err != nil {
+				return err
+			}
+		}
+		buffer.WriteByte(']')
+	case map[string]interface{}:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		buffer.WriteByte('{')
+		for index, key := range keys {
+			if index > 0 {
+				buffer.WriteByte(',')
+			}
+			if err := writeCanonicalJSONString(buffer, key); err != nil {
+				return err
+			}
+			buffer.WriteByte(':')
+			if err := writeCanonicalJSON(buffer, typed[key]); err != nil {
+				return err
+			}
+		}
+		buffer.WriteByte('}')
+	default:
+		return fmt.Errorf("unsupported canonical JSON value %T", value)
+	}
+	return nil
+}
+
+func (c *Cache) canonicalMetadata(raw []byte, pipeline, sourceHash string) ([]byte, error) {
+	var payload map[string]interface{}
+	if len(raw) == 0 {
+		payload = make(map[string]interface{})
+	} else {
+		decoded, err := decodeJSONValue(raw)
+		if err != nil {
+			return nil, invalidMetadata("invalid JSON: %v", err)
+		}
+		var ok bool
+		payload, ok = decoded.(map[string]interface{})
+		if !ok {
+			return nil, invalidMetadata("metadata payload must be an object")
+		}
+	}
+	schemaVersion := 1
+	if value, ok := payload["schema_version"]; ok {
+		number, err := requireJSONInt(value, "metadata schema version")
+		if err != nil {
+			return nil, err
+		}
+		schemaVersion = int(number)
+	}
+	if schemaVersion != 1 && schemaVersion != 2 {
+		return nil, invalidMetadata("unsupported metadata schema version: %d", schemaVersion)
+	}
+	for key, expected := range map[string]string{
+		"pipeline": pipeline, "source_hash": sourceHash,
+	} {
+		if value, exists := payload[key]; exists && value != nil && value != "" {
+			actual, ok := value.(string)
+			if !ok || actual != expected {
+				return nil, invalidMetadata("metadata %s mismatch", key)
+			}
+		}
+	}
+	revision, hasRevision := payload["pipeline_revision"]
+	if hasRevision && revision != nil && revision != "" {
+		actual, ok := revision.(string)
+		if !ok || actual != c.pipelineRevision {
+			return nil, invalidMetadata("metadata pipeline revision mismatch")
+		}
+	} else if schemaVersion == 2 {
+		return nil, invalidMetadata("metadata pipeline revision missing")
+	}
+	if schemaVersion == 2 {
+		if err := validatePageDocument(payload, pipeline, c.pipelineRevision, sourceHash); err != nil {
+			return nil, err
+		}
+	}
+	return marshalCanonicalJSON(payload)
 }
 
 func renderHash(contentHash, imageObjectSHA string) string {
@@ -262,9 +506,26 @@ func (c *Cache) loadManifestByHash(pipeline, sourceHash string) (*CacheManifest,
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
-	if m.SchemaVersion < 2 || m.Pipeline == "" || m.SourceHash == "" {
+	if (m.SchemaVersion != 2 && m.SchemaVersion != cacheManifestSchemaVersion) ||
+		m.Pipeline != pipeline || m.SourceHash != sourceHash {
 		return nil, fmt.Errorf("invalid manifest: %s", path)
 	}
+	manifestRevision := m.PipelineRevision
+	if m.SchemaVersion == 2 {
+		if manifestRevision != "" {
+			return nil, fmt.Errorf("invalid legacy manifest pipeline revision: %s", path)
+		}
+		manifestRevision = legacyPipelineRevision
+	} else if manifestRevision == "" {
+		return nil, fmt.Errorf("missing manifest pipeline revision: %s", path)
+	}
+	if !pipelineRevisionRe.MatchString(manifestRevision) {
+		return nil, fmt.Errorf("invalid manifest pipeline revision: %s", path)
+	}
+	if manifestRevision != c.pipelineRevision {
+		return nil, errPipelineRevisionMismatch
+	}
+	m.PipelineRevision = manifestRevision
 	return &m, nil
 }
 
@@ -272,7 +533,8 @@ func (c *Cache) writeManifestByHash(m *CacheManifest) error {
 	if m == nil {
 		return errors.New("nil manifest")
 	}
-	m.SchemaVersion = 2
+	m.SchemaVersion = cacheManifestSchemaVersion
+	m.PipelineRevision = c.pipelineRevision
 	if m.Pipeline == "" || !isValidSHA256Hex(m.SourceHash) {
 		return errors.New("invalid manifest key")
 	}
@@ -362,7 +624,11 @@ func (c *Cache) StoreBySourceHash(pipeline, sourceHash string, sourceImageBytes,
 		return nil, errors.New("source hash mismatch")
 	}
 
-	canonMeta, err := canonicalJSON(metadataJSON)
+	documentPipeline := pipeline
+	if basePipeline, _, ok := splitCachePipeline(pipeline); ok {
+		documentPipeline = basePipeline
+	}
+	canonMeta, err := c.canonicalMetadata(metadataJSON, documentPipeline, sourceHash)
 	if err != nil {
 		return nil, fmt.Errorf("canonical metadata: %w", err)
 	}
@@ -381,8 +647,9 @@ func (c *Cache) StoreBySourceHash(pipeline, sourceHash string, sourceImageBytes,
 	contentHash := hashHex(canonMeta)
 
 	manifest := &CacheManifest{
-		SchemaVersion:        2,
+		SchemaVersion:        cacheManifestSchemaVersion,
 		Pipeline:             pipeline,
+		PipelineRevision:     c.pipelineRevision,
 		SourceHash:           sourceHash,
 		TitleSlug:            slugify(title),
 		Chapter:              chapter,
@@ -459,7 +726,11 @@ func (c *Cache) UpdateMetadataBySourceHash(pipeline, sourceHash string, metadata
 	if baseContentHash != "" && baseContentHash != m.ContentHash {
 		return nil, fmt.Errorf("content hash mismatch")
 	}
-	canonMeta, err := canonicalJSON(metadataJSON)
+	documentPipeline := pipeline
+	if basePipeline, _, ok := splitCachePipeline(pipeline); ok {
+		documentPipeline = basePipeline
+	}
+	canonMeta, err := c.canonicalMetadata(metadataJSON, documentPipeline, sourceHash)
 	if err != nil {
 		return nil, err
 	}

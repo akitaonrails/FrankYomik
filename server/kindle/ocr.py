@@ -11,6 +11,8 @@ log = logging.getLogger(__name__)
 # Singleton manga-ocr instance with thread-safe initialization
 _mocr = None
 _init_lock = threading.Lock()
+MODEL_ID = "kha-white/manga-ocr-base"
+MODEL_REVISION = "aa6573bd10b0d446cbf622e29c3e084914df9741"
 
 
 def _get_ocr():
@@ -24,8 +26,16 @@ def _get_ocr():
                 if force_cpu:
                     os.environ["CUDA_VISIBLE_DEVICES"] = ""
                 log.info("Loading manga-ocr model (%s)...", MANGA_OCR_DEVICE)
+                from huggingface_hub import snapshot_download
                 from manga_ocr import MangaOcr
-                _mocr = MangaOcr(force_cpu=force_cpu)
+                model_path = snapshot_download(
+                    repo_id=MODEL_ID,
+                    revision=MODEL_REVISION,
+                )
+                _mocr = MangaOcr(
+                    pretrained_model_name_or_path=model_path,
+                    force_cpu=force_cpu,
+                )
                 log.info("manga-ocr loaded (%s)", MANGA_OCR_DEVICE)
     return _mocr
 

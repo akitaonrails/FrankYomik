@@ -8,19 +8,37 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from kindle.image_utils import (
-    clear_text_in_region, encode_image_pil, load_image, load_image_pil,
-)
-from .config import FONT_KO, FONT_KO_BOLD
-
 from kindle.bubble_detector import detect_bubbles as rtdetr_detect
+from kindle.image_utils import (
+    clear_text_in_region,
+    encode_image_pil,
+    load_image,
+    load_image_pil,
+)
+
 from .bubble_detector import WebtoonBubble, detect_bubbles, extract_bubble_mask
+from .config import FONT_KO, FONT_KO_BOLD, INPAINT_ENABLED
 from .image_utils import split_tall_image, stitch_detections, stitch_rtdetr_detections
 from .inpainter import inpaint_bubble
 from .ocr import TextDetection, detect_and_read, is_valid_korean, ocr_within_bbox
 from .translator import translate, translate_sfx
 
 log = logging.getLogger(__name__)
+
+
+def _clean_bubble_for_render(
+    original: Image.Image,
+    output: Image.Image,
+    bubble: WebtoonBubble,
+) -> bool:
+    """Apply the configured cleanup without misreporting LaMa execution."""
+    applied = inpaint_bubble(original, bubble, target_img=output)
+    if applied:
+        return True
+    if INPAINT_ENABLED:
+        raise RuntimeError("enabled LaMa cleanup did not execute")
+    _clear_bubble_text(output, bubble)
+    return False
 
 
 @dataclass
@@ -46,10 +64,13 @@ class WebtoonPageResult:
     img_cv: np.ndarray | None = None
     img_pil: Image.Image | None = None
     detections: list[TextDetection] = field(default_factory=list)
+    raw_detections: list[dict] = field(default_factory=list)
     bubbles: list[WebtoonBubble] = field(default_factory=list)
     sfx_detections: list[TextDetection] = field(default_factory=list)
+    sfx_translations: list[str] = field(default_factory=list)
     regions: list[WebtoonTextRegion] = field(default_factory=list)
     output_img: Image.Image | None = None
+    inpainted_bubbles: set[int] = field(default_factory=set)
 
 
 # --- Stage functions ---
@@ -105,19 +126,13 @@ def cluster_and_find_bubbles(page: WebtoonPageResult) -> None:
 
 
 def detect_bubbles_rtdetr(page: WebtoonPageResult) -> None:
-    """Detect bubbles using RT-DETR-v2 and OCR text within each.
+    """Detect bubbles and their masks using RT-DETR-v2.
 
     Replaces the EasyOCR detection → clustering → boundary fallback approach.
     Handles tall images by splitting into strips and stitching results.
 
-    For each speech_bubble detection:
-      - Extract bubble mask + bg_color
-      - Run EasyOCR within the bbox to read text
-      - Build WebtoonBubble with mask, text regions, combined text
-
-    For each artwork_text detection:
-      - Run EasyOCR to read SFX text
-      - Add to page.sfx_detections
+    OCR is intentionally deferred to :func:`ocr_detected_regions`, keeping
+    model detection and text recognition as independently replaceable stages.
     """
     max_strip_height = 2000
 
@@ -134,42 +149,44 @@ def detect_bubbles_rtdetr(page: WebtoonPageResult) -> None:
 
     log.info("RT-DETR-v2 detected %d regions in %s", len(raw_detections), page.name)
 
+    for det in raw_detections:
+        if det["type"] == "speech_bubble":
+            mask, bg_color, has_boundary = extract_bubble_mask(
+                page.img_cv, det["bbox"])
+            det["bubble_mask"] = mask
+            det["bg_color"] = bg_color
+            det["has_bubble_boundary"] = has_boundary
+
+    page.raw_detections = raw_detections
+
+
+def ocr_detected_regions(page: WebtoonPageResult) -> None:
+    """Recognize text within regions produced by the detection stage."""
     bubbles: list[WebtoonBubble] = []
     sfx_dets: list[TextDetection] = []
-
-    for det in raw_detections:
+    for det in page.raw_detections:
         bbox = det["bbox"]
-
+        text_regions = ocr_within_bbox(page.img_cv, bbox)
         if det["type"] == "speech_bubble":
-            # Extract bubble mask and bg color
-            mask, bg_color, has_boundary = extract_bubble_mask(page.img_cv, bbox)
-
-            # OCR within the bbox
-            text_regions = ocr_within_bbox(page.img_cv, bbox)
-            combined = " ".join(d.text for d in text_regions)
-
             bubble = WebtoonBubble(
                 bbox=bbox,
                 text_regions=text_regions,
-                combined_text=combined,
-                has_bubble_boundary=has_boundary,
-                bg_color=bg_color,
-                bubble_mask=mask,
+                combined_text=" ".join(item.text for item in text_regions),
+                has_bubble_boundary=bool(det["has_bubble_boundary"]),
+                bg_color=det["bg_color"],
+                bubble_mask=det["bubble_mask"],
             )
             log.info("  Bubble: %d texts, boundary=%s, bbox=%s",
-                     len(text_regions), has_boundary, bbox)
+                     len(text_regions), bubble.has_bubble_boundary, bbox)
             bubbles.append(bubble)
         else:
-            # Artwork text (SFX, narration) — OCR to read it
-            text_regions = ocr_within_bbox(page.img_cv, bbox)
-            for tr in text_regions:
-                sfx_dets.append(tr)
+            sfx_dets.extend(text_regions)
             if not text_regions:
                 log.debug("  Artwork text at %s: no OCR text found", bbox)
 
     page.bubbles = bubbles
     page.sfx_detections = sfx_dets
-    log.info("Found %d bubbles, %d SFX in %s",
+    log.info("OCR found %d bubbles and %d SFX in %s",
              len(bubbles), len(sfx_dets), page.name)
 
 
@@ -305,17 +322,24 @@ def validate_and_translate(page: WebtoonPageResult,
                 for region, text in pending
             }
             for future in as_completed(futures):
-                region, text = futures[future]
-                try:
-                    translated = future.result()
-                    if translated.strip():
-                        region.english = translated
-                        log.info("  Translated: %s", translated)
-                    else:
-                        log.info("  Translation empty for '%s'", text)
-                except Exception:
-                    log.warning("Translation failed for '%s'",
-                                text, exc_info=True)
+                region, _ = futures[future]
+                translated = future.result()
+                if not isinstance(translated, str) or not translated.strip():
+                    raise RuntimeError(
+                        "eligible webtoon region returned no translation"
+                    )
+                region.english = translated
+                log.info("  Translated: %s", translated)
+
+    page.sfx_translations = []
+    for detection in page.sfx_detections:
+        if not _is_hangul_text(detection.text):
+            page.sfx_translations.append("")
+            continue
+        translated = translate_sfx(detection.text, target_lang)
+        if not isinstance(translated, str) or not translated.strip():
+            raise RuntimeError("eligible webtoon SFX returned no translation")
+        page.sfx_translations.append(translated)
 
 
 def _validate_group(
@@ -350,11 +374,12 @@ def _validate_group(
         pending.append((region, group_text))
     else:
         english = translate(group_text, target_lang)
-        if english.strip():
-            region.english = english
-            log.info("  EN: %s", english)
-        else:
-            log.info("  Translation empty for '%s'", group_text)
+        if not isinstance(english, str) or not english.strip():
+            raise RuntimeError(
+                "eligible webtoon region returned no translation"
+            )
+        region.english = english
+        log.info("  EN: %s", english)
 
 
 def render_page(page: WebtoonPageResult, out_dir: str,
@@ -384,11 +409,10 @@ def render_page(page: WebtoonPageResult, out_dir: str,
         # clearing on top.  Only fall back to rectangle clearing when
         # inpainting is unavailable.
         if bubble_id not in cleared_bubbles:
-            if inpaint_bubble(page.img_pil, bubble,
-                              target_img=page.output_img):
+            if _clean_bubble_for_render(
+                page.img_pil, page.output_img, bubble
+            ):
                 inpainted_bubbles.add(bubble_id)
-            else:
-                _clear_bubble_text(page.output_img, bubble)
             cleared_bubbles.add(bubble_id)
 
         # Step 2: Compute render bbox from the region's detections.
@@ -1083,21 +1107,46 @@ def _draw_webtoon_debug(page: WebtoonPageResult) -> Image.Image:
 
 def render_page_to_bytes(page: WebtoonPageResult, debug: bool = False,
                          target_lang: str = "en") -> bytes:
-    """Run the full render stage and return PNG bytes instead of saving to disk.
-
-    Delegates to render_page() logic but captures the output image as bytes.
-    Requires that page.regions and page.sfx_detections are already populated.
-    """
-    # We need a temporary render — reuse the existing render_page internals
-    # by inlining the core loop instead of calling render_page (which requires out_dir).
+    """Compatibility composition of cleanup and render stages."""
     if debug:
         _draw_webtoon_debug(page)
+    if len(page.sfx_translations) != len(page.sfx_detections):
+        page.sfx_translations = [
+            translate_sfx(item.text, target_lang)
+            if _is_hangul_text(item.text) else ""
+            for item in page.sfx_detections
+        ]
+    cleanup_page(page)
+    return render_cleaned_page_to_bytes(page)
 
+
+def cleanup_page(page: WebtoonPageResult) -> None:
+    """Remove dialogue text without drawing translated content."""
     page.output_img = page.img_pil.copy()
-    img_w, img_h = page.output_img.width, page.output_img.height
-
+    page.inpainted_bubbles.clear()
     cleared_bubbles: set[int] = set()
-    inpainted_bubbles: set[int] = set()
+
+    for region in page.regions:
+        if not region.english:
+            continue
+        bubble = region.bubble
+        bubble_id = id(bubble)
+        if bubble_id in cleared_bubbles:
+            continue
+        if _clean_bubble_for_render(page.img_pil, page.output_img, bubble):
+            page.inpainted_bubbles.add(bubble_id)
+        cleared_bubbles.add(bubble_id)
+
+
+def render_cleaned_page_to_bytes(page: WebtoonPageResult) -> bytes:
+    """Draw translated dialogue and SFX after cleanup has completed.
+
+    Translation is complete before this function runs, so the render boundary
+    performs no model or network calls.
+    """
+    if page.output_img is None:
+        raise RuntimeError("webtoon cleanup stage must run before rendering")
+    img_w, img_h = page.output_img.width, page.output_img.height
 
     for region in page.regions:
         if not region.english:
@@ -1105,29 +1154,23 @@ def render_page_to_bytes(page: WebtoonPageResult, debug: bool = False,
 
         bubble = region.bubble
         bubble_id = id(bubble)
-
-        if bubble_id not in cleared_bubbles:
-            if inpaint_bubble(page.img_pil, bubble, target_img=page.output_img):
-                inpainted_bubbles.add(bubble_id)
-            else:
-                _clear_bubble_text(page.output_img, bubble)
-            cleared_bubbles.add(bubble_id)
-
         render_dets = region.group_detections or bubble.text_regions
         text_bbox = _text_region_bbox_from_dets(render_dets, img_w, img_h)
         text_bbox = _expand_render_bbox(text_bbox, bubble)
 
         _render_webtoon_english(page.output_img, bubble, region.english,
                                 text_bbox,
-                                skip_bg_rect=(bubble_id in inpainted_bubbles),
+                                skip_bg_rect=(
+                                    bubble_id in page.inpainted_bubbles),
                                 color_ref_img=page.img_pil,
                                 detections=render_dets)
 
-    for det in page.sfx_detections:
-        if not _is_hangul_text(det.text):
-            continue
-        sfx_translated = translate_sfx(det.text, target_lang)
-        if sfx_translated.strip():
-            _render_sfx(page.output_img, det, sfx_translated, page.img_pil)
+    if len(page.sfx_translations) != len(page.sfx_detections):
+        raise RuntimeError("webtoon transform stage must translate SFX before rendering")
+    for detection, translated in zip(
+        page.sfx_detections, page.sfx_translations, strict=True,
+    ):
+        if translated:
+            _render_sfx(page.output_img, detection, translated, page.img_pil)
 
     return encode_image_pil(page.output_img)

@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "cases": {
+    "manga__adult__high": {
+      "text": "いざとなれば暴力団の集会ということで警察の協力を頼むことだって出来るし損害賠償の件にしても千人分の弁当なんてどこにも頼んでいないでっちあげの話だったんだ",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__adult2__high": {
+      "text": "テメェよくもやりやがったな．．．！！",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__adult2__hard": {
+      "text": "ガッデム！！",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__adult3__high": {
+      "text": "繰り返せば周りとの境界がなくなって",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__adult3__hard": {
+      "text": "良いね",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__adult4__high": {
+      "text": "白鳥でございますゴルフは下手でご迷惑をおかけすると思いますがよろしくお願いいたします",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__adult4__hard": {
+      "text": "102",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__adult5__high": {
+      "text": "一人では倒せないと言った",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__adult5__hard": {
+      "text": "！！",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__adult6_original__high": {
+      "text": "原発をゼロにしていくとCO2の削減はどうするのか?以前国際公約として発表した25%削減は実現不可能です",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__adult6_original__hard": {
+      "text": "165",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__shounen__high": {
+      "text": "俺のバットが顔面に当たるのを避けてた．．．",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen__hard": {
+      "text": "邪魔だ",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen10__high": {
+      "text": "まさか宇宙船を回収しに来たのか？",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen10__hard": {
+      "text": "スバラシイ",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen11__high": {
+      "text": "部屋の周囲がモンゴリアンデスワームの粘液で守られてて",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen11__hard": {
+      "text": "あちい",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__shounen12__high": {
+      "text": "争いを起こすことが目的です",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen12__hard": {
+      "text": "本気",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen2__high": {
+      "text": "迷路みたいなコンクリートの壁を進んだ",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen2__hard": {
+      "text": "299",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__shounen3__high": {
+      "text": "もともと決まっていたことだ",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen3__hard": {
+      "text": "風明は関係ない",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen4__high": {
+      "text": "まさかあいつ．．．我々に礼も言わせず",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen4__hard": {
+      "text": "だだだだだ",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__shounen5__high": {
+      "text": "なんですぐにバレる嘘をつくんですか?",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__shounen5__hard": {
+      "text": "１１４",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen6__high": {
+      "text": "３月に留学生以外の選抜試験をやって野球部をふたつに分けたのよ。",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen6__hard": {
+      "text": "もえないゴミ",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__shounen7__high": {
+      "text": "なんだ、やっぱり気になるんじゃねえか。",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen7__hard": {
+      "text": "１６７",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen8__high": {
+      "text": "まったく騒ぎで集まるヤジウマの身にもなれってのよ",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen8__hard": {
+      "text": "ああいう汗臭い連中好み？",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen9__high": {
+      "text": "すごい人だ！これじゃ武天老師さまもおまえの友だちもみつかりそうにないな",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__shounen9__hard": {
+      "text": "わーわー",
+      "verified": true,
+      "verification_method": "manual visual transcription"
+    },
+    "manga__tiny__high": {
+      "text": "わたし、あなたに感じたの。",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    },
+    "manga__tiny__hard": {
+      "text": "ムフ♡",
+      "verified": true,
+      "verification_method": "four-engine consensus with visual spot review"
+    }
+  }
+}

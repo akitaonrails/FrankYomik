@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1679,5 +1680,260 @@ func assertJSONError(t *testing.T, body *bytes.Buffer, contains string) {
 		t.Error("expected 'error' field in JSON response")
 	} else if !strings.Contains(errMsg, contains) {
 		t.Errorf("error %q does not contain %q", errMsg, contains)
+	}
+}
+
+func TestCachePipelineRevisionInvalidatesEntries(t *testing.T) {
+	root := t.TempDir()
+	imageBytes := makePNGBytes()
+	sourceHash := hashHex(imageBytes)
+	oldCache := NewCacheWithRevision(root, "detector-v1")
+	manifest, err := oldCache.StoreBySourceHash(
+		"manga_translate", sourceHash, imageBytes, imageBytes,
+		[]byte(`{"schema_version":1,"regions":[]}`), "Test", "1", "1",
+	)
+	if err != nil {
+		t.Fatalf("store old revision: %v", err)
+	}
+	if manifest.SchemaVersion != cacheManifestSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", manifest.SchemaVersion, cacheManifestSchemaVersion)
+	}
+	if manifest.PipelineRevision != "detector-v1" {
+		t.Fatalf("pipeline revision = %q", manifest.PipelineRevision)
+	}
+	if _, _, ok := oldCache.LookupBySourceHash("manga_translate", sourceHash); !ok {
+		t.Fatal("same revision should hit cache")
+	}
+	newCache := NewCacheWithRevision(root, "detector-v2")
+	if _, _, ok := newCache.LookupBySourceHash("manga_translate", sourceHash); ok {
+		t.Fatal("changed revision should be a cache miss")
+	}
+}
+
+func TestCacheRejectsMetadataFromAnotherPipelineRevision(t *testing.T) {
+	cache := NewCacheWithRevision(t.TempDir(), "pipeline-b")
+	imageBytes := makePNGBytes()
+	sourceHash := hashHex(imageBytes)
+	_, err := cache.StoreBySourceHash(
+		"manga_translate", sourceHash, imageBytes, imageBytes,
+		[]byte(`{"schema_version":2,"pipeline":"manga_translate","pipeline_revision":"pipeline-a","source_hash":"`+sourceHash+`"}`),
+		"Test", "1", "1",
+	)
+	if err == nil || !strings.Contains(err.Error(), "pipeline revision mismatch") {
+		t.Fatalf("expected metadata revision mismatch, got %v", err)
+	}
+}
+
+func TestLegacyManifestIsReadableOnlyByLegacyRevision(t *testing.T) {
+	root := t.TempDir()
+	imageBytes := makePNGBytes()
+	sourceHash := hashHex(imageBytes)
+	legacyCache := NewCacheWithRevision(root, legacyPipelineRevision)
+	if _, err := legacyCache.StoreBySourceHash(
+		"manga_translate", sourceHash, imageBytes, imageBytes,
+		[]byte(`{"schema_version":1,"regions":[]}`), "Test", "1", "1",
+	); err != nil {
+		t.Fatalf("store legacy entry: %v", err)
+	}
+	manifestPath := legacyCache.manifestByHashPath("manga_translate", sourceHash)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["schema_version"] = float64(2)
+	delete(raw, "pipeline_revision")
+	data, _ = json.Marshal(raw)
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := legacyCache.LookupBySourceHash("manga_translate", sourceHash); !ok {
+		t.Fatal("manifest v2 without a revision should map to legacy-v1")
+	}
+	if _, _, ok := NewCacheWithRevision(root, "current-v2").LookupBySourceHash("manga_translate", sourceHash); ok {
+		t.Fatal("non-legacy revision must reject a legacy manifest")
+	}
+}
+
+func TestCacheManifestIdentityMustMatchLookupKey(t *testing.T) {
+	cache := NewCacheWithRevision(t.TempDir(), "pipeline-v2")
+	imageBytes := makePNGBytes()
+	sourceHash := hashHex(imageBytes)
+	if _, err := cache.StoreBySourceHash(
+		"manga_translate", sourceHash, imageBytes, imageBytes,
+		[]byte(`{"schema_version":1,"regions":[]}`), "Test", "1", "1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	path := cache.manifestByHashPath("manga_translate", sourceHash)
+	data, _ := os.ReadFile(path)
+	var manifest map[string]interface{}
+	_ = json.Unmarshal(data, &manifest)
+	manifest["pipeline"] = "webtoon"
+	data, _ = json.Marshal(manifest)
+	_ = os.WriteFile(path, data, 0o644)
+	if _, _, ok := cache.LookupBySourceHash("manga_translate", sourceHash); ok {
+		t.Fatal("manifest whose pipeline differs from its lookup path was accepted")
+	}
+}
+
+func TestQueuePipelineRevisionScopesDedupAndStream(t *testing.T) {
+	_, rdb := newTestServer(t)
+	ctx := context.Background()
+	imageBytes := makePNGBytes()
+	meta := &JobMetadata{TargetLang: "en"}
+
+	queueA := NewQueueWithRevision(rdb, "pipeline-a")
+	jobA, hit, err := queueA.SubmitJob(ctx, imageBytes, "manga_translate", "high", meta)
+	if err != nil || hit {
+		t.Fatalf("submit revision a: hit=%v err=%v", hit, err)
+	}
+	jobA2, hit, err := queueA.SubmitJob(ctx, imageBytes, "manga_translate", "high", meta)
+	if err != nil || !hit || jobA2 != jobA {
+		t.Fatalf("same revision should deduplicate: job=%q hit=%v err=%v", jobA2, hit, err)
+	}
+
+	queueB := NewQueueWithRevision(rdb, "pipeline-b")
+	jobB, hit, err := queueB.SubmitJob(ctx, imageBytes, "manga_translate", "high", meta)
+	if err != nil || hit || jobB == jobA {
+		t.Fatalf("changed revision should enqueue independently: job=%q hit=%v err=%v", jobB, hit, err)
+	}
+	msgs, err := rdb.XRange(ctx, streamHigh, "-", "+").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("stream messages = %d, want 2", len(msgs))
+	}
+	if got := msgs[0].Values["pipeline_revision"]; got != "pipeline-a" {
+		t.Fatalf("first stream revision = %v", got)
+	}
+	if got := msgs[1].Values["pipeline_revision"]; got != "pipeline-b" {
+		t.Fatalf("second stream revision = %v", got)
+	}
+}
+
+func TestCreateJobTreatsOtherPipelineRevisionAsCacheMiss(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	root := t.TempDir()
+	imageBytes := makePNGBytes()
+	sourceHash := hashHex(imageBytes)
+	oldCache := NewCacheWithRevision(root, "pipeline-a")
+	if _, err := oldCache.StoreBySourceHash(
+		"manga_translate", sourceHash, imageBytes, imageBytes,
+		[]byte(`{"schema_version":1,"regions":[]}`), "Test", "1", "1",
+	); err != nil {
+		t.Fatalf("seed old cache: %v", err)
+	}
+	srv.cache = NewCacheWithRevision(root, "pipeline-b")
+	srv.queue = NewQueueWithRevision(rdb, "pipeline-b")
+	srv.pipelineRevision = "pipeline-b"
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req, recorder := makeJobRequest(t, "manga_translate", "high", imageBytes)
+	mux.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response JobResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Cached || response.Status != "queued" {
+		t.Fatalf("old revision was served: %+v", response)
+	}
+	if response.PipelineRevision != "pipeline-b" {
+		t.Fatalf("response revision = %q", response.PipelineRevision)
+	}
+}
+
+func TestNonEnglishCacheNamespaceSubmitGetAndPatch(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	imageBytes := makePNGBytes()
+	sourceHash := hashHex(imageBytes)
+	metadata, _ := json.Marshal(map[string]interface{}{
+		"schema_version":    2,
+		"page_id":           "manga_translate:" + sourceHash,
+		"pipeline":          "manga_translate",
+		"pipeline_revision": srv.pipelineRevision,
+		"source_hash":       sourceHash,
+		"image":             map[string]interface{}{"width": 100, "height": 80},
+		"regions":           []interface{}{},
+		"stage_provenance":  map[string]interface{}{},
+	})
+	manifest, err := srv.cache.StoreBySourceHash(
+		"manga_translate_pt-br", sourceHash, imageBytes, imageBytes,
+		metadata, "Test", "1", "1",
+	)
+	if err != nil {
+		t.Fatalf("seed pt-br cache: %v", err)
+	}
+
+	request, recorder := makeJobRequestWithFields(t, map[string]string{
+		"pipeline": "manga_translate", "target_lang": "pt-br",
+	}, imageBytes)
+	mux.ServeHTTP(recorder, request)
+	var submit JobResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&submit); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusCreated || !submit.Cached {
+		t.Fatalf("non-English durable cache miss: code=%d response=%+v", recorder.Code, submit)
+	}
+	if !strings.Contains(submit.MetaURL, "manga_translate_pt-br") {
+		t.Fatalf("wrong metadata namespace: %q", submit.MetaURL)
+	}
+
+	getRequest := httptest.NewRequest(
+		"GET", fmt.Sprintf("/api/v1/cache/by-hash/manga_translate_pt-br/%s/meta", sourceHash), nil)
+	getRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(getRecorder, getRequest)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("GET metadata = %d: %s", getRecorder.Code, getRecorder.Body.String())
+	}
+	var getResponse map[string]interface{}
+	if err := json.NewDecoder(getRecorder.Body).Decode(&getResponse); err != nil {
+		t.Fatal(err)
+	}
+	storedMetadata := getResponse["metadata"].(map[string]interface{})
+	if storedMetadata["pipeline"] != "manga_translate" {
+		t.Fatalf("document pipeline = %v", storedMetadata["pipeline"])
+	}
+
+	patchBody, _ := json.Marshal(map[string]interface{}{
+		"base_content_hash": manifest.ContentHash,
+		"metadata": map[string]interface{}{
+			"schema_version":    2,
+			"page_id":           "manga_translate:" + sourceHash,
+			"pipeline":          "manga_translate",
+			"pipeline_revision": srv.pipelineRevision,
+			"source_hash":       sourceHash,
+			"image":             map[string]interface{}{"width": 100, "height": 80},
+			"regions":           []interface{}{},
+			"stage_provenance":  map[string]interface{}{},
+		},
+	})
+	patchRequest := httptest.NewRequest(
+		"PATCH", fmt.Sprintf("/api/v1/cache/by-hash/manga_translate_pt-br/%s/meta", sourceHash),
+		bytes.NewReader(patchBody))
+	patchRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(patchRecorder, patchRequest)
+	if patchRecorder.Code != http.StatusAccepted {
+		t.Fatalf("PATCH metadata = %d: %s", patchRecorder.Code, patchRecorder.Body.String())
+	}
+	messages, err := rdb.XRange(context.Background(), streamHigh, "-", "+").Result()
+	if err != nil || len(messages) != 1 {
+		t.Fatalf("rerender stream messages=%d err=%v", len(messages), err)
+	}
+	values := messages[0].Values
+	if values["pipeline"] != "manga_translate" || values["target_lang"] != "pt-br" ||
+		values["rerender_from_metadata"] != "1" {
+		t.Fatalf("wrong rerender namespace fields: %#v", values)
 	}
 }

@@ -66,6 +66,8 @@ services:
       REDIS_URL: redis://redis:6379
       AUTH_TOKEN: ${AUTH_TOKEN:?Set AUTH_TOKEN in .env or environment}
       CACHE_DIR: /data/cache
+      PIPELINE_REVISION: ${PIPELINE_REVISION:-}
+      ALLOW_LEGACY_PIPELINE_REVISION: ${ALLOW_LEGACY_PIPELINE_REVISION:-0}
     volumes:
       - ./cache:/data/cache
     depends_on:
@@ -86,6 +88,8 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       APP_UID: ${APP_UID:-1026}
       APP_GID: ${APP_GID:-1026}
+      PIPELINE_REVISION: ${PIPELINE_REVISION:-}
+      ALLOW_LEGACY_PIPELINE_REVISION: ${ALLOW_LEGACY_PIPELINE_REVISION:-0}
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
     volumes:
       - ./cache:/app/server/cache

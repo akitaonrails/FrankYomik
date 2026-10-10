@@ -4,7 +4,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from webtoon.scraper import parse_naver_url, download_episode, _download_images, _guess_extension
+from webtoon.scraper import (
+    _download_images,
+    _guess_extension,
+    download_episode,
+    parse_naver_url,
+)
+
+pytestmark = pytest.mark.integration
 
 
 class TestParseNaverUrl:

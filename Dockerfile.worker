@@ -23,7 +23,7 @@ ARG DEPS_REFRESH=2026-09-05
 # then install it separately with --no-deps
 RUN pip install --no-cache-dir --upgrade pip && \
     grep -v simple-lama requirements.txt | pip install --no-cache-dir -r /dev/stdin && \
-    pip install --no-cache-dir --no-deps simple-lama-inpainting
+    pip install --no-cache-dir --no-deps "$(grep '^simple-lama' requirements.txt)"
 
 # Stage 2: Runtime
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04

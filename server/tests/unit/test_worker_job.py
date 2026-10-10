@@ -1,13 +1,26 @@
 """Tests for worker job processing and routing."""
 
 import time
-from unittest.mock import patch, MagicMock, call
+from dataclasses import dataclass
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 
 from kindle.image_utils import encode_image_pil
-from kindle.processor import BubbleResult
-from worker.job import ProcessingJob, ProcessingResult, process_job, VALID_PIPELINES
+from pipeline.revision import DEFAULT_PIPELINE_REVISION
+from worker.job import VALID_PIPELINES, ProcessingJob, ProcessingResult, process_job
+
+
+@dataclass
+class BubbleResult:
+    bbox: tuple[int, int, int, int]
+    ocr_text: str = ""
+    is_valid: bool = False
+    transformed: object = None
+    is_artwork_text: bool = False
+    mask: object = None
+    source_font_size: int | None = None
 
 
 def _make_test_image_bytes(width: int = 100, height: int = 80) -> bytes:
@@ -46,6 +59,7 @@ class TestProcessingJobDataclass:
         assert job.page_number == ""
         assert job.source_url == ""
         assert job.target_lang == "en"
+        assert job.pipeline_revision == DEFAULT_PIPELINE_REVISION
 
     def test_metadata_fields(self):
         job = ProcessingJob(
@@ -241,23 +255,16 @@ class TestProcessJobManga:
             ]
         mock_detect.side_effect = add_bubbles
 
+        # The third result is ineligible and is not sent for translation.
         call_count = [0]
         def mock_ocr_fn(img, bubble):
             call_count[0] += 1
             return BubbleResult(
-                bbox=bubble["bbox"],
-                ocr_text="テスト", is_valid=True,
+                bbox=bubble["bbox"], ocr_text="テスト",
+                is_valid=call_count[0] <= 2,
             )
         mock_ocr.side_effect = mock_ocr_fn
-
-        # Return English for first 2, empty for third
-        translate_calls = [0]
-        def mock_translate_fn(text, target_lang="en"):
-            translate_calls[0] += 1
-            if translate_calls[0] <= 2:
-                return "English text"
-            return ""
-        mock_translate.side_effect = mock_translate_fn
+        mock_translate.return_value = "English text"
 
         img_bytes = _make_test_image_bytes()
         job = ProcessingJob(
@@ -266,6 +273,32 @@ class TestProcessJobManga:
         result = process_job(job)
 
         assert result.bubble_count == 2
+
+    @patch("worker.job.render_cleaned_manga_page")
+    @patch("worker.job.translate", side_effect=RuntimeError("digest mismatch"))
+    @patch("worker.job.ocr_bubble")
+    @patch("worker.job.detect_page_bubbles")
+    def test_translation_failure_fails_job_without_result_or_metadata(
+        self, mock_detect, mock_ocr, _mock_translate, mock_render,
+    ):
+        mock_detect.side_effect = lambda page: page.bubbles_raw.append(
+            {"bbox": (0, 0, 10, 10)}
+        )
+        mock_ocr.return_value = BubbleResult(
+            bbox=(0, 0, 10, 10), ocr_text="テスト", is_valid=True,
+        )
+
+        result = process_job(ProcessingJob(
+            job_id="translation-fail",
+            pipeline="manga_translate",
+            image_bytes=_make_test_image_bytes(),
+        ))
+
+        assert result.status == "failed"
+        assert "digest mismatch" in result.error
+        assert result.image_bytes is None
+        assert result.metadata_payload is None
+        mock_render.assert_not_called()
 
     @patch("worker.job.translate")
     @patch("worker.job.ocr_bubble")
@@ -310,27 +343,39 @@ class TestProcessJobManga:
         img_bytes = _make_test_image_bytes()
         job = ProcessingJob(
             job_id="meta-1", pipeline="manga_translate",
-            image_bytes=img_bytes, source_hash="abc123",
+            image_bytes=img_bytes, source_hash="a" * 64,
         )
         result = process_job(job)
 
         meta = result.metadata_payload
         assert meta is not None
-        assert meta["schema_version"] == 1
+        assert meta["schema_version"] == 2
+        assert meta["page_id"].startswith("manga_translate:")
         assert meta["pipeline"] == "manga_translate"
-        assert meta["source_hash"] == "abc123"
+        assert meta["pipeline_revision"] == DEFAULT_PIPELINE_REVISION
+        assert meta["source_hash"] == "a" * 64
         assert "width" in meta["image"]
         assert "height" in meta["image"]
         assert len(meta["regions"]) == 1
 
         region = meta["regions"][0]
-        assert region["id"] == "r1"
+        assert region["id"].startswith("r_")
         assert region["kind"] == "bubble"
         assert isinstance(region["bbox"], list) and len(region["bbox"]) == 4
-        assert isinstance(region["bbox_norm"], list) and len(region["bbox_norm"]) == 4
-        assert region["ocr_text"] == "テスト"
-        assert region["is_valid"] is True
-        assert region["transformed"] == {"kind": "text", "value": "Test"}
+        assert region["reading_order"] == 0
+        assert region["ocr"]["text"] == "テスト"
+        assert region["ocr"]["valid"] is True
+        assert region["ocr"]["provenance"]["backend"] == "manga-ocr"
+        assert region["ocr"]["provenance"]["revision"] != meta["pipeline_revision"]
+        assert region["ocr"]["provenance"]["model"].startswith(
+            "kha-white/manga-ocr-base@")
+        assert region["ocr"]["provenance"]["config_hash"].startswith("sha256:")
+        assert region["translation"]["text"] == "Test"
+        assert region["translation"]["target_language"] == "en"
+        assert region["detection_provenance"]["backend"] == "rtdetr-v2"
+        assert region["detection_provenance"]["revision"] != meta["pipeline_revision"]
+        assert region["cleanup"]["method"] == "stroke_clear"
+        assert region["render"]["provenance"]["backend"] == "manga-renderer"
         # user dict has only manual_translation — no false_positive/wrong_sfx/undetected
         assert region["user"] == {"manual_translation": ""}
         assert "false_positive" not in region["user"]
@@ -352,11 +397,48 @@ class TestProcessJobManga:
 
         result = process_job(ProcessingJob(
             job_id="meta-furi", pipeline="manga_furigana",
-            image_bytes=_make_test_image_bytes(120, 140), source_hash="abc123",
+            image_bytes=_make_test_image_bytes(120, 140), source_hash="a" * 64,
         ))
 
         assert result.status == "completed"
         assert result.metadata_payload["regions"][0]["source_font_size"] == 22
+
+    @patch("worker.job.translate", return_value="English")
+    @patch("worker.job.ocr_bubble")
+    @patch("worker.job.detect_page_bubbles")
+    def test_stable_region_ids_do_not_depend_on_reading_order(
+        self, mock_detect, mock_ocr, _mock_translate
+    ):
+        original = [(20, 20, 40, 40), (60, 20, 80, 40)]
+
+        def ocr(_image, bubble):
+            return BubbleResult(
+                bbox=bubble["bbox"], ocr_text="テスト", is_valid=True)
+
+        mock_ocr.side_effect = ocr
+        image = _make_test_image_bytes(100, 100)
+
+        mock_detect.side_effect = lambda page: setattr(
+            page, "bubbles_raw", [{"bbox": bbox} for bbox in original])
+        first = process_job(ProcessingJob(
+            job_id="stable-1", pipeline="manga_translate", image_bytes=image))
+
+        inserted = [(2, 2, 12, 12), *original]
+        mock_detect.side_effect = lambda page: setattr(
+            page, "bubbles_raw", [{"bbox": bbox} for bbox in inserted])
+        second = process_job(ProcessingJob(
+            job_id="stable-2", pipeline="manga_translate", image_bytes=image))
+
+        first_ids = {
+            tuple(region["bbox"]): region["id"]
+            for region in first.metadata_payload["regions"]
+        }
+        second_ids = {
+            tuple(region["bbox"]): region["id"]
+            for region in second.metadata_payload["regions"]
+        }
+        assert second_ids[original[0]] == first_ids[original[0]]
+        assert second_ids[original[1]] == first_ids[original[1]]
 
 
 # --- Webtoon pipeline routing ---
@@ -391,6 +473,64 @@ class TestProcessJobWebtoon:
         )
         result = process_job(job)
         assert result.processing_time_ms >= 0
+
+    @patch("worker.job._webtoon_render")
+    @patch("worker.job._webtoon_cleanup")
+    @patch("worker.job._webtoon_translate", side_effect=RuntimeError("Ollama down"))
+    @patch("worker.job._webtoon_ocr")
+    @patch("worker.job._webtoon_detect")
+    @patch("worker.job._webtoon_load_page")
+    def test_translation_failure_fails_job_without_result_or_metadata(
+        self, mock_load, _mock_detect, _mock_ocr, _mock_translate,
+        _mock_cleanup, mock_render,
+    ):
+        mock_load.return_value = SimpleNamespace(
+            img_pil=Image.new("RGB", (100, 80), "white"),
+            regions=[],
+            sfx_detections=[],
+        )
+
+        result = process_job(ProcessingJob(
+            job_id="webtoon-translation-fail",
+            pipeline="webtoon",
+            image_bytes=_make_test_image_bytes(),
+        ))
+
+        assert result.status == "failed"
+        assert "Ollama down" in result.error
+        assert result.image_bytes is None
+        assert result.metadata_payload is None
+        mock_render.assert_not_called()
+
+    @patch("worker.job._webtoon_render", return_value=b"rendered")
+    @patch("worker.job._webtoon_cleanup")
+    @patch("worker.job._webtoon_translate")
+    @patch("worker.job._webtoon_ocr")
+    @patch("worker.job._webtoon_detect")
+    @patch("worker.job._webtoon_load_page")
+    def test_page_without_eligible_text_completes(
+        self, mock_load, _mock_detect, _mock_ocr, mock_translate,
+        _mock_cleanup, mock_render,
+    ):
+        mock_load.return_value = SimpleNamespace(
+            img_pil=Image.new("RGB", (100, 80), "white"),
+            regions=[],
+            sfx_detections=[],
+        )
+
+        result = process_job(ProcessingJob(
+            job_id="webtoon-no-text",
+            pipeline="webtoon",
+            image_bytes=_make_test_image_bytes(),
+            source_hash="a" * 64,
+        ))
+
+        assert result.status == "completed"
+        assert result.image_bytes == b"rendered"
+        assert result.metadata_payload is not None
+        assert result.metadata_payload["regions"] == []
+        mock_translate.assert_called_once()
+        mock_render.assert_called_once()
 
 
 # --- Error handling ---
@@ -521,6 +661,50 @@ class TestRerenderFromMetadata:
         result = process_job(job)
         assert result.status == "completed"
         assert result.bubble_count == 1
+
+    @patch("worker.job.render_english")
+    @patch("worker.job.extract_bubble_mask_manga", return_value=None)
+    def test_rerender_schema_v2_uses_nested_translation_and_user_edit(
+        self, _mock_mask, mock_render
+    ):
+        img_bytes = _make_test_image_bytes(200, 300)
+        payload = {
+            "schema_version": 2,
+            "page_id": "manga_translate:source",
+            "pipeline": "manga_translate",
+            "pipeline_revision": DEFAULT_PIPELINE_REVISION,
+            "source_hash": "b" * 64,
+            "image": {"width": 200, "height": 300},
+            "regions": [{
+                "id": "r_stable",
+                "kind": "bubble",
+                "bbox": [10, 10, 90, 70],
+                "reading_order": 0,
+                "ocr": {
+                    "text": "原文", "language": "ja", "valid": True,
+                    "alternatives": [],
+                    "provenance": {"backend": "manga-ocr", "revision": "v1"},
+                },
+                "translation": {
+                    "text": "Original", "target_language": "en",
+                    "provenance": {"backend": "translator", "revision": "v1"},
+                },
+                "user": {"manual_translation": "Corrected text"},
+            }],
+            "stage_provenance": {},
+        }
+        result = process_job(ProcessingJob(
+            job_id="rr-v2",
+            pipeline="manga_translate",
+            image_bytes=img_bytes,
+            source_hash="b" * 64,
+            rerender_from_metadata=True,
+            metadata_payload=payload,
+        ))
+
+        assert result.status == "completed"
+        assert result.metadata_payload is payload
+        assert mock_render.call_args.args[2] == "Corrected text"
 
     def test_rerender_large_bubble_scales_font(self):
         """Rerender should scale font to fill large bubbles on high-res screens."""

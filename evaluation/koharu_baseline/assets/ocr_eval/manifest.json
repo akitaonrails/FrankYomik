@@ -1,0 +1,460 @@
+{
+  "cases": [
+    {
+      "id": "manga__adult__high",
+      "page": "manga__adult",
+      "bbox": [
+        754.72,
+        161.75,
+        968.96,
+        395.23
+      ],
+      "score": 0.98046875,
+      "image": "manga__adult__high.png"
+    },
+    {
+      "id": "manga__adult__hard",
+      "page": "manga__adult",
+      "bbox": [
+        2269.02,
+        9.56,
+        2483.26,
+        30.45
+      ],
+      "score": 0.29492188,
+      "image": "manga__adult__hard.png"
+    },
+    {
+      "id": "manga__adult2__high",
+      "page": "manga__adult2",
+      "bbox": [
+        1955.04,
+        123.1,
+        2032.85,
+        293.34
+      ],
+      "score": 0.9609375,
+      "image": "manga__adult2__high.png"
+    },
+    {
+      "id": "manga__adult2__hard",
+      "page": "manga__adult2",
+      "bbox": [
+        1721.6,
+        552.64,
+        1779.96,
+        615.5
+      ],
+      "score": 0.82421875,
+      "image": "manga__adult2__hard.png"
+    },
+    {
+      "id": "manga__adult3__high",
+      "page": "manga__adult3",
+      "bbox": [
+        681.13,
+        445.59,
+        875.74,
+        650.03
+      ],
+      "score": 0.96484375,
+      "image": "manga__adult3__high.png"
+    },
+    {
+      "id": "manga__adult3__hard",
+      "page": "manga__adult3",
+      "bbox": [
+        1741.75,
+        954.08,
+        1780.68,
+        1069.41
+      ],
+      "score": 0.83984375,
+      "image": "manga__adult3__hard.png"
+    },
+    {
+      "id": "manga__adult4__high",
+      "page": "manga__adult4",
+      "bbox": [
+        1885.44,
+        736.95,
+        2040.94,
+        893.74
+      ],
+      "score": 0.9765625,
+      "image": "manga__adult4__high.png"
+    },
+    {
+      "id": "manga__adult4__hard",
+      "page": "manga__adult4",
+      "bbox": [
+        2070.09,
+        1264.83,
+        2108.97,
+        1285.73
+      ],
+      "score": 0.41992188,
+      "image": "manga__adult4__hard.png"
+    },
+    {
+      "id": "manga__adult5__high",
+      "page": "manga__adult5",
+      "bbox": [
+        733.47,
+        1050.54,
+        850.05,
+        1196.88
+      ],
+      "score": 0.96484375,
+      "image": "manga__adult5__high.png"
+    },
+    {
+      "id": "manga__adult5__hard",
+      "page": "manga__adult5",
+      "bbox": [
+        650.89,
+        1191.66,
+        680.04,
+        1223.02
+      ],
+      "score": 0.2734375,
+      "image": "manga__adult5__hard.png"
+    },
+    {
+      "id": "manga__adult6_original__high",
+      "page": "manga__adult6_original",
+      "bbox": [
+        191.97,
+        744.4,
+        362.93,
+        940.01
+      ],
+      "score": 0.98046875,
+      "image": "manga__adult6_original__high.png"
+    },
+    {
+      "id": "manga__adult6_original__hard",
+      "page": "manga__adult6_original",
+      "bbox": [
+        89.78,
+        1309.5,
+        143.26,
+        1331.23
+      ],
+      "score": 0.55078125,
+      "image": "manga__adult6_original__hard.png"
+    },
+    {
+      "id": "manga__shounen__high",
+      "page": "manga__shounen",
+      "bbox": [
+        704.89,
+        601.83,
+        811.84,
+        797.02
+      ],
+      "score": 0.9609375,
+      "image": "manga__shounen__high.png"
+    },
+    {
+      "id": "manga__shounen__hard",
+      "page": "manga__shounen",
+      "bbox": [
+        1652.85,
+        623.52,
+        1691.74,
+        737.38
+      ],
+      "score": 0.703125,
+      "image": "manga__shounen__hard.png"
+    },
+    {
+      "id": "manga__shounen10__high",
+      "page": "manga__shounen10",
+      "bbox": [
+        966.24,
+        1066.22,
+        1141.04,
+        1233.47
+      ],
+      "score": 0.9765625,
+      "image": "manga__shounen10__high.png"
+    },
+    {
+      "id": "manga__shounen10__hard",
+      "page": "manga__shounen10",
+      "bbox": [
+        1330.4,
+        982.59,
+        1369.24,
+        1212.56
+      ],
+      "score": 0.89453125,
+      "image": "manga__shounen10__hard.png"
+    },
+    {
+      "id": "manga__shounen11__high",
+      "page": "manga__shounen11",
+      "bbox": [
+        1518.44,
+        1040.27,
+        1666.25,
+        1187.38
+      ],
+      "score": 0.9765625,
+      "image": "manga__shounen11__high.png"
+    },
+    {
+      "id": "manga__shounen11__hard",
+      "page": "manga__shounen11",
+      "bbox": [
+        1491.56,
+        86.69,
+        1679.69,
+        386.16
+      ],
+      "score": 0.29101562,
+      "image": "manga__shounen11__hard.png"
+    },
+    {
+      "id": "manga__shounen12__high",
+      "page": "manga__shounen12",
+      "bbox": [
+        502.73,
+        169.56,
+        616.69,
+        362.79
+      ],
+      "score": 0.97265625,
+      "image": "manga__shounen12__high.png"
+    },
+    {
+      "id": "manga__shounen12__hard",
+      "page": "manga__shounen12",
+      "bbox": [
+        77.09,
+        1077.85,
+        134.9,
+        1193.52
+      ],
+      "score": 0.90625,
+      "image": "manga__shounen12__hard.png"
+    },
+    {
+      "id": "manga__shounen2__high",
+      "page": "manga__shounen2",
+      "bbox": [
+        488.96,
+        450.83,
+        586.26,
+        608.09
+      ],
+      "score": 0.9609375,
+      "image": "manga__shounen2__high.png"
+    },
+    {
+      "id": "manga__shounen2__hard",
+      "page": "manga__shounen2",
+      "bbox": [
+        1634.72,
+        980.29,
+        1848.79,
+        1231.91
+      ],
+      "score": 0.45898438,
+      "image": "manga__shounen2__hard.png"
+    },
+    {
+      "id": "manga__shounen3__high",
+      "page": "manga__shounen3",
+      "bbox": [
+        2003.67,
+        1027.47,
+        2100.94,
+        1153.28
+      ],
+      "score": 0.96484375,
+      "image": "manga__shounen3__high.png"
+    },
+    {
+      "id": "manga__shounen3__hard",
+      "page": "manga__shounen3",
+      "bbox": [
+        1750.78,
+        566.16,
+        1809.14,
+        650.03
+      ],
+      "score": 0.8984375,
+      "image": "manga__shounen3__hard.png"
+    },
+    {
+      "id": "manga__shounen4__high",
+      "page": "manga__shounen4",
+      "bbox": [
+        1045.19,
+        43.18,
+        1171.58,
+        168.81
+      ],
+      "score": 0.96875,
+      "image": "manga__shounen4__high.png"
+    },
+    {
+      "id": "manga__shounen4__hard",
+      "page": "manga__shounen4",
+      "bbox": [
+        875.04,
+        489.41,
+        1205.61,
+        552.23
+      ],
+      "score": 0.25585938,
+      "image": "manga__shounen4__hard.png"
+    },
+    {
+      "id": "manga__shounen5__high",
+      "page": "manga__shounen5",
+      "bbox": [
+        637.09,
+        531.29,
+        744.08,
+        662.15
+      ],
+      "score": 0.96875,
+      "image": "manga__shounen5__high.png"
+    },
+    {
+      "id": "manga__shounen5__hard",
+      "page": "manga__shounen5",
+      "bbox": [
+        2003.67,
+        1251.02,
+        2042.58,
+        1271.95
+      ],
+      "score": 0.3515625,
+      "image": "manga__shounen5__hard.png"
+    },
+    {
+      "id": "manga__shounen6__high",
+      "page": "manga__shounen6",
+      "bbox": [
+        1880.24,
+        139.92,
+        2036.12,
+        304.67
+      ],
+      "score": 0.97265625,
+      "image": "manga__shounen6__high.png"
+    },
+    {
+      "id": "manga__shounen6__hard",
+      "page": "manga__shounen6",
+      "bbox": [
+        1773.08,
+        465.51,
+        1870.5,
+        538.74
+      ],
+      "score": 0.30273438,
+      "image": "manga__shounen6__hard.png"
+    },
+    {
+      "id": "manga__shounen7__high",
+      "page": "manga__shounen7",
+      "bbox": [
+        1067.34,
+        706.64,
+        1174.08,
+        842.73
+      ],
+      "score": 0.96875,
+      "image": "manga__shounen7__high.png"
+    },
+    {
+      "id": "manga__shounen7__hard",
+      "page": "manga__shounen7",
+      "bbox": [
+        448.77,
+        1251.02,
+        482.73,
+        1271.95
+      ],
+      "score": 0.40429688,
+      "image": "manga__shounen7__hard.png"
+    },
+    {
+      "id": "manga__shounen8__high",
+      "page": "manga__shounen8",
+      "bbox": [
+        1322.81,
+        501.38,
+        1420.08,
+        642.39
+      ],
+      "score": 0.96875,
+      "image": "manga__shounen8__high.png"
+    },
+    {
+      "id": "manga__shounen8__hard",
+      "page": "manga__shounen8",
+      "bbox": [
+        1303.36,
+        866.96,
+        1361.72,
+        950.52
+      ],
+      "score": 0.34179688,
+      "image": "manga__shounen8__hard.png"
+    },
+    {
+      "id": "manga__shounen9__high",
+      "page": "manga__shounen9",
+      "bbox": [
+        585.55,
+        116.12,
+        733.77,
+        233.54
+      ],
+      "score": 0.96875,
+      "image": "manga__shounen9__high.png"
+    },
+    {
+      "id": "manga__shounen9__hard",
+      "page": "manga__shounen9",
+      "bbox": [
+        1302.31,
+        245.28,
+        1438.38,
+        391.41
+      ],
+      "score": 0.34960938,
+      "image": "manga__shounen9__hard.png"
+    },
+    {
+      "id": "manga__tiny__high",
+      "page": "manga__tiny",
+      "bbox": [
+        430.16,
+        965.79,
+        507.9,
+        1052.6
+      ],
+      "score": 0.95703125,
+      "image": "manga__tiny__high.png"
+    },
+    {
+      "id": "manga__tiny__hard",
+      "page": "manga__tiny",
+      "bbox": [
+        274.68,
+        982.07,
+        305.77,
+        1014.62
+      ],
+      "score": 0.39257812,
+      "image": "manga__tiny__hard.png"
+    }
+  ]
+}

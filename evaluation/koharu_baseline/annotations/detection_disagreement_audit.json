@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "scope": "All 19 prepared manga pages",
+  "method": "Greedy one-to-one matching between Frank regions and Koharu text or onomatopoeia regions. A pair matches when either box center falls inside the other box. Every unmatched crop was then reviewed visually.",
+  "counts": {
+    "frank_regions": 290,
+    "koharu_text_or_sfx_regions": 367,
+    "matched_regions": 284,
+    "frank_only": 6,
+    "frank_only_genuine_japanese_text": 1,
+    "frank_only_false_or_irrelevant": 5,
+    "koharu_only": 83,
+    "koharu_only_genuine_text_or_sfx": 63,
+    "koharu_only_false_duplicate_or_interface": 20
+  },
+  "frank_only_false_or_irrelevant": [
+    "manga__adult F5: hanging lamp",
+    "manga__adult6_original F1: Latin hotel sign outside Japanese translation scope",
+    "manga__shounen2 F7: reader navigation arrow",
+    "manga__shounen4 F13: reader navigation arrow",
+    "manga__shounen7 F13: reader navigation arrow"
+  ],
+  "frank_only_genuine": [
+    "manga__shounen9 F4: Japanese tournament sign"
+  ],
+  "koharu_only_false_duplicate_or_interface": [
+    "manga__adult K7: browser toolbar",
+    "manga__adult2 K17 and K18: duplicate punctuation instances",
+    "manga__adult4 K17 and K18: page number fragments",
+    "manga__adult6_original K11 and K12: page number fragments",
+    "manga__shounen11 K23, K24, and K26: duplicate parts of one large SFX",
+    "manga__shounen12 K19: crosshatched artwork",
+    "manga__shounen4 K30: duplicate SFX instance",
+    "manga__shounen5 K16: page number",
+    "manga__shounen7 K22 and K24: page numbers",
+    "manga__shounen9 K12 and K17: duplicate SFX instances",
+    "manga__tiny K19, K20, and K22: page number or divider fragments"
+  ],
+  "notes": [
+    "The review measures useful region coverage and disagreement quality. It is not a conventional independently drawn box or polygon ground-truth set.",
+    "Koharu separates text, SFX, balloons, and panels. Frank combines several region meanings, so direct class-name precision and recall would be misleading.",
+    "Most genuine Koharu-only regions are stylized SFX that Frank does not return.",
+    "The F and K indices refer to the generated disagreement review sheets, not stable model instance identifiers."
+  ]
+}

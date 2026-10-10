@@ -1,4 +1,10 @@
-# YOLO Bubble Detection — Fine-Tuning Plan
+# Historical plan: YOLO bubble detection
+
+> **Status:** Superseded. Frank now uses RT-DETR-v2, and the next detector work
+> is governed by the measured [Koharu benchmark](koharu_benchmark_results.md)
+> and [v2 pipeline migration plan](koharu_pipeline_migration_plan.md). Keep this
+> page as historical research; do not use its paths or phases as current setup
+> instructions.
 
 ## Problem
 

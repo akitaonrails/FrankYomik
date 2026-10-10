@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "koharu": {
+    "repo": "~/Projects/koharu",
+    "commit": "2c78c0cd6eeec4dbf607f0a22e3a7e1f932b6ff3",
+    "binary_dir": "target/release",
+    "detection_binary": "koharu_layout_rfdetr_seg_2xl",
+    "ocr_binaries": {
+      "manga_ocr": "manga_ocr",
+      "baberu_ocr": "baberu_ocr",
+      "hayai_ocr": "hayai_ocr",
+      "paddle_ocr_vl": "paddle_ocr_vl"
+    },
+    "inpainting_binaries": {
+      "lama": "lama",
+      "aot": "aot_inpainting",
+      "rorem": "rorem_mixed",
+      "flux2_klein": "flux2_klein"
+    }
+  },
+  "frank": {
+    "repo": "../..",
+    "python": "python"
+  },
+  "detection": {
+    "iou_threshold": 0.5,
+    "classes": ["text", "onomatopoeia", "bubble", "panel"],
+    "frank_class_map": {
+      "speech_bubble": "bubble",
+      "artwork_text": "onomatopoeia"
+    }
+  },
+  "inpainting": {
+    "seed": 20261009,
+    "frank_backends": ["lama", "flux-fill", "sdxl"],
+    "koharu_backends": ["lama", "aot", "rorem", "flux2_klein"]
+  }
+}
+

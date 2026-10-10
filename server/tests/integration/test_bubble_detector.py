@@ -5,10 +5,14 @@ bubbles on real manga test pages.
 """
 
 import os
+
 import pytest
-from kindle.image_utils import load_image
+
 from kindle.bubble_detector import detect_bubbles
+from kindle.image_utils import load_image
 from tests.conftest import DOCS_DIR
+
+pytestmark = [pytest.mark.integration, pytest.mark.model, pytest.mark.slow]
 
 
 def _detect(name: str) -> list[dict]:

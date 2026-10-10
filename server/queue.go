@@ -31,14 +31,24 @@ const (
 
 // Queue handles Redis stream operations for job submission.
 type Queue struct {
-	rdb        *redis.Client
-	maxLenHigh int64
-	maxLenLow  int64
+	rdb              *redis.Client
+	maxLenHigh       int64
+	maxLenLow        int64
+	pipelineRevision string
 }
 
 // NewQueue creates a new Queue connected to Redis.
 func NewQueue(rdb *redis.Client) *Queue {
-	return &Queue{rdb: rdb, maxLenHigh: 500, maxLenLow: 1000}
+	return NewQueueWithRevision(rdb, configuredPipelineRevision())
+}
+
+// NewQueueWithRevision creates a queue whose deduplication and messages are
+// scoped to one pipeline implementation.
+func NewQueueWithRevision(rdb *redis.Client, pipelineRevision string) *Queue {
+	if !pipelineRevisionRe.MatchString(pipelineRevision) {
+		panic(fmt.Sprintf("invalid pipeline revision %q", pipelineRevision))
+	}
+	return &Queue{rdb: rdb, maxLenHigh: 500, maxLenLow: 1000, pipelineRevision: pipelineRevision}
 }
 
 // JobMetadata holds optional metadata for a job submission.
@@ -68,8 +78,9 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 		targetLang = meta.TargetLang
 	}
 
-	// Check dedup (keyed by hash + pipeline + target_lang to avoid collisions)
-	dedupField := hash + ":" + pipeline + ":" + targetLang
+	// Include the pipeline revision so a deployment never deduplicates against
+	// work produced by an older implementation.
+	dedupField := hash + ":" + pipeline + ":" + targetLang + ":" + q.pipelineRevision
 	if !forceNew {
 		existingJobID, err := q.rdb.HGet(ctx, dedupKey, dedupField).Result()
 		if err == nil && existingJobID != "" {
@@ -89,8 +100,10 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 		}
 	}
 
-	// Generate job ID
-	jobID := fmt.Sprintf("job-%s-%d", hash[:12], time.Now().UnixMilli())
+	// Include a short revision digest so rolling deployments cannot write two
+	// revisions into the same result key when submissions share a millisecond.
+	identityHash := sha256.Sum256([]byte(q.pipelineRevision + "\x00" + targetLang))
+	jobID := fmt.Sprintf("job-%s-%x-%d", hash[:12], identityHash[:4], time.Now().UnixMilli())
 
 	// Store image bytes
 	imageKey := imageKeyPrefix + hash
@@ -108,10 +121,11 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 
 	// Enqueue
 	values := map[string]interface{}{
-		"job_id":      jobID,
-		"pipeline":    pipeline,
-		"image_key":   imageKey,
-		"source_hash": hash,
+		"job_id":            jobID,
+		"pipeline":          pipeline,
+		"pipeline_revision": q.pipelineRevision,
+		"image_key":         imageKey,
+		"source_hash":       hash,
 	}
 	if targetLang != "en" {
 		values["target_lang"] = targetLang

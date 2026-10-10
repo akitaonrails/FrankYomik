@@ -1,16 +1,26 @@
 """Redis stream consumer for processing jobs with priority queues."""
 
+import hashlib
 import json
 import logging
 import os
 import signal
 import time
-import hashlib
 from urllib.parse import urlparse, urlunparse
 
 import redis
 
-from .job import ProcessingJob, ProcessingResult, process_job
+from pipeline.revision import (
+    LEGACY_PIPELINE_REVISION,
+    validate_pipeline_revision,
+)
+
+from .job import (
+    PipelineDependencies,
+    ProcessingJob,
+    ProcessingResult,
+    process_job,
+)
 from .page_cache import PageCache
 
 log = logging.getLogger(__name__)
@@ -60,7 +70,7 @@ def _redact_url(url_str: str) -> str:
                 + (f":{parsed.port}" if parsed.port else "")
             )
             return urlunparse(replaced)
-    except Exception:
+    except ValueError:
         return "<invalid-url>"
     return url_str
 
@@ -76,7 +86,9 @@ class Consumer:
                  result_ttl: int = DEFAULT_RESULT_TTL,
                  heartbeat_ttl: int = DEFAULT_HEARTBEAT_TTL,
                  progress_ttl: int = DEFAULT_PROGRESS_TTL,
-                 high_burst_before_low: int = DEFAULT_HIGH_BURST_BEFORE_LOW):
+                 high_burst_before_low: int = DEFAULT_HIGH_BURST_BEFORE_LOW,
+                 pipeline_revision: str | None = None,
+                 job_dependencies: PipelineDependencies | None = None):
         self.redis_url = redis_url
         self.consumer_group = consumer_group
         self.consumer_name = consumer_name or f"worker-{os.getpid()}"
@@ -89,9 +101,12 @@ class Consumer:
         # Process at most this many high-priority jobs consecutively before
         # giving low-priority prefetch jobs a chance.
         self.high_burst_before_low = high_burst_before_low
-        self._page_cache = PageCache(cache_dir)
+        self._page_cache = PageCache(cache_dir, pipeline_revision=pipeline_revision)
+        self.pipeline_revision = self._page_cache.pipeline_revision
+        self.job_dependencies = job_dependencies
         self._running = False
-        log.info("Cache v2 directory: %s", os.path.abspath(cache_dir))
+        log.info("Cache v2 directory: %s (pipeline revision: %s)",
+                 os.path.abspath(cache_dir), self.pipeline_revision)
         self._rdb: redis.Redis | None = None
         self._last_heartbeat = 0.0
         self._last_claim = 0.0
@@ -256,11 +271,47 @@ class Consumer:
         page_number = self._decode_field(fields, b"page_number")
         source_url = self._decode_field(fields, b"source_url")
         target_lang = self._decode_field(fields, b"target_lang") or "en"
+        pipeline_revision = (
+            self._decode_field(fields, b"pipeline_revision")
+            or LEGACY_PIPELINE_REVISION
+        )
         rerender_flag = self._decode_field(fields, b"rerender_from_metadata")
         rerender_from_metadata = rerender_flag in {"1", "true", "True"}
 
         if not job_id or not pipeline:
             log.warning("Malformed message %s: missing job_id or pipeline", msg_id)
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+
+        try:
+            validate_pipeline_revision(pipeline_revision)
+        except ValueError:
+            log.error("Rejecting job %s with invalid pipeline revision", job_id)
+            self._store_result(ProcessingResult(
+                job_id=job_id,
+                status="failed",
+                error="Invalid pipeline revision",
+                pipeline=pipeline,
+                source_hash=source_hash,
+                pipeline_revision=self.pipeline_revision,
+            ))
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+
+        if pipeline_revision != self.pipeline_revision:
+            log.error(
+                "Rejecting job %s from pipeline revision %s; worker runs %s",
+                job_id, pipeline_revision, self.pipeline_revision,
+            )
+            self._store_result(ProcessingResult(
+                job_id=job_id,
+                status="failed",
+                error=("Pipeline revision mismatch: job="
+                       f"{pipeline_revision} worker={self.pipeline_revision}"),
+                pipeline=pipeline,
+                source_hash=source_hash,
+                pipeline_revision=self.pipeline_revision,
+            ))
             self._rdb.xack(stream, self.consumer_group, msg_id)
             return "skipped"
 
@@ -282,6 +333,9 @@ class Consumer:
             self._store_result(ProcessingResult(
                 job_id=job_id, status="failed",
                 error=f"Image not found: {image_key}",
+                pipeline=pipeline,
+                source_hash=source_hash,
+                pipeline_revision=pipeline_revision,
             ))
             self._rdb.xack(stream, self.consumer_group, msg_id)
             return "skipped"
@@ -297,7 +351,8 @@ class Consumer:
         metadata_payload = None
         if rerender_from_metadata and source_hash:
             metadata_payload = self._page_cache.load_metadata_by_hash(
-                cache_pipeline_for_lookup, source_hash)
+                cache_pipeline_for_lookup, source_hash,
+                document_pipeline=pipeline)
             if metadata_payload is None:
                 log.error(
                     "Metadata not found for rerender job %s (%s/%s) — "
@@ -311,6 +366,7 @@ class Consumer:
                           "source may have been evicted from cache",
                     pipeline=pipeline,
                     source_hash=source_hash,
+                    pipeline_revision=pipeline_revision,
                 ))
                 self._rdb.xack(stream, self.consumer_group, msg_id)
                 return "skipped"
@@ -328,10 +384,16 @@ class Consumer:
             rerender_from_metadata=rerender_from_metadata,
             metadata_payload=metadata_payload,
             target_lang=target_lang,
+            pipeline_revision=pipeline_revision,
         )
-        result = process_job(job, progress_cb=progress_cb)
+        result = process_job(
+            job,
+            progress_cb=progress_cb,
+            dependencies=self.job_dependencies,
+        )
         if not result.source_hash and source_hash:
             result.source_hash = source_hash
+        result.pipeline_revision = pipeline_revision
 
         # Save to robust filesystem cache v2 when image + metadata are available.
         cache_pipeline = pipeline if target_lang == "en" else f"{pipeline}_{target_lang}"
@@ -345,6 +407,7 @@ class Consumer:
         if has_image and has_metadata:
             self._cache_to_v2(
                 pipeline=cache_pipeline,
+                document_pipeline=pipeline,
                 source_hash=result.source_hash or source_hash,
                 source_image_bytes=image_bytes,
                 rendered_image_bytes=result.image_bytes,
@@ -361,7 +424,7 @@ class Consumer:
             )
 
         # Store result and notify
-        self._store_result(result)
+        self._store_result(result, cache_pipeline=cache_pipeline)
         self._rdb.xack(stream, self.consumer_group, msg_id)
 
         log.info("Job %s completed: status=%s, bubbles=%d, time=%dms",
@@ -417,7 +480,12 @@ class Consumer:
         )
         return True
 
-    def _store_result(self, result: ProcessingResult) -> None:
+    def _store_result(
+        self,
+        result: ProcessingResult,
+        *,
+        cache_pipeline: str | None = None,
+    ) -> None:
         """Store result metadata and image bytes in Redis."""
         meta = {
             "job_id": result.job_id,
@@ -430,6 +498,7 @@ class Consumer:
             "content_hash": result.content_hash,
             "render_hash": result.render_hash,
             "page_kind": result.page_kind,
+            "pipeline_revision": result.pipeline_revision,
         }
         meta_key = f"{RESULT_KEY_PREFIX}{result.job_id}"
         self._rdb.set(meta_key, json.dumps(meta), ex=self.result_ttl)
@@ -442,12 +511,14 @@ class Consumer:
         # server can serve it even when the v2 disk cache path doesn't match.
         if result.metadata_payload and result.source_hash and result.pipeline:
             meta_hash_key = (
-                f"{META_BY_HASH_PREFIX}{result.pipeline}:{result.source_hash}"
+                f"{META_BY_HASH_PREFIX}{cache_pipeline or result.pipeline}:"
+                f"{result.source_hash}"
             )
             meta_hash_val = json.dumps({
                 "source_hash": result.source_hash,
                 "content_hash": result.content_hash,
                 "render_hash": result.render_hash,
+                "pipeline_revision": result.pipeline_revision,
                 "metadata": result.metadata_payload,
             })
             self._rdb.set(meta_hash_key, meta_hash_val, ex=self.result_ttl)
@@ -474,7 +545,8 @@ class Consumer:
         notify_channel = f"{NOTIFY_PREFIX}{job_id}"
         self._rdb.publish(notify_channel, progress_json)
 
-    def _cache_to_v2(self, *, pipeline: str, source_hash: str,
+    def _cache_to_v2(self, *, pipeline: str, document_pipeline: str,
+                     source_hash: str,
                      source_image_bytes: bytes, rendered_image_bytes: bytes,
                      metadata_payload: dict, title: str, chapter: str,
                      page_number: str, result: ProcessingResult) -> None:
@@ -488,6 +560,7 @@ class Consumer:
                 source_image_bytes=source_image_bytes,
                 rendered_image_bytes=rendered_image_bytes,
                 metadata_payload=metadata_payload,
+                document_pipeline=document_pipeline,
                 title=title,
                 chapter=chapter,
                 page_number=page_number,
@@ -501,7 +574,7 @@ class Consumer:
                 source_hash[:12],
                 result.content_hash[:12] if result.content_hash else "-",
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- cache failures must not lose results
             log.error("Failed to cache v2 result for %s/%s: %s",
                       pipeline, source_hash[:12], e)
 

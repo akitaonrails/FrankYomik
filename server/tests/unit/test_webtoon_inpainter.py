@@ -3,13 +3,15 @@
 Tests mask-building logic without GPU. Backend inference is mocked.
 """
 
+import hashlib
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from webtoon.bubble_detector import WebtoonBubble
-from webtoon.inpainter import build_inpaint_mask, inpaint_bubble
+from webtoon.inpainter import LamaBackend, build_inpaint_mask, inpaint_bubble
 from webtoon.ocr import TextDetection
 
 
@@ -21,6 +23,42 @@ def _make_det(x1, y1, x2, y2, text="테스트", conf=0.9):
         confidence=conf,
         bbox_rect=(x1, y1, x2, y2),
     )
+
+
+def test_lama_backend_verifies_downloaded_weights_before_load(tmp_path):
+    model = tmp_path / "big-lama.pt"
+    model.write_bytes(b"pinned weights")
+    digest = hashlib.sha256(model.read_bytes()).hexdigest()
+
+    with (
+        patch("simple_lama_inpainting.utils.download_model", return_value=str(model)),
+        patch("simple_lama_inpainting.SimpleLama") as simple_lama,
+        patch(
+            "webtoon.inpainter.stage_identity",
+            return_value={"model": {"weights_revision": f"sha256:{digest}"}},
+        ),
+    ):
+        assert LamaBackend().load() is True
+
+    simple_lama.assert_called_once_with()
+
+
+def test_lama_backend_rejects_unpinned_weights_before_load(tmp_path):
+    model = tmp_path / "big-lama.pt"
+    model.write_bytes(b"different weights")
+
+    with (
+        patch("simple_lama_inpainting.utils.download_model", return_value=str(model)),
+        patch("simple_lama_inpainting.SimpleLama") as simple_lama,
+        patch(
+            "webtoon.inpainter.stage_identity",
+            return_value={"model": {"weights_revision": "a" * 64}},
+        ),
+        pytest.raises(RuntimeError, match="digest mismatch"),
+    ):
+        LamaBackend().load()
+
+    simple_lama.assert_not_called()
 
 
 def _make_bubble(detections, bbox=None, bg_color=(255, 255, 255),
@@ -218,6 +256,19 @@ class TestInpaintBubbleIntegration:
         with patch("webtoon.inpainter.INPAINT_ENABLED", False):
             result = inpaint_bubble(img, bubble)
         assert result is False
+
+    def test_enabled_backend_failure_is_not_reported_as_solid_cleanup(self):
+        img = Image.new("RGB", (100, 100), (255, 255, 255))
+        det = _make_det(20, 20, 60, 50)
+        bubble = _make_bubble([det], mask=None)
+        backend = MagicMock()
+        backend.inpaint.side_effect = ValueError("bad model")
+
+        with (
+            patch("webtoon.inpainter.INPAINT_ENABLED", True),
+            pytest.raises(RuntimeError, match="inpainting failed"),
+        ):
+            inpaint_bubble(img, bubble, backend=backend)
 
     def test_inpaints_without_bubble_mask(self):
         """Bubble without bubble_mask still inpaints using text rects."""

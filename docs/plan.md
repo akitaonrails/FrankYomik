@@ -1,4 +1,8 @@
-# Fix Webtoon Text Rendering and Detection
+# Historical plan: Webtoon text rendering and detection
+
+> **Status:** Implemented. This file records the reasoning behind the existing
+> webtoon rendering and detection safeguards. For current pipeline work, see
+> the [Koharu-inspired pipeline migration plan](koharu_pipeline_migration_plan.md).
 
 ## Problem Summary
 

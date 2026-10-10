@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "reviewer": "replace-with-reviewer-id",
+  "items": {
+    "blind-item-id": {
+      "removal_completeness": 1,
+      "artwork_preservation": 1,
+      "boundary_preservation": 1,
+      "texture_consistency": 1,
+      "acceptable": false,
+      "notes": "Use integer scores from 1 (unusable) to 5 (excellent)."
+    }
+  }
+}
+

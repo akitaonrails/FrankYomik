@@ -1,0 +1,81 @@
+{
+  "pages": {
+    "manga__adult": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__adult2": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__adult3": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__adult4": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__adult5": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__adult6_original": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen10": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen11": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen12": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen2": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen3": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen4": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen5": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen6": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen7": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen8": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__shounen9": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    },
+    "manga__tiny": {
+      "annotation_status": "unlabeled",
+      "instances": []
+    }
+  },
+  "schema_version": 1
+}

@@ -12,12 +12,12 @@ import logging
 import threading
 
 import numpy as np
-import torch
 from PIL import Image
 
 log = logging.getLogger(__name__)
 
 MODEL_ID = "ogkalu/comic-text-and-bubble-detector"
+MODEL_REVISION = "4269a0e53d40419f4746e8b3e30ae7faef3a26c6"
 DEFAULT_CONFIDENCE = 0.35
 # Artwork text (SFX, narration) needs higher confidence — false positives
 # draw over artwork and are more damaging than missed speech bubbles.
@@ -32,6 +32,7 @@ _init_lock = threading.Lock()
 
 def _get_model():
     """Lazy-load RT-DETR-v2 model on first use."""
+    import torch
     global _model, _processor, _device
     if _model is None:
         with _init_lock:
@@ -42,8 +43,10 @@ def _get_model():
                 )
 
                 log.info("Loading RT-DETR-v2 model: %s", MODEL_ID)
-                _processor = RTDetrImageProcessor.from_pretrained(MODEL_ID)
-                _model = RTDetrV2ForObjectDetection.from_pretrained(MODEL_ID)
+                _processor = RTDetrImageProcessor.from_pretrained(
+                    MODEL_ID, revision=MODEL_REVISION)
+                _model = RTDetrV2ForObjectDetection.from_pretrained(
+                    MODEL_ID, revision=MODEL_REVISION)
                 _device = "cuda" if torch.cuda.is_available() else "cpu"
                 _model = _model.to(_device)
                 _model.eval()
@@ -61,6 +64,8 @@ def detect_bubbles(img_cv: np.ndarray,
       - score: detection confidence
       - is_artwork: True if text_free detection (narration/SFX outside bubbles)
     """
+    import torch
+
     model, processor, device = _get_model()
 
     # Convert OpenCV BGR to PIL RGB

@@ -39,7 +39,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     grep -v simple-lama requirements.txt | \
         grep -vi '^torch' | \
         pip install --no-cache-dir -r /dev/stdin && \
-    pip install --no-cache-dir --no-deps simple-lama-inpainting
+    pip install --no-cache-dir --no-deps "$(grep '^simple-lama' requirements.txt)"
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1

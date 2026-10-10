@@ -21,6 +21,10 @@ func main() {
 	redisURL := getEnv("REDIS_URL", "redis://localhost:6379")
 	authToken := getEnv("AUTH_TOKEN", "")
 	cacheDir := getEnv("CACHE_DIR", "./cache")
+	pipelineRevision, err := resolveConfiguredPipelineRevision()
+	if err != nil {
+		log.Fatalf("Invalid pipeline revision: %v", err)
+	}
 
 	if authToken == "" {
 		log.Fatal("AUTH_TOKEN environment variable is required")
@@ -48,7 +52,7 @@ func main() {
 	streamMaxLenLow := getEnvInt("STREAM_MAXLEN_LOW", 1000)
 
 	// Server
-	server := NewServer(rdb, cacheDir)
+	server := NewServerWithPipelineRevision(rdb, cacheDir, pipelineRevision)
 	server.maxImageSize = int64(maxImageSizeMB) << 20
 	server.maxDebugUploadSize = int64(maxDebugUploadMB) << 20
 	server.streamMaxLenHigh = int64(streamMaxLenHigh)
@@ -57,6 +61,7 @@ func main() {
 	server.queue.maxLenLow = server.streamMaxLenLow
 	absCacheDir, _ := filepath.Abs(cacheDir)
 	log.Printf("Cache directory: %s (absolute: %s)", cacheDir, absCacheDir)
+	log.Printf("Pipeline revision: %s", pipelineRevision)
 
 	// Start Redis Pub/Sub subscriber for WebSocket notifications
 	go server.StartRedisSubscriber(ctx)

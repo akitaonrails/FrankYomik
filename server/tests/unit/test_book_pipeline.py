@@ -4,6 +4,7 @@ The manga pipelines must be unaffected, and a page that is not prose has to be
 turned away before it reaches OCR rather than annotated as if it were.
 """
 
+import hashlib
 from unittest.mock import patch
 
 import pytest
@@ -15,9 +16,11 @@ from worker.job import VALID_PIPELINES, ProcessingJob, process_job
 
 def job(pipeline="book_furigana", img=None, **kwargs):
     image = img if img is not None else Image.new("RGB", (400, 400), (0, 0, 0))
+    image_bytes = encode_image_pil(image)
     return ProcessingJob(job_id="j1", pipeline=pipeline,
-                         image_bytes=encode_image_pil(image),
-                         source_hash="hash", **kwargs)
+                         image_bytes=image_bytes,
+                         source_hash=hashlib.sha256(image_bytes).hexdigest(),
+                         **kwargs)
 
 
 class TestPipelineRouting:
@@ -53,9 +56,10 @@ class TestNonProsePages:
         assert "manga pipeline" in result.error
 
     def test_the_failure_names_the_pipeline_and_page(self):
-        result = process_job(job())
+        request = job()
+        result = process_job(request)
         assert result.pipeline == "book_furigana"
-        assert result.source_hash == "hash"
+        assert result.source_hash == request.source_hash
 
 
 class TestRerender:
@@ -77,6 +81,7 @@ class TestPageKind:
     @staticmethod
     def _prose_page():
         from PIL import ImageFont
+
         from kindle.config import FONT_JP
         img = Image.new("RGB", (700, 500), (0, 0, 0))
         draw = ImageDraw.Draw(img)

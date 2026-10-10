@@ -2,34 +2,39 @@
 
 import json
 import time
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
 
 from worker.consumer import (
-    Consumer,
+    DEFAULT_HEARTBEAT_TTL,
+    DEFAULT_PROGRESS_TTL,
+    DEFAULT_RESULT_TTL,
     HEARTBEAT_PREFIX,
     IMAGE_KEY_PREFIX,
+    LATEST_KEY_PREFIX,
     NOTIFY_PREFIX,
     PROGRESS_PREFIX,
-    DEFAULT_PROGRESS_TTL,
     RESULT_IMG_PREFIX,
     RESULT_KEY_PREFIX,
-    DEFAULT_RESULT_TTL,
-    DEFAULT_HEARTBEAT_TTL,
     STREAM_HIGH,
-    LATEST_KEY_PREFIX,
     STREAM_LOW,
+    Consumer,
 )
 
 # Aliases for backward-compat with test assertions
 RESULT_TTL = DEFAULT_RESULT_TTL
 HEARTBEAT_TTL = DEFAULT_HEARTBEAT_TTL
 PROGRESS_TTL = DEFAULT_PROGRESS_TTL
+from pipeline.revision import DEFAULT_PIPELINE_REVISION
 from worker.job import ProcessingResult
 
 
 def _make_consumer(**kwargs) -> Consumer:
     """Create a Consumer with mock Redis."""
-    defaults = {"redis_url": "redis://localhost:6379", "consumer_name": "test-w"}
+    defaults = {
+        "redis_url": "redis://localhost:6379",
+        "consumer_name": "test-w",
+        "pipeline_revision": "legacy-v1",
+    }
     defaults.update(kwargs)
     c = Consumer(**defaults)
     c._rdb = MagicMock()
@@ -49,6 +54,7 @@ class TestConsumerInit:
         assert c._rdb is None
         assert c._last_heartbeat == 0.0
         assert c._high_streak == 0
+        assert c.pipeline_revision == DEFAULT_PIPELINE_REVISION
 
     def test_custom_params(self):
         c = Consumer(
@@ -67,6 +73,13 @@ class TestConsumerInit:
         import os
         c = Consumer(redis_url="redis://localhost:6379")
         assert c.consumer_name == f"worker-{os.getpid()}"
+
+    def test_explicit_pipeline_revision(self):
+        c = Consumer(
+            redis_url="redis://localhost:6379",
+            pipeline_revision="detector-v2",
+        )
+        assert c.pipeline_revision == "detector-v2"
 
 
 # --- _decode_field ---
@@ -113,9 +126,7 @@ class TestHandleSignal:
 class TestHeartbeat:
     def test_sets_redis_key_with_ttl(self):
         c = _make_consumer()
-        before = time.monotonic()
         c._heartbeat()
-        after = time.monotonic()
 
         expected_key = f"{HEARTBEAT_PREFIX}test-w:heartbeat"
         c._rdb.set.assert_called_once()
@@ -271,6 +282,27 @@ class TestProcessMessage:
         # Should ACK
         c._rdb.xack.assert_called_once()
 
+    @patch("worker.consumer.process_job")
+    def test_pipeline_revision_mismatch_is_rejected(self, mock_process):
+        c = _make_consumer(pipeline_revision="pipeline-v2")
+        fields = {
+            b"job_id": b"j-stale",
+            b"pipeline": b"manga_translate",
+            b"pipeline_revision": b"pipeline-v1",
+            b"image_key": b"frank:images:abc",
+        }
+
+        result = c._process_message(STREAM_HIGH, b"2-1", fields)
+
+        assert result == "skipped"
+        mock_process.assert_not_called()
+        c._rdb.get.assert_not_called()
+        stored = json.loads(c._rdb.set.call_args_list[0][0][1])
+        assert stored["status"] == "failed"
+        assert stored["pipeline_revision"] == "pipeline-v2"
+        assert "Pipeline revision mismatch" in stored["error"]
+        c._rdb.xack.assert_called_once_with(STREAM_HIGH, "workers", b"2-1")
+
     def test_missing_image_key_field_stores_failed(self):
         """Empty image_key field should fail gracefully."""
         c = _make_consumer()
@@ -288,7 +320,7 @@ class TestProcessMessage:
 
     @patch("worker.consumer.process_job")
     def test_successful_processing(self, mock_process):
-        c = _make_consumer()
+        c = _make_consumer(pipeline_revision="pipeline-v2")
         c._rdb.get.return_value = b"fake-png-bytes"
 
         mock_process.return_value = ProcessingResult(
@@ -302,6 +334,7 @@ class TestProcessMessage:
         fields = {
             b"job_id": b"j-ok",
             b"pipeline": b"manga_translate",
+            b"pipeline_revision": b"pipeline-v2",
             b"image_key": b"frank:images:hash123",
         }
         c._process_message(STREAM_HIGH, b"3-0", fields)
@@ -312,6 +345,7 @@ class TestProcessMessage:
         assert job.job_id == "j-ok"
         assert job.pipeline == "manga_translate"
         assert job.image_bytes == b"fake-png-bytes"
+        assert job.pipeline_revision == "pipeline-v2"
 
         # Verify result stored (meta + image)
         assert c._rdb.set.call_count == 2
@@ -525,7 +559,6 @@ class TestTick:
 
         def mock_read(stream, block_ms):
             call_order.append(stream)
-            return None
 
         c._read_one = mock_read
         c._last_heartbeat = time.monotonic()  # prevent heartbeat call
@@ -576,7 +609,6 @@ class TestTick:
 
         def mock_read(stream, block_ms):
             call_order.append(stream)
-            return None
 
         c._read_one = mock_read
         c._last_heartbeat = time.monotonic()
@@ -794,6 +826,61 @@ class TestProcessMessageMetadata:
         assert manifest["image_stale"] is False
 
     @patch("worker.consumer.process_job")
+    def test_non_english_result_uses_language_cache_namespace(
+        self, mock_process, tmp_path
+    ):
+        import hashlib
+
+        c = _make_consumer(cache_dir=str(tmp_path))
+        source_bytes = b"fake-png-pt-br"
+        source_hash = hashlib.sha256(source_bytes).hexdigest()
+        c._rdb.get.return_value = source_bytes
+        mock_process.return_value = ProcessingResult(
+            job_id="j-cache-pt-br",
+            status="completed",
+            pipeline="manga_translate",
+            image_bytes=b"png-result",
+            metadata_payload={
+                "schema_version": 2,
+                "page_id": f"manga_translate:{source_hash}",
+                "pipeline": "manga_translate",
+                "pipeline_revision": "legacy-v1",
+                "source_hash": source_hash,
+                "image": {"width": 100, "height": 80},
+                "regions": [],
+                "stage_provenance": {},
+            },
+        )
+        fields = {
+            b"job_id": b"j-cache-pt-br",
+            b"pipeline": b"manga_translate",
+            b"target_lang": b"pt-br",
+            b"image_key": b"frank:images:pt-br",
+            b"source_hash": source_hash.encode(),
+        }
+
+        c._process_message(STREAM_HIGH, b"3-1", fields)
+
+        manifest = c._page_cache.load_manifest_by_hash(
+            "manga_translate_pt-br", source_hash)
+        assert manifest is not None
+        assert manifest["pipeline"] == "manga_translate_pt-br"
+        metadata = c._page_cache.load_metadata_by_hash(
+            "manga_translate_pt-br",
+            source_hash,
+            document_pipeline="manga_translate",
+        )
+        assert metadata is not None
+        assert metadata["pipeline"] == "manga_translate"
+        redis_metadata_keys = [
+            call_args[0][0] for call_args in c._rdb.set.call_args_list
+        ]
+        assert (
+            f"frank:meta:manga_translate_pt-br:{source_hash}"
+            in redis_metadata_keys
+        )
+
+    @patch("worker.consumer.process_job")
     def test_no_cache_without_metadata(self, mock_process, tmp_path):
         c = _make_consumer(cache_dir=str(tmp_path))
         c._rdb.get.return_value = b"fake-png"
@@ -889,3 +976,68 @@ class TestProcessMessageMetadata:
         assert job.rerender_from_metadata is True
         assert job.metadata_payload is not None
         assert job.metadata_payload["regions"][0]["id"] == "r1"
+
+    @patch("worker.consumer.process_job")
+    def test_non_english_rerender_loads_base_pipeline_document(
+        self, mock_process, tmp_path
+    ):
+        import hashlib
+
+        c = _make_consumer(cache_dir=str(tmp_path))
+        source_bytes = b"pt-br-source"
+        source_hash = hashlib.sha256(source_bytes).hexdigest()
+        c._rdb.get.return_value = source_bytes
+        c._page_cache.store_page(
+            pipeline="manga_translate_pt-br",
+            document_pipeline="manga_translate",
+            source_hash=source_hash,
+            source_image_bytes=source_bytes,
+            rendered_image_bytes=b"rendered-png",
+            metadata_payload={
+                "schema_version": 2,
+                "page_id": f"manga_translate:{source_hash}",
+                "pipeline": "manga_translate",
+                "pipeline_revision": "legacy-v1",
+                "source_hash": source_hash,
+                "image": {"width": 100, "height": 80},
+                "regions": [{
+                    "id": "r1", "kind": "bubble",
+                    "bbox": [1, 1, 20, 20], "reading_order": 0,
+                }],
+                "stage_provenance": {},
+            },
+        )
+        mock_process.return_value = ProcessingResult(
+            job_id="j-rerender-pt-br",
+            status="completed",
+            pipeline="manga_translate",
+            image_bytes=b"rerendered-png",
+            metadata_payload={
+                "schema_version": 2,
+                "page_id": f"manga_translate:{source_hash}",
+                "pipeline": "manga_translate",
+                "pipeline_revision": "legacy-v1",
+                "source_hash": source_hash,
+                "image": {"width": 100, "height": 80},
+                "regions": [{
+                    "id": "r1", "kind": "bubble",
+                    "bbox": [1, 1, 20, 20], "reading_order": 0,
+                }],
+                "stage_provenance": {},
+            },
+        )
+        fields = {
+            b"job_id": b"j-rerender-pt-br",
+            b"pipeline": b"manga_translate",
+            b"target_lang": b"pt-br",
+            b"image_key": b"frank:images:pt-br",
+            b"source_hash": source_hash.encode(),
+            b"rerender_from_metadata": b"1",
+        }
+
+        c._process_message(STREAM_HIGH, b"6-1", fields)
+
+        job = mock_process.call_args[0][0]
+        assert job.pipeline == "manga_translate"
+        assert job.target_lang == "pt-br"
+        assert job.metadata_payload["pipeline"] == "manga_translate"

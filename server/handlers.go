@@ -26,10 +26,12 @@ type metadataPatchRequest struct {
 
 // Server holds the HTTP handlers and dependencies.
 type Server struct {
-	queue   *Queue
-	results *Results
-	cache   *Cache
-	rdb     *redis.Client
+	queue             *Queue
+	results           *Results
+	cache             *Cache
+	rdb               *redis.Client
+	pipelineRevision  string
+	submitRerenderJob func(context.Context, []byte, string, string, *JobMetadata) (string, bool, error)
 
 	// Configurable limits (set from env vars in main.go)
 	maxImageSize       int64 // max upload size in bytes (default: 20 << 20)
@@ -44,15 +46,21 @@ type Server struct {
 
 // NewServer creates a new Server instance.
 func NewServer(rdb *redis.Client, cacheDir string) *Server {
-	cache := NewCache(cacheDir)
+	return NewServerWithPipelineRevision(rdb, cacheDir, configuredPipelineRevision())
+}
+
+// NewServerWithPipelineRevision creates API dependencies under one revision.
+func NewServerWithPipelineRevision(rdb *redis.Client, cacheDir, pipelineRevision string) *Server {
+	cache := NewCacheWithRevision(cacheDir, pipelineRevision)
 	if err := cache.EnsureV2Dirs(); err != nil {
 		log.Printf("WARN: failed to prepare cache v2 directories: %v", err)
 	}
 	return &Server{
-		queue:              NewQueue(rdb),
+		queue:              NewQueueWithRevision(rdb, pipelineRevision),
 		results:            NewResults(rdb),
 		cache:              cache,
 		rdb:                rdb,
+		pipelineRevision:   pipelineRevision,
 		maxImageSize:       20 << 20, // 20 MiB default
 		maxDebugUploadSize: 50 << 20, // 50 MiB default
 		subscribers:        make(map[string]map[chan WSNotification]struct{}),
@@ -170,14 +178,15 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			if err := json.NewEncoder(w).Encode(JobResponse{
-				JobID:       cacheJobID,
-				Status:      "completed",
-				Cached:      true,
-				ImageURL:    fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", cachePipeline, sourceHash),
-				MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", cachePipeline, sourceHash),
-				SourceHash:  sourceHash,
-				ContentHash: m.ContentHash,
-				RenderHash:  m.RenderHash,
+				JobID:            cacheJobID,
+				Status:           "completed",
+				Cached:           true,
+				ImageURL:         fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", cachePipeline, sourceHash),
+				MetaURL:          fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", cachePipeline, sourceHash),
+				SourceHash:       sourceHash,
+				ContentHash:      m.ContentHash,
+				RenderHash:       m.RenderHash,
+				PipelineRevision: m.PipelineRevision,
 			}); err != nil {
 				log.Printf("WARN: response encode: %v", err)
 			}
@@ -200,15 +209,16 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			if err := json.NewEncoder(w).Encode(JobResponse{
-				JobID:       jobID,
-				Status:      "completed",
-				Cached:      true,
-				DedupHit:    true,
-				ImageURL:    status.ImageURL,
-				MetaURL:     status.MetaURL,
-				SourceHash:  status.SourceHash,
-				ContentHash: status.ContentHash,
-				RenderHash:  status.RenderHash,
+				JobID:            jobID,
+				Status:           "completed",
+				Cached:           true,
+				DedupHit:         true,
+				ImageURL:         status.ImageURL,
+				MetaURL:          status.MetaURL,
+				SourceHash:       status.SourceHash,
+				ContentHash:      status.ContentHash,
+				RenderHash:       status.RenderHash,
+				PipelineRevision: status.PipelineRevision,
 			}); err != nil {
 				log.Printf("WARN: response encode: %v", err)
 			}
@@ -232,10 +242,11 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(JobResponse{
-		JobID:      jobID,
-		Status:     "queued",
-		DedupHit:   dedupHit,
-		SourceHash: sourceHash,
+		JobID:            jobID,
+		Status:           "queued",
+		DedupHit:         dedupHit,
+		SourceHash:       sourceHash,
+		PipelineRevision: s.pipelineRevision,
 	}); err != nil {
 		log.Printf("WARN: response encode: %v", err)
 	}
@@ -261,14 +272,15 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(JobStatusResponse{
-			JobID:       jobID,
-			Status:      "completed",
-			Pipeline:    pipeline,
-			ImageURL:    fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", pipeline, sourceHash),
-			MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, sourceHash),
-			SourceHash:  sourceHash,
-			ContentHash: m.ContentHash,
-			RenderHash:  m.RenderHash,
+			JobID:            jobID,
+			Status:           "completed",
+			Pipeline:         pipeline,
+			ImageURL:         fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/image", pipeline, sourceHash),
+			MetaURL:          fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, sourceHash),
+			SourceHash:       sourceHash,
+			ContentHash:      m.ContentHash,
+			RenderHash:       m.RenderHash,
+			PipelineRevision: m.PipelineRevision,
 		}); err != nil {
 			log.Printf("WARN: response encode: %v", err)
 		}
@@ -449,10 +461,15 @@ func (s *Server) handleCacheMetaByHash(w http.ResponseWriter, r *http.Request) {
 // handlePatchCacheMetaByHash handles PATCH /api/v1/cache/by-hash/{pipeline}/{source_hash}/meta
 // and enqueues a rerender job that reuses metadata.
 func (s *Server) handlePatchCacheMetaByHash(w http.ResponseWriter, r *http.Request) {
-	pipeline := r.PathValue("pipeline")
+	cachePipeline := r.PathValue("pipeline")
 	sourceHash := r.PathValue("source_hash")
-	if pipeline == "" || sourceHash == "" {
+	if cachePipeline == "" || sourceHash == "" {
 		jsonError(w, "missing path parameters", http.StatusBadRequest)
+		return
+	}
+	pipeline, targetLang, ok := splitCachePipeline(cachePipeline)
+	if !ok {
+		jsonError(w, "invalid cache pipeline", http.StatusBadRequest)
 		return
 	}
 	var req metadataPatchRequest
@@ -474,7 +491,7 @@ func (s *Server) handlePatchCacheMetaByHash(w http.ResponseWriter, r *http.Reque
 	}
 
 	updatedManifest, err := s.cache.UpdateMetadataBySourceHash(
-		pipeline,
+		cachePipeline,
 		sourceHash,
 		req.Metadata,
 		req.BaseContentHash,
@@ -488,12 +505,16 @@ func (s *Server) handlePatchCacheMetaByHash(w http.ResponseWriter, r *http.Reque
 			jsonError(w, "cached metadata not found", http.StatusNotFound)
 			return
 		}
+		if errors.Is(err, errInvalidMetadata) {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		log.Printf("ERROR updating metadata: %v", err)
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	sourceImage, m, ok := s.cache.LookupSourceBySourceHash(pipeline, sourceHash)
+	sourceImage, m, ok := s.cache.LookupSourceBySourceHash(cachePipeline, sourceHash)
 	if !ok {
 		jsonError(w, "source image not found", http.StatusNotFound)
 		return
@@ -503,8 +524,13 @@ func (s *Server) handlePatchCacheMetaByHash(w http.ResponseWriter, r *http.Reque
 		Chapter:              m.Chapter,
 		PageNumber:           m.Page,
 		RerenderFromMetadata: true,
+		TargetLang:           targetLang,
 	}
-	jobID, _, err := s.queue.SubmitJob(r.Context(), sourceImage, pipeline, priority, meta)
+	submit := s.submitRerenderJob
+	if submit == nil {
+		submit = s.queue.SubmitJob
+	}
+	jobID, _, err := submit(r.Context(), sourceImage, pipeline, priority, meta)
 	if err != nil {
 		log.Printf("ERROR submitting rerender job: %v", err)
 		jsonError(w, "internal error", http.StatusInternalServerError)
@@ -514,12 +540,13 @@ func (s *Server) handlePatchCacheMetaByHash(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(JobResponse{
-		JobID:       jobID,
-		Status:      "queued",
-		SourceHash:  sourceHash,
-		ContentHash: updatedManifest.ContentHash,
-		RenderHash:  updatedManifest.RenderHash,
-		MetaURL:     fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, sourceHash),
+		JobID:            jobID,
+		Status:           "queued",
+		SourceHash:       sourceHash,
+		ContentHash:      updatedManifest.ContentHash,
+		RenderHash:       updatedManifest.RenderHash,
+		PipelineRevision: updatedManifest.PipelineRevision,
+		MetaURL:          fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", cachePipeline, sourceHash),
 	})
 }
 
@@ -533,12 +560,13 @@ func (s *Server) serveMetadataByHash(w http.ResponseWriter, r *http.Request, pip
 			return
 		}
 		resp := map[string]interface{}{
-			"source_hash":  sourceHash,
-			"pipeline":     pipeline,
-			"content_hash": m.ContentHash,
-			"render_hash":  m.RenderHash,
-			"image_stale":  m.ImageStale,
-			"metadata":     payload,
+			"source_hash":       sourceHash,
+			"pipeline":          pipeline,
+			"content_hash":      m.ContentHash,
+			"render_hash":       m.RenderHash,
+			"image_stale":       m.ImageStale,
+			"pipeline_revision": m.PipelineRevision,
+			"metadata":          payload,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -550,9 +578,20 @@ func (s *Server) serveMetadataByHash(w http.ResponseWriter, r *http.Request, pip
 	redisKey := fmt.Sprintf("frank:meta:%s:%s", pipeline, sourceHash)
 	val, err := s.rdb.Get(r.Context(), redisKey).Bytes()
 	if err == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(val)
-		return
+		var cached struct {
+			PipelineRevision string `json:"pipeline_revision"`
+		}
+		if json.Unmarshal(val, &cached) == nil {
+			revision := cached.PipelineRevision
+			if revision == "" {
+				revision = legacyPipelineRevision
+			}
+			if revision == s.pipelineRevision {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(val)
+				return
+			}
+		}
 	}
 
 	jsonError(w, "cached metadata not found", http.StatusNotFound)
@@ -735,6 +774,7 @@ func completionNotification(jobID string, meta map[string]any) WSNotification {
 	notif.SourceHash = stringField(meta, "source_hash")
 	notif.ContentHash = stringField(meta, "content_hash")
 	notif.RenderHash = stringField(meta, "render_hash")
+	notif.PipelineRevision = stringField(meta, "pipeline_revision")
 	if pipeline := stringField(meta, "pipeline"); pipeline != "" && notif.SourceHash != "" {
 		notif.MetaURL = fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, notif.SourceHash)
 	}

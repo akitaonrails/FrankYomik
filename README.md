@@ -156,6 +156,11 @@ echo "AUTH_TOKEN=mysecret" > .env
 echo "APP_UID=$(id -u)" >> .env
 echo "APP_GID=$(id -g)" >> .env
 
+# Optional: assert the fingerprint derived from the pinned stage manifest.
+# Startup fails if the value does not match. Leaving it unset uses the derived
+# fingerprint directly on both the API and worker.
+# echo "PIPELINE_REVISION=sha256:<64 hex characters>" >> .env
+
 # Build and start
 docker compose up -d
 
@@ -307,11 +312,12 @@ This is a one-time setup. Future updates signed with the same key install withou
 ```bash
 cd server
 
-# Python unit tests (444 tests)
-.venv/bin/pytest tests/unit/ -v
+# Fast Python suite used by CI (unit + fake-backed four-pipeline integration)
+PYTHONPATH=. .venv/bin/python -m pytest tests/unit tests/integration \
+  -m "not slow and not model and not network" -v
 
-# Python integration tests (34 tests, needs test images in docs/)
-.venv/bin/pytest tests/integration/ -v
+# Real local-model integration tests (requires the configured weights/device)
+PYTHONPATH=. .venv/bin/python -m pytest tests/integration -m model -v
 
 # Go API tests (needs Redis for full coverage, skips gracefully without it)
 go test -v .
@@ -344,6 +350,16 @@ All settings in `server/config.yaml`:
 | `book` | Text-book render scale and OCR chunk size |
 | `webtoon` | Scraper, OCR, bubble detection, inpainting |
 | `worker` | Redis, consumer group, heartbeat, timeout |
+
+The API and worker derive `PIPELINE_REVISION` from the pinned stage manifest.
+An optional environment value asserts the expected fingerprint and stops
+startup if the deployed identities differ. `legacy-v1` is reserved for
+explicit compatibility with pre-revision manifests and old queue messages. A
+different revision deliberately misses old cache entries. See
+[Pipeline architecture](docs/pipeline_architecture.md) and
+[Pipeline stage manifest](docs/pipeline_stage_manifest.md) for the runtime,
+pinning, and compatibility contracts. The structured per-page payload is specified in
+[PageDocument schema version 2](docs/page_document_v2.md).
 
 ## License
 

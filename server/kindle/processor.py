@@ -19,9 +19,13 @@ from .image_utils import (
 )
 from .ocr import extract_text_from_region, is_valid_japanese
 from .text_renderer import (
-    compute_bubble_font_size, compute_furigana_page_font_limits,
-    draw_debug_boxes, estimate_source_vertical_font_size, render_english,
-    render_english_on_artwork, render_furigana_vertical,
+    compute_bubble_font_size,
+    compute_furigana_page_font_limits,
+    draw_debug_boxes,
+    estimate_source_vertical_font_size,
+    render_english,
+    render_english_on_artwork,
+    render_furigana_vertical,
 )
 from .translator import translate
 
@@ -44,6 +48,18 @@ class BubbleResult:
     source_font_size: int | None = None  # Estimated original glyph scale
 
 
+@dataclass(frozen=True)
+class MangaRenderPlan:
+    """Values prepared before cleanup and consumed by the render stage."""
+
+    base_font_size: int | None
+    font_sizes: dict[int, int]
+    page_font_cap: int | None
+    source_outlier_threshold: int | None
+    page_font_floor: int | None
+    artwork_inpainted: frozenset[int]
+
+
 @dataclass
 class PageResult:
     image_path: str
@@ -53,6 +69,7 @@ class PageResult:
     bubbles_raw: list[dict] = field(default_factory=list)
     bubble_results: list[BubbleResult] = field(default_factory=list)
     output_img: Image.Image | None = None
+    render_plan: MangaRenderPlan | None = None
 
 
 # --- Stage functions ---
@@ -96,14 +113,14 @@ def detect_page_bubbles(page: PageResult) -> None:
 
 def _ocr_char_overlap(text1: str, text2: str) -> float:
     """Fraction of content chars in text1 that also appear in text2."""
-    chars1 = set(ch for ch in text1
-                 if not (0x3000 <= ord(ch) <= 0x303F or
-                         0xFF01 <= ord(ch) <= 0xFF60 or
-                         ch.isspace()))
-    chars2 = set(ch for ch in text2
-                 if not (0x3000 <= ord(ch) <= 0x303F or
-                         0xFF01 <= ord(ch) <= 0xFF60 or
-                         ch.isspace()))
+    chars1 = {ch for ch in text1
+              if not (0x3000 <= ord(ch) <= 0x303F or
+                      0xFF01 <= ord(ch) <= 0xFF60 or
+                      ch.isspace())}
+    chars2 = {ch for ch in text2
+              if not (0x3000 <= ord(ch) <= 0x303F or
+                      0xFF01 <= ord(ch) <= 0xFF60 or
+                      ch.isspace())}
     if not chars1:
         return 1.0
     return len(chars1 & chars2) / len(chars1)
@@ -142,9 +159,9 @@ def ocr_bubble(img_pil: Image.Image, bubble: dict) -> BubbleResult:
     # Detect manga-ocr hallucinations on non-text regions (faces, artwork).
     # Short texts are most prone to hallucination — verify by checking OCR
     # consistency across a center crop.
-    if valid and len(text.strip()) < 15:
-        if not _verify_ocr_consistency(img_pil, bbox, text):
-            valid = False
+    if (valid and len(text.strip()) < 15
+            and not _verify_ocr_consistency(img_pil, bbox, text)):
+        valid = False
     if text.strip() and not valid:
         log.info("  OCR noise (not Japanese): %s, skipping", text)
     elif valid:
@@ -200,10 +217,10 @@ def _compute_normalized_font_sizes(
         sizes = sorted(font_sizes.values())
         median = sizes[len(sizes) // 2]
         cap = int(median * 1.4)
-        for i in font_sizes:
-            if font_sizes[i] > cap:
+        for i, value in font_sizes.items():
+            if value > cap:
                 log.debug("  Capping bubble %d font %d→%d (median=%d)",
-                          i, font_sizes[i], cap, median)
+                          i, value, cap, median)
                 font_sizes[i] = cap
 
     return font_sizes
@@ -240,13 +257,11 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
     return encode_image_pil(_render_page_image(page, mode))
 
 
-def _render_page_image(page: PageResult, mode: PipelineMode,
-                       log_font_target: bool = False) -> Image.Image:
-    """Clear and render transformed manga bubbles into ``page.output_img``."""
+def cleanup_page(page: PageResult, mode: PipelineMode,
+                 log_font_target: bool = False) -> None:
+    """Remove source text and retain the values needed for later rendering."""
     page.output_img = page.img_pil.copy()
 
-    # Page-wide font target for consistent sizing across all bubbles.
-    # Proportional to image height so high-DPI screens get larger text.
     base_font_size = None
     font_sizes: dict[int, int] = {}
     if mode == PipelineMode.TRANSLATE:
@@ -258,8 +273,6 @@ def _render_page_image(page: PageResult, mode: PipelineMode,
         font_sizes = _compute_normalized_font_sizes(
             page.bubble_results, base_font_size)
 
-    # Two-pass rendering: clear all bubbles first, then render all text.
-    # This prevents overlapping bubbles from erasing each other's rendered text.
     page_font_cap = None
     source_outlier_threshold = None
     page_font_floor = None
@@ -280,29 +293,68 @@ def _render_page_image(page: PageResult, mode: PipelineMode,
             continue
         clear_text_strokes(page.output_img, br.bbox, mask=br.mask)
 
+    page.render_plan = MangaRenderPlan(
+        base_font_size=base_font_size,
+        font_sizes=font_sizes,
+        page_font_cap=page_font_cap,
+        source_outlier_threshold=source_outlier_threshold,
+        page_font_floor=page_font_floor,
+        artwork_inpainted=frozenset(artwork_inpainted),
+    )
+
+
+def render_cleaned_page_to_bytes(page: PageResult, mode: PipelineMode) -> bytes:
+    """Render transformed text after the explicit cleanup stage."""
+    return encode_image_pil(_render_cleaned_page_image(page, mode))
+
+
+def _render_cleaned_page_image(page: PageResult,
+                               mode: PipelineMode) -> Image.Image:
+    """Render without cleanup so orchestration can call both stages."""
+    if page.output_img is None or page.render_plan is None:
+        raise RuntimeError("manga cleanup stage must run before rendering")
+
+    plan = page.render_plan
     for i, br in enumerate(page.bubble_results):
         if br.transformed is None:
             continue
         if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
-            render_english_on_artwork(page.output_img, br.bbox,
-                                      br.transformed,
-                                      base_font_size=base_font_size,
-                                      inpainted=i in artwork_inpainted)
+            render_english_on_artwork(
+                page.output_img,
+                br.bbox,
+                br.transformed,
+                base_font_size=plan.base_font_size,
+                inpainted=i in plan.artwork_inpainted,
+            )
             continue
         if mode == PipelineMode.FURIGANA:
-            render_furigana_vertical(page.output_img, br.bbox, br.transformed,
-                                     mask=br.mask,
-                                     source_font_size=br.source_font_size,
-                                     page_font_cap=page_font_cap,
-                                     source_outlier_threshold=source_outlier_threshold,
-                                     page_font_floor=page_font_floor,
-                                     layout_img=page.img_pil)
+            render_furigana_vertical(
+                page.output_img,
+                br.bbox,
+                br.transformed,
+                mask=br.mask,
+                source_font_size=br.source_font_size,
+                page_font_cap=plan.page_font_cap,
+                source_outlier_threshold=plan.source_outlier_threshold,
+                page_font_floor=plan.page_font_floor,
+                layout_img=page.img_pil,
+            )
         else:
-            size = font_sizes.get(i, base_font_size)
-            render_english(page.output_img, br.bbox, br.transformed,
-                           base_font_size=size, mask=br.mask)
-
+            render_english(
+                page.output_img,
+                br.bbox,
+                br.transformed,
+                base_font_size=plan.font_sizes.get(i, plan.base_font_size),
+                mask=br.mask,
+            )
     return page.output_img
+
+
+def _render_page_image(page: PageResult, mode: PipelineMode,
+                       log_font_target: bool = False) -> Image.Image:
+    """Compatibility composition of the cleanup and render stages."""
+    cleanup_page(page, mode, log_font_target=log_font_target)
+    return _render_cleaned_page_image(page, mode)
 
 
 def _estimate_furigana_source_font_sizes(

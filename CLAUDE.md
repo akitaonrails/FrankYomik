@@ -32,6 +32,8 @@ There are four pipelines:
 - `server/worker/consumer.py`: Redis stream consumer, result publishing, cache writes
 - `server/worker/job.py`: pipeline routing and metadata payload generation
 - `server/worker/page_cache.py`: Python-side cache v2 writer/reader
+- `server/pipeline/document.py`: validated PageDocument v2 data model
+- `server/pipeline/protocols.py`: typed boundaries for staged backend replacement
 - `server/kindle/`: manga OCR, translation, rendering, furigana, bubble detection
 - `server/kindle/book_layout.py`: column/gutter analysis for prose pages
 - `server/kindle/book_processor.py`: per-column OCR and reading placement
@@ -51,6 +53,11 @@ There are four pipelines:
 - `client/lib/webview/strategies/naver_webtoon_strategy.dart`: Naver detection and capture
 
 ## Runtime flow
+
+The current processing and persistence boundaries are documented in
+`docs/pipeline_architecture.md`. New results carry a PageDocument v2 payload;
+the active model implementations remain in `server/kindle/` and
+`server/webtoon/` while the migration replaces one backend at a time.
 
 ### Kindle / manga flow
 
@@ -491,6 +498,27 @@ The server and worker share the same cache layout.
 
 The manifest is the source of truth. Redis is short-lived delivery state, not durable storage.
 
+Do not conflate the three persistence version labels: `cache/v2` is the
+filesystem layout, manifest schema version 3 points at stored objects, and
+PageDocument schema version 2 is the page metadata payload. Metadata version 1
+and manifest version 2 remain readable for compatibility. The authoritative
+specifications are `docs/cache_metadata_v2.md` and `docs/page_document_v2.md`.
+
+Cache identity includes `PIPELINE_REVISION`. The API sends it with each job and
+uses it for deduplication; workers reject a different revision; cache reads
+treat a different revision as a miss. The API and worker derive the value from
+`server/pipeline/stage_manifest.json` and verify its named artifacts. An
+optional environment value asserts the expected fingerprint and fails startup
+on a mismatch. Only old queue messages without the field and pre-revision
+manifests map to `legacy-v1`; selecting it requires
+`ALLOW_LEGACY_PIPELINE_REVISION=1`.
+
+For non-English output, the durable cache namespace is
+`<pipeline>_<target-language>` (for example `manga_translate_pt-br`). Its
+PageDocument keeps the executable base pipeline (`manga_translate`). Pass the
+base pipeline as `document_pipeline` when validating metadata through the
+Python cache API; the Go cache splits known namespaces automatically.
+
 ## API surface
 
 Main endpoints:
@@ -528,15 +556,31 @@ flutter run -d linux
 
 ```bash
 cd server && go test ./...
-cd server && pytest tests/unit/test_page_cache.py
+cd server && PYTHONPATH=. .venv/bin/python -m pytest \
+  tests/unit tests/integration \
+  -m "not slow and not model and not network" -v
+cd server && PYTHONPATH=. .venv/bin/python -m pytest \
+  tests/integration -m model -v
 cd client && flutter test
 ```
+
+The fast Python command is the CI gate. Its injected worker contract sends
+Redis-style messages through `Consumer._process_message` for
+`manga_translate`, `manga_furigana`, `book_furigana`, and `webtoon`, then checks
+language-qualified cache storage and reload. Manga and webtoon cases also edit
+metadata and rerender without repeating detection, OCR, or translation. Tests
+marked `model`, `slow`, or `network` are explicit because they need weights,
+more time, or an external service.
 
 ## Configuration that matters
 
 - `AUTH_TOKEN`: required by the API
 - `REDIS_URL`: Redis connection for the API
 - `CACHE_DIR`: shared disk cache path for the API
+- `PIPELINE_REVISION`: optional assertion for the API/worker output revision;
+  when absent, both derive the SHA-256 fingerprint of the pinned stage manifest
+- `ALLOW_LEGACY_PIPELINE_REVISION`: set to `1` only with
+  `PIPELINE_REVISION=legacy-v1` for deliberate compatibility migration
 - `server/config.yaml`: worker-side config for Ollama, OCR, fonts, cache, and webtoon settings
 - `docker-compose.yml`: the normal multi-service deployment path
 

@@ -1,0 +1,503 @@
+{
+  "inpainting_cases": [
+    {
+      "id": "synthetic_01_portrait_suit",
+      "kind": "artwork",
+      "input": "assets/inpainting_eval/synthetic_01_portrait_suit__input.png",
+      "mask": "assets/inpainting_eval/synthetic_01_portrait_suit__mask.png",
+      "reference": "assets/inpainting_eval/synthetic_01_portrait_suit__reference.png",
+      "sha256": "9141c05e22326105644042bbaa4c513f32a7be6508437ff0061557d203474f42"
+    },
+    {
+      "id": "synthetic_02_hair_halftone",
+      "kind": "artwork",
+      "input": "assets/inpainting_eval/synthetic_02_hair_halftone__input.png",
+      "mask": "assets/inpainting_eval/synthetic_02_hair_halftone__mask.png",
+      "reference": "assets/inpainting_eval/synthetic_02_hair_halftone__reference.png",
+      "sha256": "3214750c5256b78dac882cd3dede8a3533ea5023f92606709d2944e7aa9c470d"
+    },
+    {
+      "id": "synthetic_03_action_art",
+      "kind": "artwork",
+      "input": "assets/inpainting_eval/synthetic_03_action_art__input.png",
+      "mask": "assets/inpainting_eval/synthetic_03_action_art__mask.png",
+      "reference": "assets/inpainting_eval/synthetic_03_action_art__reference.png",
+      "sha256": "fbe3124c7913d4b3d8d8dff78c87ae90183c005315561177f430b3fe0c8cbe3e"
+    },
+    {
+      "id": "synthetic_04_face_flat",
+      "kind": "textured_balloon",
+      "input": "assets/inpainting_eval/synthetic_04_face_flat__input.png",
+      "mask": "assets/inpainting_eval/synthetic_04_face_flat__mask.png",
+      "reference": "assets/inpainting_eval/synthetic_04_face_flat__reference.png",
+      "sha256": "7fc27397a90836d6e4bfb40ee76c3af80f7c0fbdbc65ba6827ab4d06d6057514"
+    },
+    {
+      "id": "synthetic_05_street_lines",
+      "kind": "artwork",
+      "input": "assets/inpainting_eval/synthetic_05_street_lines__input.png",
+      "mask": "assets/inpainting_eval/synthetic_05_street_lines__mask.png",
+      "reference": "assets/inpainting_eval/synthetic_05_street_lines__reference.png",
+      "sha256": "73b8a12dddb328c42c907f8df0cdfa27093c4da55cfe5073dcecf280a5320e55"
+    },
+    {
+      "id": "synthetic_06_speed_lines",
+      "kind": "artwork",
+      "input": "assets/inpainting_eval/synthetic_06_speed_lines__input.png",
+      "mask": "assets/inpainting_eval/synthetic_06_speed_lines__mask.png",
+      "reference": "assets/inpainting_eval/synthetic_06_speed_lines__reference.png",
+      "sha256": "b0c06498f652281809f0efa7682f06d4bd9e7bb9cd09c37443f5c4f73ab7ad28"
+    },
+    {
+      "id": "synthetic_07_table_texture",
+      "kind": "artwork",
+      "input": "assets/inpainting_eval/synthetic_07_table_texture__input.png",
+      "mask": "assets/inpainting_eval/synthetic_07_table_texture__mask.png",
+      "reference": "assets/inpainting_eval/synthetic_07_table_texture__reference.png",
+      "sha256": "ff98155fa1fcfdb77bfe0ffdf0d6f1bf6d109afd32f80fb31d9d564befa348c0"
+    },
+    {
+      "id": "synthetic_08_dense_art",
+      "kind": "artwork",
+      "input": "assets/inpainting_eval/synthetic_08_dense_art__input.png",
+      "mask": "assets/inpainting_eval/synthetic_08_dense_art__mask.png",
+      "reference": "assets/inpainting_eval/synthetic_08_dense_art__reference.png",
+      "sha256": "6da99913b3e7c16d0f2cc3776329e55076a82922f65c528093580fee1ae8e92e"
+    }
+  ],
+  "ocr_cases": [
+    {
+      "id": "manga__adult2__hard",
+      "image": "assets/ocr_eval/manga__adult2__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "20bf8868f9406da7b2f48b23d1d4d02b54f23a8c185bf22872c3d67be8ac8948"
+    },
+    {
+      "id": "manga__adult2__high",
+      "image": "assets/ocr_eval/manga__adult2__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "3fec3646d6d13fa828f7be793009df2abfd43110d94ef7701ee3e1251012810f"
+    },
+    {
+      "id": "manga__adult3__hard",
+      "image": "assets/ocr_eval/manga__adult3__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "7c46b875ae61d6fe0e684408720dacb9b0fd62302eac815b3a2aba2989653922"
+    },
+    {
+      "id": "manga__adult3__high",
+      "image": "assets/ocr_eval/manga__adult3__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "3279ff25efbca324e5c5842e2c3992dc61facdfc3c04bab719de512c0b3d6335"
+    },
+    {
+      "id": "manga__adult4__hard",
+      "image": "assets/ocr_eval/manga__adult4__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "3ac40cd1b1fef721360377edeabc49b35d56d4a369a6eeb048768d4bd164a84b"
+    },
+    {
+      "id": "manga__adult4__high",
+      "image": "assets/ocr_eval/manga__adult4__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "b286586603f3e1ba6077828497567e8d9e08fd3f7ef9a39edf9e354a0d8cd5b1"
+    },
+    {
+      "id": "manga__adult5__hard",
+      "image": "assets/ocr_eval/manga__adult5__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "57d06b23b8bdbaae416e453d0df6e6801dd995527917481173bc269eb7fcee49"
+    },
+    {
+      "id": "manga__adult5__high",
+      "image": "assets/ocr_eval/manga__adult5__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "47100f4d563ec9ac4e5e34a97b60c0ef0d5e76deeb70b5b13c12b441affcf834"
+    },
+    {
+      "id": "manga__adult6_original__hard",
+      "image": "assets/ocr_eval/manga__adult6_original__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "f37f7b0e9b97327cf7f949bfdc31a7c03cb881596236fc85681eebfdcb5c3db7"
+    },
+    {
+      "id": "manga__adult6_original__high",
+      "image": "assets/ocr_eval/manga__adult6_original__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "6b60ca39220494c95ae30e99ca1a9924dab68e99a3e70d01b64bee4b2a0e9ce0"
+    },
+    {
+      "id": "manga__adult__high",
+      "image": "assets/ocr_eval/manga__adult__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "2af43c0827172c687b65accd0982679d02dbad50738e9d7485da4acdcf7dde4c"
+    },
+    {
+      "id": "manga__shounen10__hard",
+      "image": "assets/ocr_eval/manga__shounen10__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "d4dd48a5d496e692312bb36790ed466027354d84d486929011755c8962eb0439"
+    },
+    {
+      "id": "manga__shounen10__high",
+      "image": "assets/ocr_eval/manga__shounen10__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "49e6c515f1e7f1822b81fe0804e41690866dff10baf401dc9ad8a52106335232"
+    },
+    {
+      "id": "manga__shounen11__hard",
+      "image": "assets/ocr_eval/manga__shounen11__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "f5b2ccacc1f080f80b47aa4fa5cc820e560507d638cd3aabc0bbcfb58086b9ba"
+    },
+    {
+      "id": "manga__shounen11__high",
+      "image": "assets/ocr_eval/manga__shounen11__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "48be96bb164c05d10fe3c5e911243273aaca42440ac9fb869d5c1b78ec47988e"
+    },
+    {
+      "id": "manga__shounen12__hard",
+      "image": "assets/ocr_eval/manga__shounen12__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "d420d194d6788845f9518d696abf185ae49913f42d26b820e4031fbf07076a9d"
+    },
+    {
+      "id": "manga__shounen12__high",
+      "image": "assets/ocr_eval/manga__shounen12__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "95241b73b7905576d4c12c597b5eb3cd31a90314a7418beaa603bea88fb9597a"
+    },
+    {
+      "id": "manga__shounen2__hard",
+      "image": "assets/ocr_eval/manga__shounen2__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "4f88dcbe4e2a00a3e38f0835fd1a5344cd1d54867518feaeb4eae90876a55268"
+    },
+    {
+      "id": "manga__shounen2__high",
+      "image": "assets/ocr_eval/manga__shounen2__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "d5c63fe287a8d737528f1fb964b43caaabf72189119709d41d30ae0838ca219c"
+    },
+    {
+      "id": "manga__shounen3__hard",
+      "image": "assets/ocr_eval/manga__shounen3__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "20c9843c4c4a9ff93708fab8166930b5019e027b43d870d02198e42bb4c21a31"
+    },
+    {
+      "id": "manga__shounen3__high",
+      "image": "assets/ocr_eval/manga__shounen3__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "2af38fbdef41f1ab995f461bc25ed48afc52f50f0113dd836100e126dd9b0002"
+    },
+    {
+      "id": "manga__shounen4__hard",
+      "image": "assets/ocr_eval/manga__shounen4__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "c1bbbc1004ca6867f62b1c8aa5a7a3ca4cf5452d583995ac1b549b75e6733004"
+    },
+    {
+      "id": "manga__shounen4__high",
+      "image": "assets/ocr_eval/manga__shounen4__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "888d708be752928ec1739fc165daf5f3da2caf38ce09433266cfc92ab4131087"
+    },
+    {
+      "id": "manga__shounen5__hard",
+      "image": "assets/ocr_eval/manga__shounen5__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "0f74b96f335e1923b4c1139d8af9646c244f735eadb65bf30c5fc8391d6be13f"
+    },
+    {
+      "id": "manga__shounen5__high",
+      "image": "assets/ocr_eval/manga__shounen5__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "49eee6ea3a6433eea8c072813ab152d3642d6b2533f5414c71ee529e5551c79d"
+    },
+    {
+      "id": "manga__shounen6__hard",
+      "image": "assets/ocr_eval/manga__shounen6__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "39c8e6ece3698495a913adcd33eec6db163f45b1483656778ce9e24c3fa7e37e"
+    },
+    {
+      "id": "manga__shounen6__high",
+      "image": "assets/ocr_eval/manga__shounen6__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "0f9a44706dd2559425d3ecd0412407262ab394d47dfcd264af41194346bc3896"
+    },
+    {
+      "id": "manga__shounen7__hard",
+      "image": "assets/ocr_eval/manga__shounen7__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "dc014009058422aef184021c8985b55533e7bcf7d04c7c2645a4a57f0a4fc7ba"
+    },
+    {
+      "id": "manga__shounen7__high",
+      "image": "assets/ocr_eval/manga__shounen7__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "16aa487c14824a27cf7a7c0cd901533fc10d4a20d2e07d5f4f98b37398e0fa66"
+    },
+    {
+      "id": "manga__shounen8__hard",
+      "image": "assets/ocr_eval/manga__shounen8__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "02471ea17c2665a9539db1dfc46edd7a69b062c1ea392ced7c994f8603ae70bc"
+    },
+    {
+      "id": "manga__shounen8__high",
+      "image": "assets/ocr_eval/manga__shounen8__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "3ad253f6b36016005f42e051251cf9d3f260934054d3e27bf6c3cb8a30a740f5"
+    },
+    {
+      "id": "manga__shounen9__hard",
+      "image": "assets/ocr_eval/manga__shounen9__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "201a42234e28de0fac9fc5c43ad68b9a9f7f2482d9c5d9cc20a616216f1a045f"
+    },
+    {
+      "id": "manga__shounen9__high",
+      "image": "assets/ocr_eval/manga__shounen9__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "de07610bae5f02293a6764d018b59b1e8c431225cadc4a6193055235d476df6c"
+    },
+    {
+      "id": "manga__shounen__hard",
+      "image": "assets/ocr_eval/manga__shounen__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "708d88c0e8bb5df21568d7b92e3234a3ddbd748b3eb5cddb9b6a32a654063dd4"
+    },
+    {
+      "id": "manga__shounen__high",
+      "image": "assets/ocr_eval/manga__shounen__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "ffcc59c92ca891b02ab65f5574dd3adf16fe657c91d6d2953fdcc2f01b0975a4"
+    },
+    {
+      "id": "manga__tiny__hard",
+      "image": "assets/ocr_eval/manga__tiny__hard.png",
+      "language": "ja",
+      "difficulty": "hard",
+      "sha256": "adefd8bd3597bbf9656c6be163fc84a7c0edc185b59e20b65bd0b068cb247170"
+    },
+    {
+      "id": "manga__tiny__high",
+      "image": "assets/ocr_eval/manga__tiny__high.png",
+      "language": "ja",
+      "difficulty": "ordinary",
+      "sha256": "2976025d66cb84eba7c6e07cf360eabaaafc92a19463e77d6c2de6b45a70948e"
+    }
+  ],
+  "pages": [
+    {
+      "height": 1386,
+      "id": "manga__adult",
+      "image": "assets/pages/manga__adult.png",
+      "kind": "manga",
+      "sha256": "1585482a56ce04043c437eff9ed288d705d54e461da9d024fa8df3a559d3bda2",
+      "source_note": "repository sample",
+      "width": 2493
+    },
+    {
+      "height": 1341,
+      "id": "manga__adult2",
+      "image": "assets/pages/manga__adult2.png",
+      "kind": "manga",
+      "sha256": "c08b44d926aa8bb1d37ee669c93e9ba0513b7719b565c67748e3b61ee0546ad0",
+      "source_note": "repository sample",
+      "width": 2490
+    },
+    {
+      "height": 1342,
+      "id": "manga__adult3",
+      "image": "assets/pages/manga__adult3.png",
+      "kind": "manga",
+      "sha256": "0efa1ca85a516c328786d1d082ad80ef0959e2abbf438f8982c36c28f8b225e8",
+      "source_note": "repository sample",
+      "width": 2491
+    },
+    {
+      "height": 1338,
+      "id": "manga__adult4",
+      "image": "assets/pages/manga__adult4.png",
+      "kind": "manga",
+      "sha256": "74f71a0fe35081ad3ac13f38a3342850d4e136db16a020c90926248672833e61",
+      "source_note": "repository sample",
+      "width": 2488
+    },
+    {
+      "height": 1338,
+      "id": "manga__adult5",
+      "image": "assets/pages/manga__adult5.png",
+      "kind": "manga",
+      "sha256": "69957e0b0d29afbff5abc841d1876aa6e6bb796f0d68df971b3ccaae0ce48a24",
+      "source_note": "repository sample",
+      "width": 2487
+    },
+    {
+      "height": 1391,
+      "id": "manga__adult6_original",
+      "image": "assets/pages/manga__adult6_original.png",
+      "kind": "manga",
+      "sha256": "4f55190769c06166140f800310e5080052c2edc1dcb62fcf047f7a78da5e9dec",
+      "source_note": "repository sample",
+      "width": 1956
+    },
+    {
+      "height": 1388,
+      "id": "manga__shounen",
+      "image": "assets/pages/manga__shounen.png",
+      "kind": "manga",
+      "sha256": "878793b9c91f2deebb6fa02425957ee506da389cd92ed281097aad64cbd278e6",
+      "source_note": "repository sample",
+      "width": 2489
+    },
+    {
+      "height": 1338,
+      "id": "manga__shounen10",
+      "image": "assets/pages/manga__shounen10.png",
+      "kind": "manga",
+      "sha256": "55bf8a9ac04c30122f2bf3fc4c4d184da64aa0ff2ebf26164e14f603e00da2d7",
+      "source_note": "repository sample",
+      "width": 2486
+    },
+    {
+      "height": 1345,
+      "id": "manga__shounen11",
+      "image": "assets/pages/manga__shounen11.png",
+      "kind": "manga",
+      "sha256": "8fcfa17f43fe43c8825f6fc52aaf69a025c684db437371ebe89946260d4a4ee4",
+      "source_note": "repository sample",
+      "width": 1720
+    },
+    {
+      "height": 1346,
+      "id": "manga__shounen12",
+      "image": "assets/pages/manga__shounen12.png",
+      "kind": "manga",
+      "sha256": "b454b89cd7b221c4c3d376853f55ce6dd94a813808bff817df599e64301c3e63",
+      "source_note": "repository sample",
+      "width": 1716
+    },
+    {
+      "height": 1342,
+      "id": "manga__shounen2",
+      "image": "assets/pages/manga__shounen2.png",
+      "kind": "manga",
+      "sha256": "ab639107d8bc053c54089bfce23d6a2b306d7ac73940ca8bdb1ad18ddab2c306",
+      "source_note": "repository sample",
+      "width": 2491
+    },
+    {
+      "height": 1342,
+      "id": "manga__shounen3",
+      "image": "assets/pages/manga__shounen3.png",
+      "kind": "manga",
+      "sha256": "ee405d17d4b14de5d5f90c536b3094502a5058336ee94fe1d626e1b62a1cceb2",
+      "source_note": "repository sample",
+      "width": 2490
+    },
+    {
+      "height": 1340,
+      "id": "manga__shounen4",
+      "image": "assets/pages/manga__shounen4.png",
+      "kind": "manga",
+      "sha256": "9bccc7eee42a232a2f9c484ddd5839b71c2500203b6c1e616bb5d35da961c20d",
+      "source_note": "repository sample",
+      "width": 2489
+    },
+    {
+      "height": 1340,
+      "id": "manga__shounen5",
+      "image": "assets/pages/manga__shounen5.png",
+      "kind": "manga",
+      "sha256": "e98ebcce1ec11612c02e10fa166e72b8345c5211c3fff1e0fc5e0374327f7dc1",
+      "source_note": "repository sample",
+      "width": 2490
+    },
+    {
+      "height": 1339,
+      "id": "manga__shounen6",
+      "image": "assets/pages/manga__shounen6.png",
+      "kind": "manga",
+      "sha256": "df62b3ec7bc01084fa859614ee93a2ec15532f14a0ee86bd09d04a88ad81a8a6",
+      "source_note": "repository sample",
+      "width": 2494
+    },
+    {
+      "height": 1340,
+      "id": "manga__shounen7",
+      "image": "assets/pages/manga__shounen7.png",
+      "kind": "manga",
+      "sha256": "b9b5e794fbdd17cec5ade2c8f932ba01c751b92d1c2ab56c712a5091f2685415",
+      "source_note": "repository sample",
+      "width": 2484
+    },
+    {
+      "height": 1337,
+      "id": "manga__shounen8",
+      "image": "assets/pages/manga__shounen8.png",
+      "kind": "manga",
+      "sha256": "a7b774fd549f88702334c13b4e11e01caa82d6dfb9310b8c839536178489fc1f",
+      "source_note": "repository sample",
+      "width": 2490
+    },
+    {
+      "height": 1336,
+      "id": "manga__shounen9",
+      "image": "assets/pages/manga__shounen9.png",
+      "kind": "manga",
+      "sha256": "b6f57515e6f5bae765845ecd9a3ec73919ae5e769efe3cfdb81dd9ae8664c0ea",
+      "source_note": "repository sample",
+      "width": 2488
+    },
+    {
+      "height": 1389,
+      "id": "manga__tiny",
+      "image": "assets/pages/manga__tiny.png",
+      "kind": "manga",
+      "sha256": "e15bd4a4e176c334ffccb0a46f24e66b4eaa0d7932091efd9c7fa8e09ab7c0c2",
+      "source_note": "repository sample",
+      "width": 1769
+    }
+  ],
+  "schema_version": 1
+}

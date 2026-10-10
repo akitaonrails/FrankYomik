@@ -1,0 +1,26 @@
+# Private/source evaluation pages and generated crops.
+assets/pages/**
+assets/ocr/**
+assets/inpainting/**
+!assets/pages/.gitkeep
+!assets/ocr/.gitkeep
+!assets/inpainting/.gitkeep
+!assets/README.md
+
+# Ground-truth instance masks may contain copyrighted page fragments.
+annotations/masks/**
+!annotations/masks/.gitkeep
+
+# Model outputs, logs, blind-review bundles, and local run metadata.
+outputs/**
+reviews/blind/**
+reviews/private/**
+!outputs/.gitkeep
+!reviews/blind/.gitkeep
+!reviews/private/.gitkeep
+
+# Local configuration overrides and Python cache.
+config.local.json
+**/__pycache__/
+*.pyc
+

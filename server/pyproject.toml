@@ -1,4 +1,10 @@
 [tool.pytest.ini_options]
+addopts = "--strict-markers"
+testpaths = ["tests/unit", "tests/integration"]
 markers = [
+    "gpu: requires a GPU or compatible accelerator runtime",
+    "integration: exercises boundaries between pipeline or worker components with local fakes",
+    "model: requires local ML model weights and may require an accelerator",
+    "network: requires access to an external service",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]

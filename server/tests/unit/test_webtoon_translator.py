@@ -2,7 +2,15 @@
 
 from unittest.mock import MagicMock, patch
 
-from webtoon.translator import translate, translate_sfx, _fallback_translate
+import pytest
+
+from webtoon.translator import translate, translate_sfx
+
+
+@pytest.fixture(autouse=True)
+def verified_model():
+    with patch("webtoon.translator.verify_ollama_model"):
+        yield
 
 
 class TestTranslate:
@@ -32,23 +40,20 @@ class TestTranslate:
         assert "Korean" in prompt
         assert "manhwa" in prompt or "webtoon" in prompt
 
-    @patch("webtoon.translator._fallback_translate", return_value="Fallback")
     @patch("webtoon.translator.requests.post", side_effect=Exception("timeout"))
-    def test_fallback_on_failure(self, mock_post, mock_fallback):
-        result = translate("안녕하세요")
-        assert result == "Fallback"
-        mock_fallback.assert_called_once_with("안녕하세요", "en")
+    def test_fails_closed_on_ollama_failure(self, mock_post):
+        with pytest.raises(Exception, match="timeout"):
+            translate("안녕하세요")
 
-    @patch("webtoon.translator._fallback_translate", return_value="Fallback")
     @patch("webtoon.translator.requests.post")
-    def test_fallback_on_empty_response(self, mock_post, mock_fallback):
+    def test_fails_closed_on_empty_response(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"message": {"content": "<think>hmm</think>"}}
         mock_resp.raise_for_status = MagicMock()
         mock_post.return_value = mock_resp
 
-        result = translate("안녕하세요")
-        assert result == "Fallback"
+        with pytest.raises(RuntimeError, match="empty translation"):
+            translate("안녕하세요")
 
     @patch("webtoon.translator.requests.post")
     def test_pt_br_prompt_contains_portuguese(self, mock_post):
@@ -62,12 +67,6 @@ class TestTranslate:
         payload = mock_post.call_args[1]["json"]
         prompt = payload["messages"][0]["content"]
         assert "Brazilian Portuguese" in prompt
-
-    @patch("webtoon.translator._fallback_translate", return_value="Fallback")
-    @patch("webtoon.translator.requests.post", side_effect=Exception("timeout"))
-    def test_pt_br_fallback_passes_target_lang(self, mock_post, mock_fallback):
-        translate("안녕하세요", target_lang="pt-br")
-        mock_fallback.assert_called_once_with("안녕하세요", "pt-br")
 
 
 class TestTranslateSfx:
@@ -109,13 +108,10 @@ class TestTranslateSfx:
         result = translate_sfx("셈")
         assert result == "SHUSH"
 
-    @patch("webtoon.translator._fallback_translate_sfx", return_value="BOOM")
     @patch("webtoon.translator.requests.post", side_effect=Exception("timeout"))
-    def test_sfx_fallback_on_failure(self, mock_post, mock_fallback):
-        """Falls back to Google Translate on Ollama failure."""
-        result = translate_sfx("쾅")
-        assert result == "BOOM"
-        mock_fallback.assert_called_once_with("쾅", "en")
+    def test_sfx_fails_closed_on_ollama_failure(self, mock_post):
+        with pytest.raises(Exception, match="timeout"):
+            translate_sfx("쾅")
 
     @patch("webtoon.translator.requests.post")
     def test_sfx_pt_br_prompt(self, mock_post):

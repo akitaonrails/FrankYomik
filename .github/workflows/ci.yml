@@ -62,6 +62,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -75,9 +77,9 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -r requirements.txt
 
-      - name: Run Python unit tests
+      - name: Run Python tests
         working-directory: server
-        run: PYTHONPATH=. .venv/bin/pytest tests/unit/ -v
+        run: PYTHONPATH=. .venv/bin/python -m pytest tests/unit tests/integration -m "not slow and not model and not network" -v
 
       - name: Run Go tests
         working-directory: server

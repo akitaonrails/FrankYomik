@@ -9,6 +9,16 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 
 COPY server/*.go ./
+COPY server/pipeline/stage_manifest.json ./pipeline/stage_manifest.json
+COPY server/config.yaml ./config.yaml
+COPY server/requirements.txt ./requirements.txt
+COPY server/pipeline/*.py ./pipeline/
+COPY server/pipeline/adapters/*.py ./pipeline/adapters/
+COPY server/worker/*.py ./worker/
+COPY server/kindle/*.py ./kindle/
+COPY server/webtoon/*.py ./webtoon/
+COPY server/fonts/*.ttf ./fonts/
+COPY server/fonts/genei_antique/*.ttf ./fonts/genei_antique/
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /frank-api .
 
 # Stage 2: Minimal runtime

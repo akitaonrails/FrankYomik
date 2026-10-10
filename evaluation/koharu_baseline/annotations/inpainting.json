@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "cases": {
+    "synthetic_01_portrait_suit": {
+      "description": "synthetic 01 portrait suit",
+      "review_required": true,
+      "has_clean_reference": true,
+      "construction": "synthetic Japanese glyph overlay on an untouched manga crop"
+    },
+    "synthetic_02_hair_halftone": {
+      "description": "synthetic 02 hair halftone",
+      "review_required": true,
+      "has_clean_reference": true,
+      "construction": "synthetic Japanese glyph overlay on an untouched manga crop"
+    },
+    "synthetic_03_action_art": {
+      "description": "synthetic 03 action art",
+      "review_required": true,
+      "has_clean_reference": true,
+      "construction": "synthetic Japanese glyph overlay on an untouched manga crop"
+    },
+    "synthetic_04_face_flat": {
+      "description": "synthetic 04 face flat",
+      "review_required": true,
+      "has_clean_reference": true,
+      "construction": "synthetic Japanese glyph overlay on an untouched manga crop"
+    },
+    "synthetic_05_street_lines": {
+      "description": "synthetic 05 street lines",
+      "review_required": true,
+      "has_clean_reference": true,
+      "construction": "synthetic Japanese glyph overlay on an untouched manga crop"
+    },
+    "synthetic_06_speed_lines": {
+      "description": "synthetic 06 speed lines",
+      "review_required": true,
+      "has_clean_reference": true,
+      "construction": "synthetic Japanese glyph overlay on an untouched manga crop"
+    },
+    "synthetic_07_table_texture": {
+      "description": "synthetic 07 table texture",
+      "review_required": true,
+      "has_clean_reference": true,
+      "construction": "synthetic Japanese glyph overlay on an untouched manga crop"
+    },
+    "synthetic_08_dense_art": {
+      "description": "synthetic 08 dense art",
+      "review_required": true,
+      "has_clean_reference": true,
+      "construction": "synthetic Japanese glyph overlay on an untouched manga crop"
+    }
+  }
+}

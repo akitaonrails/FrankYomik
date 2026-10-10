@@ -60,6 +60,7 @@ webtoon:
     prompt: "clean empty speech bubble interior, flat color"
 
 worker:
+  # PIPELINE_REVISION is supplied through the environment to both API and worker.
   redis_url: "redis://localhost:6379"
   consumer_group: "workers"
   heartbeat_interval: 30

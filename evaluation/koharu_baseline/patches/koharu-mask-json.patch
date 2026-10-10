@@ -1,0 +1,17 @@
+diff --git a/crates/koharu-ml/src/koharu_layout_rfdetr_seg_2xl/processor.rs b/crates/koharu-ml/src/koharu_layout_rfdetr_seg_2xl/processor.rs
+index 4e77ef8..f9aa053 100644
+--- a/crates/koharu-ml/src/koharu_layout_rfdetr_seg_2xl/processor.rs
++++ b/crates/koharu-ml/src/koharu_layout_rfdetr_seg_2xl/processor.rs
+@@ -265,11 +265,10 @@ pub struct KoharuLayoutDetection {
+     pub score: f32,
+     pub bbox: [f32; 4],
+     pub area: u32,
+-    #[serde(skip_serializing)]
+     pub mask: KoharuLayoutMask,
+ }
+ 
+-#[derive(Debug, Clone)]
++#[derive(Debug, Clone, Serialize)]
+ pub struct KoharuLayoutMask {
+     pub x: u32,
+     pub y: u32,

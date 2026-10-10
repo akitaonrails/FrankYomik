@@ -5,14 +5,16 @@ import re
 
 import requests
 
+from kindle.translator import LANG_MAP, _clean_response, verify_ollama_model
+
 from .config import OLLAMA_BASE_URL, TRANSLATE_MODEL, TRANSLATE_OPTIONS, TRANSLATE_THINK
-from kindle.translator import LANG_MAP, _clean_response
 
 log = logging.getLogger(__name__)
 
 
 def translate(korean_text: str, target_lang: str = "en") -> str:
     """Translate Korean text to the target language using Ollama."""
+    verify_ollama_model("webtoon")
     _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
     prompt = (
         f"Translate this Korean manhwa/webtoon dialogue to natural {lang_name}.\n"
@@ -30,29 +32,26 @@ def translate(korean_text: str, target_lang: str = "en") -> str:
     if TRANSLATE_THINK is not None:
         payload["think"] = TRANSLATE_THINK
 
-    try:
-        resp = requests.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        raw = resp.json().get("message", {}).get("content", "")
-        result = _clean_response(raw)
-        if result:
-            return result
-    except Exception as e:
-        log.warning("Ollama translation failed: %s, trying fallback", e)
-
-    return _fallback_translate(korean_text, target_lang)
+    resp = requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json=payload,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    raw = resp.json().get("message", {}).get("content", "")
+    result = _clean_response(raw)
+    if not result:
+        raise RuntimeError("Ollama returned an empty translation")
+    return result
 
 
 def translate_sfx(korean_text: str, target_lang: str = "en") -> str:
     """Translate a Korean sound effect to an SFX word in the target language.
 
     Uses a specialized prompt that produces short uppercase onomatopoeia.
-    Falls back to uppercased Google Translate result.
+    Verification, request, or empty-response failures propagate to the job.
     """
+    verify_ollama_model("webtoon")
     _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
     prompt = (
         "This is a Korean sound effect (SFX/onomatopoeia) from a webtoon comic.\n"
@@ -71,44 +70,15 @@ def translate_sfx(korean_text: str, target_lang: str = "en") -> str:
     if TRANSLATE_THINK is not None:
         payload["think"] = TRANSLATE_THINK
 
-    try:
-        resp = requests.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        raw = resp.json().get("message", {}).get("content", "")
-        result = _clean_response(raw).strip().upper()
-        # Strip prefixes the LLM sometimes adds (e.g. "SFX: SHUSH")
-        result = re.sub(r'^(SFX\s*[:：]\s*)', '', result).strip()
-        if result:
-            return result
-    except Exception as e:
-        log.warning("Ollama SFX translation failed: %s, trying fallback", e)
-
-    return _fallback_translate_sfx(korean_text, target_lang)
-
-
-def _fallback_translate_sfx(korean_text: str, target_lang: str = "en") -> str:
-    """Fallback SFX translation using Google Translate, uppercased."""
-    try:
-        from deep_translator import GoogleTranslator
-        gt_code, _ = LANG_MAP.get(target_lang, ("en", "English"))
-        result = GoogleTranslator(source="ko", target=gt_code).translate(korean_text)
-        return (result or korean_text).strip().upper()
-    except Exception as e:
-        log.error("Fallback SFX translation also failed: %s", e)
-        return korean_text.upper()
-
-
-def _fallback_translate(korean_text: str, target_lang: str = "en") -> str:
-    """Fallback using deep-translator (Google Translate) for Korean."""
-    try:
-        from deep_translator import GoogleTranslator
-        gt_code, _ = LANG_MAP.get(target_lang, ("en", "English"))
-        result = GoogleTranslator(source="ko", target=gt_code).translate(korean_text)
-        return result or korean_text
-    except Exception as e:
-        log.error("Fallback translation also failed: %s", e)
-        return korean_text
+    resp = requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json=payload,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    raw = resp.json().get("message", {}).get("content", "")
+    result = _clean_response(raw).strip().upper()
+    result = re.sub(r'^(SFX\s*[:：]\s*)', '', result).strip()
+    if not result:
+        raise RuntimeError("Ollama returned an empty SFX translation")
+    return result

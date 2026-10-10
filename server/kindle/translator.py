@@ -5,6 +5,12 @@ import re
 
 import requests
 
+from pipeline.model_verification import (
+    ollama_models_from_response,
+    verify_ollama_tags,
+)
+from pipeline.revision import stage_identity
+
 from .config import OLLAMA_BASE_URL, TRANSLATE_MODEL, TRANSLATE_OPTIONS, TRANSLATE_THINK
 
 log = logging.getLogger(__name__)
@@ -15,8 +21,22 @@ LANG_MAP = {
 }
 
 
+def verify_ollama_model(pipeline: str) -> None:
+    """Verify the configured Ollama tag resolves to the pinned registry bytes."""
+    identity = stage_identity(pipeline, "translation")["model"]
+    response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=10)
+    response.raise_for_status()
+    verify_ollama_tags(
+        ollama_models_from_response(response.json()),
+        TRANSLATE_MODEL,
+        identity["id"],
+        identity["weights_revision"],
+    )
+
+
 def translate(japanese_text: str, target_lang: str = "en") -> str:
     """Translate Japanese text to the target language using Ollama."""
+    verify_ollama_model("manga_translate")
     _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
     prompt = (
         f"Translate this Japanese manga dialogue to natural, fluent {lang_name}.\n"
@@ -40,21 +60,17 @@ def translate(japanese_text: str, target_lang: str = "en") -> str:
     if TRANSLATE_THINK is not None:
         payload["think"] = TRANSLATE_THINK
 
-    try:
-        resp = requests.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        raw = resp.json().get("message", {}).get("content", "")
-        result = _clean_response(raw)
-        if result:
-            return result
-    except Exception as e:
-        log.warning("Ollama translation failed: %s, trying fallback", e)
-
-    return _fallback_translate(japanese_text, target_lang)
+    resp = requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json=payload,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    raw = resp.json().get("message", {}).get("content", "")
+    result = _clean_response(raw)
+    if not result:
+        raise RuntimeError("Ollama returned an empty translation")
+    return result
 
 
 def _clean_response(text: str) -> str:
@@ -64,15 +80,3 @@ def _clean_response(text: str) -> str:
     # Remove quotes the model sometimes wraps around translations
     text = text.strip().strip('"').strip("'")
     return text.strip()
-
-
-def _fallback_translate(japanese_text: str, target_lang: str = "en") -> str:
-    """Fallback using deep-translator (Google Translate)."""
-    try:
-        from deep_translator import GoogleTranslator
-        gt_code, _ = LANG_MAP.get(target_lang, ("en", "English"))
-        result = GoogleTranslator(source="ja", target=gt_code).translate(japanese_text)
-        return result or japanese_text
-    except Exception as e:
-        log.error("Fallback translation also failed: %s", e)
-        return japanese_text

@@ -8,11 +8,15 @@ Follows the lazy-singleton + thread-lock pattern from webtoon/ocr.py.
 """
 
 import logging
+import os
 import threading
 from abc import ABC, abstractmethod
 
 import numpy as np
 from PIL import Image, ImageFilter
+
+from pipeline.model_verification import verify_file_sha256
+from pipeline.revision import stage_identity
 
 from .bubble_detector import WebtoonBubble
 from .config import (
@@ -58,7 +62,25 @@ class LamaBackend(InpaintBackend):
     def load(self) -> bool:
         try:
             from simple_lama_inpainting import SimpleLama
-            self._model = SimpleLama()
+            from simple_lama_inpainting.models.model import LAMA_MODEL_URL
+            from simple_lama_inpainting.utils import download_model
+
+            configured_path = os.environ.get("LAMA_MODEL")
+            model_path = configured_path or download_model(LAMA_MODEL_URL)
+            identity = stage_identity("webtoon", "cleanup")["model"]
+            verified_path = verify_file_sha256(
+                model_path, identity["weights_revision"]
+            )
+
+            previous_path = os.environ.get("LAMA_MODEL")
+            os.environ["LAMA_MODEL"] = str(verified_path)
+            try:
+                self._model = SimpleLama()
+            finally:
+                if previous_path is None:
+                    os.environ.pop("LAMA_MODEL", None)
+                else:
+                    os.environ["LAMA_MODEL"] = previous_path
             log.info("LaMa inpainting model loaded")
             return True
         except ImportError:
@@ -193,13 +215,16 @@ def _get_backend() -> InpaintBackend | None:
             if _backend is None:
                 cls = _BACKEND_MAP.get(INPAINT_MODEL)
                 if cls is None:
-                    log.error("Unknown inpainting model %r; "
-                              "choose from %s", INPAINT_MODEL,
-                              list(_BACKEND_MAP.keys()))
-                    return None
+                    raise RuntimeError(
+                        f"unknown inpainting model {INPAINT_MODEL!r}; "
+                        f"choose from {list(_BACKEND_MAP)}"
+                    )
                 instance = cls()
                 if not instance.load():
-                    return None
+                    raise RuntimeError(
+                        f"configured inpainting model failed to load: "
+                        f"{INPAINT_MODEL}"
+                    )
                 _backend = instance
     return _backend
 
@@ -325,12 +350,14 @@ def inpaint_bubble(
     """
     be = backend or _get_backend()
     if be is None:
+        if INPAINT_ENABLED:
+            raise RuntimeError("enabled inpainting backend is unavailable")
         return False
 
     img_w, img_h = original_img.size
     mask = build_inpaint_mask(bubble, (img_w, img_h))
     if mask is None:
-        return False
+        raise RuntimeError("enabled inpainting produced no text mask")
 
     # Crop to bubble bbox + context padding
     bx1, by1, bx2, by2 = bubble.bbox
@@ -355,9 +382,10 @@ def inpaint_bubble(
     with _infer_lock:
         try:
             result_crop = be.inpaint(img_crop, mask_crop)
-        except Exception:
-            log.exception("Inpainting failed for bubble at %s", bubble.bbox)
-            return False
+        except Exception as error:
+            raise RuntimeError(
+                f"inpainting failed for bubble at {bubble.bbox}"
+            ) from error
 
     # Composite: paste inpainted pixels onto the target image
     dest = target_img if target_img is not None else original_img

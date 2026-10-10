@@ -1,6 +1,7 @@
-"""End-to-end pipeline integration test.
+"""End-to-end pipeline integration tests using local model weights.
 
-Marked slow — skipped by default, run with: pytest -m slow
+CI excludes these slow, model-backed tests. Run them explicitly with
+``pytest tests/integration/test_full_pipeline.py`` on a prepared worker.
 """
 
 import os
@@ -9,15 +10,20 @@ import pytest
 
 from tests.conftest import DOCS_DIR
 
+pytestmark = [pytest.mark.integration, pytest.mark.model, pytest.mark.slow]
 
-@pytest.mark.slow
+
 class TestFullPipeline:
     """Smoke test: run actual pipeline on one page per mode."""
 
     def test_furigana_pipeline(self, tmp_path):
         from kindle.processor import (
-            PipelineMode, load_page, detect_page_bubbles,
-            ocr_bubble, transform_furigana, render_page,
+            PipelineMode,
+            detect_page_bubbles,
+            load_page,
+            ocr_bubble,
+            render_page,
+            transform_furigana,
         )
         img_path = os.path.join(DOCS_DIR, "adult.png")
         if not os.path.exists(img_path):
@@ -41,9 +47,14 @@ class TestFullPipeline:
     def test_translate_pipeline_mocked(self, tmp_path):
         """Run translate pipeline with mocked translation (no Ollama needed)."""
         from unittest.mock import patch
+
         from kindle.processor import (
-            PipelineMode, load_page, detect_page_bubbles,
-            ocr_bubble, transform_translate, render_page,
+            PipelineMode,
+            detect_page_bubbles,
+            load_page,
+            ocr_bubble,
+            render_page,
+            transform_translate,
         )
         img_path = os.path.join(DOCS_DIR, "shounen.png")
         if not os.path.exists(img_path):

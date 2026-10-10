@@ -56,6 +56,8 @@ services:
       REDIS_URL: redis://redis:6379
       AUTH_TOKEN: ${AUTH_TOKEN:?Set AUTH_TOKEN in .env}
       CACHE_DIR: /data/cache
+      PIPELINE_REVISION: ${PIPELINE_REVISION:-}
+      ALLOW_LEGACY_PIPELINE_REVISION: ${ALLOW_LEGACY_PIPELINE_REVISION:-0}
     volumes:
       - /var/opt/docker/frank/yomik/data/cache:/data/cache
     depends_on:
@@ -79,6 +81,8 @@ services:
       APP_GID: ${APP_GID:-1026}
       HSA_OVERRIDE_GFX_VERSION: "11.5.1"
       PYTORCH_ROCM_ARCH: "gfx1151"
+      PIPELINE_REVISION: ${PIPELINE_REVISION:-}
+      ALLOW_LEGACY_PIPELINE_REVISION: ${ALLOW_LEGACY_PIPELINE_REVISION:-0}
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
     devices:
       - /dev/kfd:/dev/kfd

@@ -13,13 +13,19 @@ Key learnings these tests lock in:
 - Title/logo text (large single-char detections) is correctly skipped.
 """
 
+from unittest.mock import patch
+
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw
 
 from webtoon.bubble_detector import WebtoonBubble
 from webtoon.ocr import TextDetection
 from webtoon.processor import (
+    WebtoonPageResult,
+    WebtoonTextRegion,
     _bg_luminance,
+    _clean_bubble_for_render,
     _clear_bubble_text,
     _clear_with_mask,
     _detect_subgroups,
@@ -36,7 +42,27 @@ from webtoon.processor import (
     _text_region_bbox,
     _total_block_height,
     _wrap_text,
+    cleanup_page,
+    detect_bubbles_rtdetr,
+    ocr_detected_regions,
+    render_cleaned_page_to_bytes,
+    validate_and_translate,
 )
+
+
+def test_enabled_lama_cannot_fall_back_under_lama_provenance():
+    image = Image.new("RGB", (100, 100), "white")
+    bubble = _make_bubble([_make_det(20, 20, 50, 40)])
+
+    with (
+        patch("webtoon.processor.INPAINT_ENABLED", True),
+        patch("webtoon.processor.inpaint_bubble", return_value=False),
+        patch("webtoon.processor._clear_bubble_text") as solid_cleanup,
+        pytest.raises(RuntimeError, match="did not execute"),
+    ):
+        _clean_bubble_for_render(image, image.copy(), bubble)
+
+    solid_cleanup.assert_not_called()
 
 
 def _make_det(x1, y1, x2, y2, text="테스트", conf=0.9):
@@ -67,6 +93,88 @@ def _make_bubble(detections, bbox=None, bg_color=(255, 255, 255),
         bg_color=bg_color,
         bubble_mask=mask,
     )
+
+
+def test_parallel_translation_failure_propagates_from_production_stage():
+    page = WebtoonPageResult(
+        image_path="",
+        name="failure",
+        bubbles=[_make_bubble([_make_det(10, 10, 80, 35, "안녕하세요")])],
+    )
+
+    with (
+        patch("webtoon.processor.translate", side_effect=RuntimeError("digest mismatch")),
+        pytest.raises(RuntimeError, match="digest mismatch"),
+    ):
+        validate_and_translate(page, parallel=True)
+
+
+def test_page_without_eligible_text_does_not_call_translation():
+    page = WebtoonPageResult(image_path="", name="empty", bubbles=[])
+
+    with patch("webtoon.processor.translate") as translate:
+        validate_and_translate(page, parallel=True)
+
+    translate.assert_not_called()
+    assert page.regions == []
+
+
+def test_rtdetr_detection_and_ocr_are_separate_production_stages():
+    page = WebtoonPageResult(
+        image_path="",
+        name="stages",
+        img_cv=np.zeros((100, 120, 3), dtype=np.uint8),
+        img_pil=Image.new("RGB", (120, 100), "white"),
+    )
+    detection = {
+        "bbox": (10, 10, 90, 70),
+        "type": "speech_bubble",
+        "score": 0.9,
+    }
+    recognized = _make_det(20, 20, 70, 40, "안녕하세요")
+
+    with (
+        patch("webtoon.processor.rtdetr_detect", return_value=[detection]),
+        patch(
+            "webtoon.processor.extract_bubble_mask",
+            return_value=(np.ones((100, 120), dtype=np.uint8),
+                          (255, 255, 255), True),
+        ),
+        patch("webtoon.processor.ocr_within_bbox") as ocr,
+    ):
+        detect_bubbles_rtdetr(page)
+        ocr.assert_not_called()
+        assert page.bubbles == []
+        ocr.return_value = [recognized]
+        ocr_detected_regions(page)
+
+    ocr.assert_called_once_with(page.img_cv, detection["bbox"])
+    assert page.bubbles[0].combined_text == "안녕하세요"
+
+
+def test_cleaned_webtoon_renderer_performs_no_model_or_translation_calls():
+    bubble = _make_bubble([_make_det(20, 20, 70, 40, "안녕하세요")])
+    region = WebtoonTextRegion(bubble=bubble, is_valid=True, english="Hello")
+    page = WebtoonPageResult(
+        image_path="",
+        name="render",
+        img_pil=Image.new("RGB", (120, 100), "white"),
+        regions=[region],
+    )
+
+    with patch("webtoon.processor._clean_bubble_for_render", return_value=False):
+        cleanup_page(page)
+    with (
+        patch("webtoon.processor.translate_sfx") as translate_sfx,
+        patch("webtoon.processor.inpaint_bubble") as inpaint,
+        patch("webtoon.processor._render_webtoon_english") as render_text,
+    ):
+        output = render_cleaned_page_to_bytes(page)
+
+    assert output.startswith(b"\x89PNG")
+    render_text.assert_called_once()
+    translate_sfx.assert_not_called()
+    inpaint.assert_not_called()
 
 
 class TestTextRegionBbox:
@@ -334,13 +442,11 @@ class TestRenderWebtoonEnglish:
     def test_skips_tiny_bbox(self):
         """Very small render bbox should be skipped gracefully."""
         img = Image.new("RGB", (100, 100), (255, 255, 255))
-        orig = np.array(img.copy())
 
         dets = [_make_det(40, 40, 50, 45)]
         bubble = _make_bubble(dets)
 
         _render_webtoon_english(img, bubble, "Hello", (40, 40, 48, 45))
-        result = np.array(img)
 
         # Should not crash; tiny bbox might not render anything
         # Just verify no crash occurred
@@ -470,6 +576,7 @@ class TestWrapText:
 
     def test_short_text_single_line(self):
         from PIL import ImageFont
+
         from webtoon.config import FONT_KO
 
         font = ImageFont.truetype(FONT_KO, 16)
@@ -479,6 +586,7 @@ class TestWrapText:
 
     def test_long_text_wraps(self):
         from PIL import ImageFont
+
         from webtoon.config import FONT_KO
 
         font = ImageFont.truetype(FONT_KO, 16)
@@ -487,6 +595,7 @@ class TestWrapText:
 
     def test_empty_text_returns_empty(self):
         from PIL import ImageFont
+
         from webtoon.config import FONT_KO
 
         font = ImageFont.truetype(FONT_KO, 16)
@@ -494,6 +603,7 @@ class TestWrapText:
 
     def test_lines_fit_within_width(self):
         from PIL import ImageFont
+
         from webtoon.config import FONT_KO
 
         font = ImageFont.truetype(FONT_KO, 16)
@@ -739,6 +849,7 @@ class TestLineSpacing:
     def test_total_block_height_uses_proportional_gap(self):
         """_total_block_height with font_size uses proportional spacing."""
         from PIL import ImageFont
+
         from webtoon.config import FONT_KO
         font = ImageFont.truetype(FONT_KO, 30)
         lines = ["Line one", "Line two", "Line three"]
@@ -803,15 +914,9 @@ class TestFontSizeCap:
 
     def test_font_stays_under_cap(self):
         """Font size should not exceed 36px even in tall boxes."""
-        from PIL import ImageFont
-        from webtoon.config import FONT_KO
-        text = "Short text here"
         bh = 400  # Very tall box
-        bw = 300
         margin_h = max(10, int(bh * 0.05))
-        margin_w = max(10, int(bw * 0.05))
         fit_h = bh - margin_h * 2
-        fit_w = bw - margin_w * 2
         target = max(10, min(36, int(fit_h * 0.7)))
         # The target should be 36, not higher
         assert target == 36, f"Font target {target} should be capped at 36"
@@ -819,6 +924,7 @@ class TestFontSizeCap:
     def test_short_text_wraps_at_capped_size(self):
         """With 36px cap and narrow render, short text wraps to 2+ lines."""
         from PIL import ImageFont
+
         from webtoon.config import FONT_KO
         font = ImageFont.truetype(FONT_KO, 36)
         lines = _wrap_text("No talent, huh! Baltar", font, 250)
@@ -895,7 +1001,7 @@ class TestRenderSfx:
             changed_ys = np.where(diff.any(axis=1))[0]
             changed_xs = np.where(diff.any(axis=0))[0]
             # Allow tolerance for stroke_width=3 (both sides) + shadow=2 + larger font
-            x1, y1, x2, y2 = det.bbox_rect
+            x1, y1, _x2, _y2 = det.bbox_rect
             tolerance = 30
             assert changed_ys.min() >= y1 - tolerance, (
                 f"SFX extends too far above: {changed_ys.min()} < {y1 - tolerance}"
@@ -1028,5 +1134,5 @@ class TestSampleOriginalTextColor:
         det = self._make_det((40, 40, 160, 110))
         result = _sample_original_text_color(img, [det], (10, 10, 20))
         assert result is not None
-        r, g, b = result
+        r, _g, _b = result
         assert r > 150, f"Red channel {r} too low for pink"

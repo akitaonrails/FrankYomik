@@ -8,8 +8,12 @@
 # Everything imported directly by our code is listed here, even where another
 # package happens to pull it in today.
 
+# Model execution packages are exact because their behavior participates in
+# server/pipeline/stage_manifest.json. Update that manifest with these pins.
 # Japanese OCR (vertical manga and prose text)
-manga-ocr>=0.1.16,<0.2
+manga-ocr==0.1.16
+transformers==5.3.0
+huggingface-hub==1.5.0
 
 # Morphological analysis behind furigana readings. fugashi needs a dictionary;
 # unidic-lite is the one kindle/furigana.py is tuned against.
@@ -22,11 +26,11 @@ Pillow>=12.1,<13
 numpy>=2.4,<3
 
 # Latin-script OCR for artwork text and webtoons
-easyocr>=1.7,<2
+easyocr==1.7.2
 
 # Inpainting for artwork text. Installed with --no-deps in the images: its
 # pins conflict with the numpy/Pillow/opencv versions above.
-simple-lama-inpainting>=0.1,<0.2
+simple-lama-inpainting==0.1.0
 
 # Services and IO
 redis>=8.1,<9

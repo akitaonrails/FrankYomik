@@ -59,6 +59,7 @@ server/tests/ab_*_results.json
 
 # Local tool artifacts
 .ai-jail
+.slim/deepwork/
 
 # Extension packaged artifacts
 extension/dist/

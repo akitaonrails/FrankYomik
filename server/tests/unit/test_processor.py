@@ -1,6 +1,7 @@
 """Unit tests for processor pipeline stages (mocked dependencies)."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
 import numpy as np
 from PIL import Image
 
@@ -8,11 +9,13 @@ from kindle.processor import (
     BubbleResult,
     PageResult,
     PipelineMode,
+    _render_page_image,
+    cleanup_page,
     load_page,
     ocr_bubble,
+    render_cleaned_page_to_bytes,
     transform_furigana,
     transform_translate,
-    _render_page_image,
 )
 
 
@@ -136,3 +139,31 @@ class TestRenderPageImage:
         _render_page_image(page, PipelineMode.FURIGANA)
 
         assert mock_render.call_args.kwargs["layout_img"] is source
+
+    def test_cleanup_and_render_are_separate_production_stages(self):
+        source = Image.new("RGB", (100, 140), "white")
+        page = PageResult(
+            image_path="",
+            name="page",
+            img_pil=source,
+            bubble_results=[BubbleResult(
+                bbox=(20, 20, 70, 100),
+                ocr_text="こんにちは",
+                is_valid=True,
+                transformed="Hello",
+            )],
+        )
+
+        with patch("kindle.processor.clear_text_strokes") as clear:
+            cleanup_page(page, PipelineMode.TRANSLATE)
+        clear.assert_called_once()
+
+        with (
+            patch("kindle.processor.clear_text_strokes") as clear_again,
+            patch("kindle.processor.render_english") as render,
+        ):
+            output = render_cleaned_page_to_bytes(page, PipelineMode.TRANSLATE)
+
+        assert output.startswith(b"\x89PNG")
+        clear_again.assert_not_called()
+        render.assert_called_once()

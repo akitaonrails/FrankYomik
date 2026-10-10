@@ -1,5 +1,27 @@
 # Production Deployment: RunPod + Kamal
 
+> **Status:** Legacy deployment guide. Current production uses the homelab
+> Docker Compose and ROCm configuration in `docker-compose.prod.yml` on the
+> Strix Halo host. Phase 6 of the
+> [v2 pipeline migration](koharu_pipeline_migration_plan.md) will replace this
+> page with tested current and generic deployment instructions.
+
+The API and worker derive `PIPELINE_REVISION` from the pinned stage manifest.
+They verify the checked-in artifacts before accepting work. An optional value
+in `.env` acts as a deployment assertion and must exactly match that derived
+fingerprint:
+
+```dotenv
+PIPELINE_REVISION=sha256:<64 hex characters>
+```
+
+Leaving it unset uses the derived value directly in every Compose environment.
+An explicit mismatch stops startup. `legacy-v1` additionally requires
+`ALLOW_LEGACY_PIPELINE_REVISION=1` and is only for reading pre-revision data
+during migration. A mismatched worker rejects the job, and a cache entry from
+another revision is a miss. See [Pipeline stage manifest](pipeline_stage_manifest.md)
+for the update and verification procedure.
+
 Deploy Frank Manga to a RunPod GPU pod using Kamal for container orchestration.
 
 ## Architecture
