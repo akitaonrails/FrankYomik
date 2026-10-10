@@ -15,6 +15,12 @@ fonts:
 
 ocr:
   device: "cuda"   # "cuda" for GPU (~350MB); "cpu" if VRAM is tight
+  hayai:
+    # Distribution is blocked pending auditable Hayai training-data provenance.
+    enabled: false
+    device: "auto"  # Uses CUDA/ROCm when available, otherwise CPU
+    timeout_seconds: 45
+    short_text_limit: 15
 
 text_detection:
   confidence: 0.3         # EasyOCR confidence threshold

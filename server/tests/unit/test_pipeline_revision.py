@@ -96,6 +96,33 @@ def test_shared_semantic_source_changes_both_detection_stage_revisions():
         ) != implementation["revision"]
 
 
+def test_manga_ocr_revision_covers_router_engines_and_persistence_policy():
+    manifest = load_stage_manifest()
+    implementation = manifest["stages"]["manga.ocr"]["implementation"]
+    required = {
+        "config",
+        "manga_ocr",
+        "manga_pipeline",
+        "python_pipeline_ocr",
+        "hayai_ocr",
+        "hayai_model",
+        "hayai_configuration",
+        "python_kindle_config",
+        "python_pipeline_adapters_current",
+        "python_pipeline_current_backend",
+        "python_worker_job",
+        "python_worker_consumer",
+    }
+
+    assert required <= set(implementation["component_artifacts"])
+    for component in required:
+        changed = copy.deepcopy(manifest)
+        changed["artifacts"][component]["sha256"] = "0" * 64
+        assert composite_implementation_revision(
+            changed, implementation["component_artifacts"],
+        ) != implementation["revision"]
+
+
 def test_artifact_drift_is_rejected():
     manifest = load_stage_manifest()
     manifest["artifacts"]["config"]["sha256"] = "0" * 64

@@ -50,6 +50,7 @@ from pipeline.document import (
     BoundingBox,
     CleanupMetadata,
     MaskReference,
+    OcrAlternative,
     OcrResult,
     PageDocument,
     PageRegion,
@@ -143,6 +144,7 @@ class ProcessingResult:
     # pipelines report it so a client can tell that a book needs book_furigana
     # without inferring it from a render that came back wrong.
     page_kind: str = ""
+    cacheable: bool = True
 
 
 def process_job(job: ProcessingJob,
@@ -344,6 +346,9 @@ def _build_region(
     detector_label: str | None = None,
     polygon: Polygon | None = None,
     mask: MaskReference | None = None,
+    ocr_confidence: float | None = None,
+    ocr_alternatives: tuple[OcrAlternative, ...] = (),
+    ocr_routing_reason: str | None = None,
 ) -> PageRegion:
     """Map current pipeline output into the normalized stage contract."""
     box = BoundingBox.from_value(bbox)
@@ -390,8 +395,10 @@ def _build_region(
             text=ocr_text,
             language=source_language,
             valid=is_valid,
-            confidence=None,
+            confidence=ocr_confidence,
             provenance=ocr_provenance,
+            alternatives=ocr_alternatives,
+            routing_reason=ocr_routing_reason,
         ),
         translation=translation,
         transform=transform,
@@ -805,7 +812,8 @@ def _process_manga(job: ProcessingJob,
             ocr_text=br.ocr_text,
             is_valid=bool(br.is_valid),
             detection_provenance=detection_provenance,
-            ocr_provenance=ocr_provenance,
+            ocr_provenance=(getattr(br, "ocr_provenance", None)
+                            or ocr_provenance),
             render_provenance=render_provenance,
             source_language=source_language,
             translation_provenance=translation_provenance,
@@ -826,6 +834,9 @@ def _process_manga(job: ProcessingJob,
             mask=(None if semantic is None else _semantic_mask_reference(
                 semantic_ids[semantic.id], semantic, img_w, img_h,
             )),
+            ocr_confidence=getattr(br, "ocr_confidence", None),
+            ocr_alternatives=getattr(br, "ocr_alternatives", ()),
+            ocr_routing_reason=getattr(br, "ocr_routing_reason", None),
         ))
 
     _append_unprocessed_semantic_regions(
@@ -858,6 +869,10 @@ def _process_manga(job: ProcessingJob,
                 "cleanup": cleanup_provenance,
                 "render": render_provenance,
             },
+        ),
+        cacheable=not any(
+            getattr(item, "ocr_degraded", False)
+            for item in page.bubble_results
         ),
         page_kind=page_kind,
     )

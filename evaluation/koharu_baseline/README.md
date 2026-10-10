@@ -19,6 +19,10 @@ The follow-up evaluation of ogkalu's compact v4 ONNX detector is recorded in
 [`phase1_detector_evaluation.md`](phase1_detector_evaluation.md). It remains an
 evaluation candidate and is not a production model.
 
+Hayai OCR's pinned identity, security and provenance audit, oracle quality
+bound, candidate routing signals, and promotion gates are recorded in
+[`phase2_hayai_evaluation.md`](phase2_hayai_evaluation.md).
+
 ## What should be compared
 
 ### 1. Detection and segmentation

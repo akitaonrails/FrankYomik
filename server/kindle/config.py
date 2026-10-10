@@ -61,6 +61,11 @@ BUBBLE_PADDING = 5            # Pixels to pad inside bubble for text rendering
 
 # --- OCR settings ---
 MANGA_OCR_DEVICE = _ocr.get("device", "cpu")  # Force CPU to avoid VRAM conflicts with Ollama
+_hayai = _ocr.get("hayai", {})
+HAYAI_ENABLED = bool(_hayai.get("enabled", False))
+HAYAI_DEVICE = str(_hayai.get("device", "auto"))
+HAYAI_TIMEOUT_SECONDS = float(_hayai.get("timeout_seconds", 45))
+HAYAI_SHORT_TEXT_LIMIT = int(_hayai.get("short_text_limit", 15))
 
 # --- Text rendering ---
 FURIGANA_SIZE_RATIO = 0.50   # Furigana font size relative to main text

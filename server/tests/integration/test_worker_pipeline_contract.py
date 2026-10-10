@@ -13,7 +13,7 @@ import pytest
 from PIL import Image
 
 from pipeline.detection import SemanticDetection
-from pipeline.document import BoundingBox, Polygon, Provenance
+from pipeline.document import BoundingBox, OcrAlternative, Polygon, Provenance
 from webtoon.processor import WebtoonPageResult, detect_bubbles_rtdetr
 from worker.consumer import STREAM_HIGH, Consumer
 from worker.job import (
@@ -36,6 +36,11 @@ class BubbleResult:
     is_artwork_text: bool = False
     mask: object = None
     source_font_size: int | None = None
+    ocr_confidence: float | None = None
+    ocr_provenance: Provenance | None = None
+    ocr_alternatives: tuple[OcrAlternative, ...] = ()
+    ocr_routing_reason: str | None = None
+    ocr_degraded: bool = False
 
 
 def _png_bytes(width: int = 120, height: int = 160) -> bytes:
@@ -93,9 +98,19 @@ def _fake_dependencies(
 
     def ocr_manga(_image, bubble) -> BubbleResult:
         count("ocr")
+        selected = Provenance(
+            "hayai-ocr", "hayai-test", "hayai-v2@test-weights",
+        )
+        primary = Provenance(
+            "manga-ocr", "manga-test", "manga@test-weights",
+        )
         return BubbleResult(
             bbox=bubble["bbox"], ocr_text="漢字です", is_valid=True,
             source_font_size=18,
+            ocr_confidence=0.8,
+            ocr_provenance=selected,
+            ocr_alternatives=(OcrAlternative("漢字てす", 0.6, primary),),
+            ocr_routing_reason="hayai_crop_inconsistent",
         )
 
     def translate_text(_text, _target_lang) -> str:
@@ -357,6 +372,12 @@ def test_worker_message_cache_and_rerender_contract(
         assert balloon["detector_label"] == "bubble"
         assert balloon["polygon"] == [[15, 20], [90, 20], [90, 110], [15, 110]]
         assert balloon["mask"]["encoding"] == "connected-component-v1"
+        assert balloon["ocr"]["provenance"]["backend"] == "hayai-ocr"
+        assert balloon["ocr"]["confidence"] == 0.8
+        assert balloon["ocr"]["routing_reason"] == "hayai_crop_inconsistent"
+        assert balloon["ocr"]["alternatives"][0]["provenance"]["backend"] == (
+            "manga-ocr"
+        )
         assert text["kind"] == "text"
         assert text["parent_id"] == balloon["id"]
     if pipeline == "webtoon":
@@ -386,6 +407,75 @@ def test_worker_message_cache_and_rerender_contract(
             if "detector_label" not in region and region["kind"] == "bubble"
         ]
         assert [region["reading_order"] for region in compatibility_regions] == [6]
+
+
+def test_degraded_manga_ocr_result_is_returned_but_not_cached(tmp_path):
+    source = _png_bytes()
+    source_hash = hashlib.sha256(source).hexdigest()
+    calls: dict[str, int] = {}
+    deps = _fake_dependencies("manga_translate", calls)
+
+    def degraded_ocr(_image, bubble):
+        return BubbleResult(
+            bbox=bubble["bbox"],
+            ocr_text="第2話",
+            is_valid=True,
+            ocr_provenance=Provenance("manga-ocr", "manga-test"),
+            ocr_routing_reason="hayai_numeric:hayai_timeout_fallback",
+            ocr_degraded=True,
+        )
+
+    deps = replace(deps, ocr_manga=degraded_ocr)
+    consumer = Consumer(
+        "redis://unused",
+        cache_dir=str(tmp_path / "cache"),
+        pipeline_revision="gate0-test",
+        job_dependencies=deps,
+    )
+    consumer._rdb = MagicMock()
+    consumer._rdb.get.side_effect = lambda key: (
+        source if key == "source-image" else None
+    )
+    results = []
+    consumer._store_result = lambda result, **_kwargs: results.append(result)
+
+    outcome = consumer._process_message(
+        STREAM_HIGH,
+        b"3-0",
+        _message_fields("manga_translate", source_hash),
+    )
+
+    assert outcome == "processed"
+    assert results[-1].status == "completed"
+    assert results[-1].cacheable is False
+    assert results[-1].metadata_payload["regions"][0]["ocr"][
+        "routing_reason"
+    ] == "hayai_numeric:hayai_timeout_fallback"
+    assert consumer._page_cache.load_metadata_by_hash(
+        "manga_translate_pt-br",
+        source_hash,
+        document_pipeline="manga_translate",
+    ) is None
+
+
+@pytest.mark.parametrize("pipeline", ["book_furigana", "webtoon"])
+def test_non_manga_ocr_paths_never_invoke_hayai_stage(pipeline):
+    calls: dict[str, int] = {}
+    deps = _fake_dependencies(pipeline, calls)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("manga/Hayai OCR must not run")
+
+    deps = replace(deps, ocr_manga=forbidden)
+    result = process_job(ProcessingJob(
+        job_id=f"no-hayai-{pipeline}",
+        pipeline=pipeline,
+        image_bytes=_png_bytes(),
+        source_hash="a" * 64,
+        target_lang="pt-br",
+    ), dependencies=deps)
+
+    assert result.status == "completed", result.error
 
 
 def test_tall_webtoon_stitches_semantics_before_page_document_mapping():

@@ -10,15 +10,18 @@ This is a sequential migration. A stage may start only after the previous stage 
 
 ## Status
 
-The Phase 0 foundation and post-review Gate 0 remediation are complete in
-the current working tree: typed stage protocols, a validated
-[PageDocument v2](page_document_v2.md), cache manifest v3 revision identity,
-compatibility reads for legacy metadata and manifests, verified model and font
-identity, fail-closed translation and configured inpainting, and an injected,
-consumer-level
+Phases 0 through 2 are complete. The foundation provides typed stage protocols,
+a validated [PageDocument v2](page_document_v2.md), cache manifest v3 revision
+identity, compatibility reads for legacy metadata and manifests, verified model
+and font identity, fail-closed translation and configured inpainting, and an
+injected, consumer-level
 [four-pipeline integration gate](pipeline_architecture.md#verification) in CI.
-The selected production models and rendering behavior are unchanged. The
-combined Gate 0 correctness and structure reviews passed on the final tree.
+Phase 1 retained the current detector after the candidate failed its provenance
+and quality gates. Phase 2 confirmed Hayai's recognition quality and added a
+disabled, pinned adapter, while retaining Manga OCR as the production default
+because a safe router from Frank's current signals was not established. Every
+completed phase passed its independent review and was committed as a working
+delivery boundary.
 
 ## Product boundary
 
@@ -167,11 +170,24 @@ Document class meanings, thresholds, relationships, mask encoding, model provena
 
 ## Phase 2: OCR routing with Hayai for difficult regions
 
+**Status: complete; Gate 2 passed.** Manga OCR remains the production default because
+the frozen corpus confirms Hayai's recognizer quality but does not validate a safe
+router from Frank's current detector signals. Seven of 18 difficult regions in the
+audited set have no current Frank parent and therefore never reach OCR. The optional
+Hayai adapter is pinned, locally verified, disabled by default, and fails back without
+caching transient results. Automatic weight distribution remains blocked until the
+training-image provenance is complete. See [OCR routing](ocr_routing.md) and the
+[Phase 2 evaluation](../evaluation/koharu_baseline/phase2_hayai_evaluation.md).
+The final gate verified the exact legacy Manga OCR trigger, typed routing provenance,
+four pinned local artifacts, single and dual-worker Strix Halo resource evidence, and
+derived pipeline revision
+`sha256:83a9975ece9d4143312a1866764b0293ef97db98fcd782fe57858285f1b47ef5`.
+
 ### Implementation
 
 - Add a shared OCR adapter that returns text, confidence/quality signals, engine, revision, and optional alternatives.
 - Keep Manga OCR as the fast primary for ordinary Japanese dialogue and prose chunks.
-- Add Hayai OCR as a pinned backend and route short, numeric, multilingual, stylized/SFX, or primary/consistency-failing regions to it. Make the decision deterministic and store it in the page document.
+- Add Hayai OCR as a pinned backend and route short numeric, multilingual, stylized/SFX, horizontal, or primary/consistency-failing regions to it. Plain short output is not sufficient after the frozen regression check. Make the decision deterministic and store it in the page document.
 - Preserve Frank's Japanese validation, two-crop consistency check, furigana handling, and prose chunking. Preserve the EasyOCR Korean path until a Korean benchmark establishes that Hayai improves it.
 - Audit the Hayai code and weight licenses before production packaging, then pin model files by revision and checksum.
 

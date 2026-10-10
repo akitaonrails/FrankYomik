@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from kindle.processor import (
@@ -17,6 +18,11 @@ from kindle.processor import (
     transform_furigana,
     transform_translate,
 )
+
+
+@pytest.fixture(autouse=True)
+def _keep_existing_stage_tests_on_primary_ocr(monkeypatch):
+    monkeypatch.setattr("kindle.processor.HAYAI_ENABLED", False)
 
 
 class TestLoadPage:
@@ -75,6 +81,23 @@ class TestOcrBubble:
         bubble = {"bbox": (10, 10, 50, 50)}
         br = ocr_bubble(img, bubble)
         assert not br.is_valid
+
+    @patch("kindle.processor.is_valid_japanese", return_value=True)
+    @patch(
+        "kindle.processor.extract_text_from_region",
+        side_effect=["日本語。。。。。。。。。。。。", "別の読み"],
+    )
+    def test_disabled_hayai_preserves_legacy_stripped_length_trigger(
+        self, mock_ocr, _mock_valid,
+    ):
+        img = Image.new("RGB", (100, 100))
+        bubble = {"bbox": (10, 10, 50, 50)}
+
+        result = ocr_bubble(img, bubble)
+
+        assert result.is_valid is True
+        assert result.ocr_text == "日本語。。。。。。。。。。。。"
+        assert mock_ocr.call_count == 1
 
 
 class TestTransformFurigana:

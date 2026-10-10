@@ -9,10 +9,29 @@ import numpy as np
 from PIL import Image
 
 from pipeline.detection import SemanticDetection, legacy_processing_regions
-from pipeline.document import Polygon
+from pipeline.current_backend import ocr_engine_provenance
+from pipeline.document import OcrAlternative, Polygon, Provenance
+from pipeline.ocr import (
+    OcrEngineResult,
+    OcrQuality,
+    meaningful_character_count,
+    route_japanese_crop,
+)
 
 from .bubble_detector import detect_semantic_regions, extract_bubble_mask_manga
-from .config import EN_PAGE_FONT_DIVISOR, MANGA_INPAINT_ENABLED, MIN_FONT_SIZE
+from .config import (
+    EN_PAGE_FONT_DIVISOR,
+    HAYAI_ENABLED,
+    HAYAI_SHORT_TEXT_LIMIT,
+    MANGA_INPAINT_ENABLED,
+    MIN_FONT_SIZE,
+)
+from .hayai_ocr import (
+    HayaiOutOfMemory,
+    HayaiTimeout,
+    HayaiUnavailable,
+    extract_text as extract_text_hayai,
+)
 from .furigana import annotate as furigana_annotate
 from .image_utils import (
     clear_text_strokes,
@@ -49,6 +68,11 @@ class BubbleResult:
     is_artwork_text: bool = False  # True if text found on artwork (no bubble)
     mask: np.ndarray | None = None  # Bubble shape mask for curved clearing
     source_font_size: int | None = None  # Estimated original glyph scale
+    ocr_confidence: float | None = None
+    ocr_provenance: Provenance | None = None
+    ocr_alternatives: tuple[OcrAlternative, ...] = ()
+    ocr_routing_reason: str | None = None
+    ocr_degraded: bool = False
 
 
 @dataclass(frozen=True)
@@ -163,8 +187,8 @@ def _ocr_char_overlap(text1: str, text2: str) -> float:
     return len(chars1 & chars2) / len(chars1)
 
 
-def _verify_ocr_consistency(img_pil: Image.Image, bbox: tuple,
-                            text: str) -> bool:
+def _ocr_consistency(img_pil: Image.Image, bbox: tuple,
+                     text: str) -> tuple[bool, float | None]:
     """Detect manga-ocr hallucinations by comparing full vs center crop.
 
     Real text produces overlapping OCR across different crops; hallucinated
@@ -174,7 +198,7 @@ def _verify_ocr_consistency(img_pil: Image.Image, bbox: tuple,
     x1, y1, x2, y2 = bbox
     w, h = x2 - x1, y2 - y1
     if w < 20 or h < 20:
-        return True
+        return True, None
     # Shrink bbox by 15% on each side → center 70%
     dx, dy = max(3, w * 15 // 100), max(3, h * 15 // 100)
     center_bbox = (x1 + dx, y1 + dy, x2 - dx, y2 - dy)
@@ -183,8 +207,14 @@ def _verify_ocr_consistency(img_pil: Image.Image, bbox: tuple,
     if overlap < 0.35:
         log.info("  OCR hallucination rejected (overlap=%.2f): %s vs %s",
                  overlap, text, center_text)
-        return False
-    return True
+        return False, overlap
+    return True, overlap
+
+
+def _verify_ocr_consistency(img_pil: Image.Image, bbox: tuple,
+                            text: str) -> bool:
+    """Compatibility wrapper retained for focused callers and tests."""
+    return _ocr_consistency(img_pil, bbox, text)[0]
 
 
 def ocr_bubble(img_pil: Image.Image, bubble: dict) -> BubbleResult:
@@ -196,16 +226,51 @@ def ocr_bubble(img_pil: Image.Image, bubble: dict) -> BubbleResult:
     # Detect manga-ocr hallucinations on non-text regions (faces, artwork).
     # Short texts are most prone to hallucination — verify by checking OCR
     # consistency across a center crop.
-    if (valid and len(text.strip()) < 15
-            and not _verify_ocr_consistency(img_pil, bbox, text)):
-        valid = False
-    if text.strip() and not valid:
-        log.info("  OCR noise (not Japanese): %s, skipping", text)
-    elif valid:
-        log.info("  OCR: %s", text)
-    return BubbleResult(bbox=bbox, ocr_text=text,
-                        is_valid=valid, is_artwork_text=is_artwork,
-                        mask=bubble.get("mask"))
+    consistent: bool | None = None
+    overlap: float | None = None
+    # Preserve the production Manga OCR hallucination check exactly. Routing
+    # may inspect normalized character classes later, but enabling or disabling
+    # an optional backend must not change when the retained primary is checked.
+    if valid and len(text.strip()) < HAYAI_SHORT_TEXT_LIMIT:
+        consistent, overlap = _ocr_consistency(img_pil, bbox, text)
+    primary = OcrEngineResult(
+        text=text,
+        quality=OcrQuality(
+            valid_japanese=valid,
+            crop_consistent=consistent,
+            crop_overlap=overlap,
+            meaningful_characters=meaningful_character_count(text),
+            confidence=None,
+        ),
+        provenance=ocr_engine_provenance("manga"),
+    )
+    routed = route_japanese_crop(
+        img_pil.crop(bbox),
+        primary,
+        is_artwork=is_artwork,
+        fallback_enabled=HAYAI_ENABLED,
+        fallback=extract_text_hayai,
+        fallback_provenance=ocr_engine_provenance("hayai"),
+        validate_japanese=is_valid_japanese,
+        transient_errors=(HayaiUnavailable, HayaiTimeout, HayaiOutOfMemory),
+        horizontal=bubble.get("text_orientation") == "horizontal",
+    )
+    if routed.valid:
+        log.info("  OCR (%s): %s", routed.provenance.backend, routed.text)
+    elif routed.text.strip():
+        log.info("  OCR noise (not Japanese): %s, skipping", routed.text)
+    return BubbleResult(
+        bbox=bbox,
+        ocr_text=routed.text,
+        is_valid=routed.valid,
+        is_artwork_text=is_artwork,
+        mask=bubble.get("mask"),
+        ocr_confidence=routed.confidence,
+        ocr_provenance=routed.provenance,
+        ocr_alternatives=routed.alternatives,
+        ocr_routing_reason=routed.routing_reason,
+        ocr_degraded=routed.degraded,
+    )
 
 
 def transform_furigana(br: BubbleResult) -> None:

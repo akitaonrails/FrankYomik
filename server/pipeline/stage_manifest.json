@@ -3,7 +3,7 @@
   "artifacts": {
     "config": {
       "path": "config.yaml",
-      "sha256": "6a64ea56251fd45e640d9d810e8f1b21d57435773edf183e29651f268a6b101d"
+      "sha256": "c1b41dd607a1ac529be7b28fb5140a046e1a1c0d61cfc21e196b970e421305a6"
     },
     "manga_detector": {
       "path": "kindle/bubble_detector.py",
@@ -23,7 +23,7 @@
     },
     "manga_pipeline": {
       "path": "kindle/processor.py",
-      "sha256": "f6708ae5adbc8c8395e4549dce28aec23ae5324652c773f6655dd288102c94b7"
+      "sha256": "87c9885f2f7fcf251c95f8d34800afd9cde41ee093bba831e06741c0d68ea662"
     },
     "manga_renderer": {
       "path": "kindle/text_renderer.py",
@@ -75,7 +75,7 @@
     },
     "python_pipeline_current_backend": {
       "path": "pipeline/current_backend.py",
-      "sha256": "e4cce15bb6ef958950117152d34898cdb969d9289a10e495bf0d8b3cc0d1bc01"
+      "sha256": "335e8755b82225af1e8835f919520b7731fa13ad2b98a421975d77657df1da33"
     },
     "python_pipeline_document": {
       "path": "pipeline/document.py",
@@ -99,7 +99,7 @@
     },
     "python_worker_consumer": {
       "path": "worker/consumer.py",
-      "sha256": "7bd0d15f8ff7769f479066fa5d794d1ab89423be24a87b35ea18f136e5560de2"
+      "sha256": "37a210a7f61d19ad74a4268ef7dfb2cadb215e078431d2e6764ce3627e981a29"
     },
     "python_worker_health": {
       "path": "worker/health.py",
@@ -107,7 +107,7 @@
     },
     "python_worker_job": {
       "path": "worker/job.py",
-      "sha256": "e63bf66e1f0a22596374afb7c42018bc517550f8230d1480e2d224eaeb8c15ee"
+      "sha256": "4633061f0a6e430ad1d3d0f7e0dd332af5cb16549be74f2fa63292cf0782bee5"
     },
     "python_worker_main": {
       "path": "worker/main.py",
@@ -123,7 +123,7 @@
     },
     "python_kindle_config": {
       "path": "kindle/config.py",
-      "sha256": "52b131e39eb5e94c9ffa0bba9294cbf66bd28ca5d0b40bd7d9cd380692216cee"
+      "sha256": "b3ee61ab89b9cfc93a2afd85e54d53b8218981eb4d4443cf71996c8080598e57"
     },
     "python_kindle_image_utils": {
       "path": "kindle/image_utils.py",
@@ -180,6 +180,22 @@
     "python_pipeline_detection": {
       "path": "pipeline/detection.py",
       "sha256": "d4c92fd7c3bbf4fa511937aa1488253b1464110886b114e77ac71c71bb1fdd82"
+    },
+    "python_pipeline_ocr": {
+      "path": "pipeline/ocr.py",
+      "sha256": "d42e20a03c4c71dbfd29aaff94a6759c797818210aa8bc241392d541b489cd8a"
+    },
+    "hayai_ocr": {
+      "path": "kindle/hayai_ocr.py",
+      "sha256": "5906bcd2bf6ea59a890b69cbf38b11b9d83d8bbe831783de6e489e7e96727a47"
+    },
+    "hayai_model": {
+      "path": "kindle/hayai_model.py",
+      "sha256": "37ea490b17b57e65ac34960deea3b28d739c9243723384013a1aba497a5a1415"
+    },
+    "hayai_configuration": {
+      "path": "kindle/hayai_configuration.py",
+      "sha256": "f832195d6836fdd20ac5ed048c9df81ba720b425a39d2f3d9e75201a7e8aca58"
     }
   },
   "stages": {
@@ -187,7 +203,7 @@
       "backend": "rtdetr-v2",
       "implementation": {
         "id": "kindle.bubble_detector",
-        "revision": "sha256:5e3a98bf9b684d62543e8dc9fd1bd683bb06a880c4da9c0433bf1c2f70180d26",
+        "revision": "sha256:447b5b8134e9ce54641318be7c516267698f1ef4b6ea0c89148adafc86a56ebc",
         "component_artifacts": [
           "manga_detector",
           "manga_pipeline",
@@ -212,8 +228,22 @@
     "manga.ocr": {
       "backend": "manga-ocr",
       "implementation": {
-        "id": "kindle.ocr",
-        "revision": "sha256:ac1dd7c1b8e85148087327fcc7a67b397b4d6676b3f02a9be511005906146946"
+        "id": "pipeline.japanese-ocr-router",
+        "revision": "sha256:5dc1610858eaceaddce39bf9f30874ba3bcb62f039e4ebf3660f2b2636c6e8c8",
+        "component_artifacts": [
+          "config",
+          "manga_ocr",
+          "manga_pipeline",
+          "python_pipeline_ocr",
+          "hayai_ocr",
+          "hayai_model",
+          "hayai_configuration",
+          "python_pipeline_current_backend",
+          "python_worker_job",
+          "python_kindle_config",
+          "python_pipeline_adapters_current",
+          "python_worker_consumer"
+        ]
       },
       "model": {
         "id": "kha-white/manga-ocr-base",
@@ -223,7 +253,58 @@
       "prompt": null,
       "output_config": {
         "device": "cuda",
-        "japanese_validity_ratio": 0.5
+        "japanese_validity_ratio": 0.5,
+        "hayai_enabled": false,
+        "hayai_device": "auto",
+        "hayai_timeout_seconds": 45,
+        "consistency_short_text_limit": 15,
+        "route_precedence": [
+          "stylized_or_sfx",
+          "multilingual",
+          "numeric",
+          "punctuation",
+          "primary_invalid",
+          "crop_inconsistent",
+          "horizontal"
+        ],
+        "transient_failure_policy": "degraded_non_cacheable_manga_fallback",
+        "maximum_image_patches": 256,
+        "maximum_new_tokens": 256,
+        "beams": 1,
+        "repetition_penalty": 1,
+        "promotion_status": "experimental_disabled_training_data_provenance"
+      },
+      "engines": {
+        "manga": {
+          "backend": "manga-ocr",
+          "implementation_revision": "sha256:ac1dd7c1b8e85148087327fcc7a67b397b4d6676b3f02a9be511005906146946",
+          "model": {
+            "id": "kha-white/manga-ocr-base",
+            "weights_revision": "aa6573bd10b0d446cbf622e29c3e084914df9741",
+            "runtime_package": "manga-ocr==0.1.16"
+          }
+        },
+        "hayai": {
+          "backend": "hayai-ocr",
+          "implementation_revision": "sha256:6218c18d489858353183cd984ec935a96dff2180f37ab90e0821520d133feec1",
+          "model": {
+            "id": "JustANormalTinkerer/hayai-ocr-v2",
+            "weights_revision": "4a4ce477c9a8841f208b94e1d9ed5c0938965e05",
+            "runtime_package": "transformers==5.3.0",
+            "license": "Apache-2.0",
+            "files": {
+              "config.json": "581b762f1dfd55d0108f3f84e3f157bc762524af37fb0c19a7172a18b75582e2",
+              "model.safetensors": "4c645b221db8428cda04991be234c18133bb8861142a3d87cba04c5099b02328",
+              "tokenizer.json": "f8a0a909c628a684fe463094614e236a8b1d3609e7770f77e7beafaf1056bf13",
+              "tokenizer_config.json": "6fb6c69afaedf1275872d3e62e276fd4467bd00da7a84cbbb5566a2cd28f58f6"
+            },
+            "siglip2": {
+              "revision": "b53b807d3a2d5e2b3911292f2d69e5341cdc064c",
+              "config_sha256": "c0b8c2e7f0527b0bea1b1d9abe0381c0f294352df92439c54590b8420e539118",
+              "preprocessor_config_sha256": "1125703e5446d5b6ff4d5893a33bac128cdd21dc12e3dad2469a648fb0ae3bf7"
+            }
+          }
+        }
       }
     },
     "manga.translation": {

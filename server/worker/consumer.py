@@ -404,7 +404,7 @@ class Consumer:
             job_id, has_image, has_metadata,
             (result.source_hash or source_hash or "")[:12],
         )
-        if has_image and has_metadata:
+        if has_image and has_metadata and result.cacheable:
             self._cache_to_v2(
                 pipeline=cache_pipeline,
                 document_pipeline=pipeline,
@@ -419,8 +419,8 @@ class Consumer:
             )
         else:
             log.warning(
-                "cache-v2 skipped for job %s: image=%s metadata=%s",
-                job_id, has_image, has_metadata,
+                "cache-v2 skipped for job %s: image=%s metadata=%s cacheable=%s",
+                job_id, has_image, has_metadata, result.cacheable,
             )
 
         # Store result and notify
@@ -499,6 +499,7 @@ class Consumer:
             "render_hash": result.render_hash,
             "page_kind": result.page_kind,
             "pipeline_revision": result.pipeline_revision,
+            "cacheable": result.cacheable,
         }
         meta_key = f"{RESULT_KEY_PREFIX}{result.job_id}"
         self._rdb.set(meta_key, json.dumps(meta), ex=self.result_ttl)
@@ -509,7 +510,12 @@ class Consumer:
 
         # Store metadata payload in Redis keyed by pipeline:source_hash so the
         # server can serve it even when the v2 disk cache path doesn't match.
-        if result.metadata_payload and result.source_hash and result.pipeline:
+        if (
+            result.cacheable
+            and result.metadata_payload
+            and result.source_hash
+            and result.pipeline
+        ):
             meta_hash_key = (
                 f"{META_BY_HASH_PREFIX}{cache_pipeline or result.pipeline}:"
                 f"{result.source_hash}"

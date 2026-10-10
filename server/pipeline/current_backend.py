@@ -29,6 +29,23 @@ def provenance_for(
     )
 
 
+def ocr_engine_provenance(engine: str) -> Provenance:
+    """Return the selected manga OCR engine identity from the router stage."""
+    identity = stage_identity("manga_translate", "ocr")
+    try:
+        engine_identity = identity["engines"][engine]
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"missing OCR engine identity: {engine}") from error
+    model_identity = engine_identity["model"]
+    return Provenance(
+        backend=str(engine_identity["backend"]),
+        revision=str(engine_identity["implementation_revision"]),
+        model=(f"{model_identity['id']}@"
+               f"{model_identity['weights_revision']}"),
+        config_hash=stage_config_hash(identity),
+    )
+
+
 def language_for(pipeline: str) -> str:
     return "ko" if pipeline == "webtoon" else "ja"
 
@@ -41,4 +58,3 @@ def cleanup_for(pipeline: str, kind: str) -> str | None:
     if pipeline.startswith("manga_"):
         return "stroke_clear"
     return None
-

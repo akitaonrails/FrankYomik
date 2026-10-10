@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "audited_at": "2026-10-09",
+  "decision": "recognizer_quality_accepted_routing_and_distribution_blocked",
+  "model": {
+    "repository": "JustANormalTinkerer/hayai-ocr-v2",
+    "revision": "4a4ce477c9a8841f208b94e1d9ed5c0938965e05",
+    "declared_license": "apache-2.0",
+    "languages": ["en", "ja", "zh", "ko"],
+    "parameters": 155614464,
+    "crop_only": true
+  },
+  "artifacts": [
+    {
+      "path": "model.safetensors",
+      "bytes": 622502784,
+      "sha256": "4c645b221db8428cda04991be234c18133bb8861142a3d87cba04c5099b02328",
+      "runtime_required": true
+    },
+    {
+      "path": "config.json",
+      "bytes": 342,
+      "sha256": "581b762f1dfd55d0108f3f84e3f157bc762524af37fb0c19a7172a18b75582e2",
+      "runtime_required": true
+    },
+    {
+      "path": "tokenizer.json",
+      "bytes": 1247253,
+      "sha256": "f8a0a909c628a684fe463094614e236a8b1d3609e7770f77e7beafaf1056bf13",
+      "runtime_required": true
+    },
+    {
+      "path": "tokenizer_config.json",
+      "bytes": 244,
+      "sha256": "6fb6c69afaedf1275872d3e62e276fd4467bd00da7a84cbbb5566a2cd28f58f6",
+      "runtime_required": false
+    },
+    {
+      "path": "configuration_hayai.py",
+      "bytes": 401,
+      "sha256": "47abd38cf1bae7aef27d01f5b8b4aa0960a7bc625a8afad79c4762ff5e5ed970",
+      "runtime_required": false,
+      "reviewed_remote_code": true
+    },
+    {
+      "path": "modeling_hayai.py",
+      "bytes": 28251,
+      "sha256": "3d78976206549964abd55f776ab059e002adc72d2167daf168e46a12a5f4ae62",
+      "runtime_required": false,
+      "reviewed_remote_code": true
+    }
+  ],
+  "siglip2_processor": {
+    "repository": "google/siglip2-base-patch16-naflex",
+    "revision": "b53b807d3a2d5e2b3911292f2d69e5341cdc064c",
+    "declared_license": "apache-2.0",
+    "config_sha256": "c0b8c2e7f0527b0bea1b1d9abe0381c0f294352df92439c54590b8420e539118",
+    "preprocessor_config_sha256": "1125703e5446d5b6ff4d5893a33bac128cdd21dc12e3dad2469a648fb0ae3bf7"
+  },
+  "reviewed_implementation": {
+    "repository": "koharu-rs/koharu",
+    "revision": "2c78c0cd6eeec4dbf607f0a22e3a7e1f932b6ff3",
+    "remote_python_executed": false,
+    "generation": {
+      "maximum_new_tokens": 256,
+      "beams": 1,
+      "repetition_penalty": 1.0,
+      "maximum_image_patches": 256
+    },
+    "strix_halo_binary_sha256": "838e11b48651f7a119a0071d823eb57117ea44700a5eae683a101475e7843caf"
+  },
+  "training_data": [
+    {
+      "name": "JustANormalTinkerer/hayai-dataset-merged",
+      "role": "approximately one million OCR images",
+      "status": "inaccessible_to_unauthenticated_audit",
+      "license": null,
+      "source_documentation": null
+    },
+    {
+      "name": "JustANormalTinkerer/hayai-finetuning-dataset-with-korean",
+      "latest_public_revision_before_model_release": "764ca43fa4c57fd2db9ee5d3827f43dcdf9f69f6",
+      "confirmed_training_revision": false,
+      "examples": 38907,
+      "status": "public_but_undocumented",
+      "license": null,
+      "source_documentation": null
+    },
+    {
+      "name": "wikimedia/wikipedia",
+      "role": "JA/ZH/KO/EN language prior",
+      "declared_licenses": ["cc-by-sa-3.0", "gfdl"]
+    },
+    {
+      "name": "globis-university/aozorabunko-clean",
+      "role": "Japanese language prior",
+      "declared_license": "cc-by-4.0",
+      "source_claim": "public-domain works filtered by the dataset producer"
+    },
+    {
+      "name": "WebLI",
+      "role": "SigLIP2 vision encoder pretraining",
+      "declared_license": null,
+      "source_documentation": "Google SigLIP2 model card"
+    }
+  ],
+  "security": {
+    "upstream_requires_trust_remote_code": true,
+    "reviewed_code_network_behavior": [
+      "downloads an unpinned google/siglip2-base-patch16-naflex configuration",
+      "resolves its own model weights through the Transformers cache"
+    ],
+    "reviewed_code_process_or_shell_execution": false,
+    "reviewed_code_file_writes": false,
+    "unsafe_fallback": "torch.load is reachable if model.safetensors is absent and pytorch_model.bin is present",
+    "required_policy": "Do not use trust_remote_code or the pickle fallback in production; load only the allowlisted safetensors, JSON configuration, and tokenizer after SHA-256 verification."
+  },
+  "redistribution": {
+    "artifact_grant": "Apache-2.0 declared by the model repository",
+    "status": "blocked_pending_training_data_provenance",
+    "blockers": [
+      "The approximately one-million-image OCR corpus is inaccessible and has no auditable source or license statement.",
+      "The public 38,907-image fine-tuning corpus at the latest revision predating the model commit has no license or source methodology; the model card does not identify the exact dataset revision used."
+    ]
+  }
+}
