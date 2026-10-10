@@ -60,3 +60,13 @@ Ubuntu, Pillow, and Transformers updates and removal of the stray development
 binary, rescans report zero high or critical findings for the API, CPU worker,
 and ROCm worker images. The complete Python suite also passes inside the rebuilt
 ROCm image with the updated runtime.
+
+## v2.0.1 advisory refresh
+
+After GitHub indexed the v2.0.0 dependency manifest, it opened two medium
+Dependabot alerts for `requests` temporary extraction handling and `pytest`
+temporary-directory handling. Version 2.0.1 updates `requests` from 2.32.5 to
+2.34.2 and `pytest` from 9.0.2 to 9.1.1, the latest compatible PyPI releases at
+the refresh date. Both versions are newer than Dependabot's initial proposed
+fixes. The universal worker lock and pipeline fingerprint were regenerated so
+API and worker cache identity changes with the runtime dependency set.
