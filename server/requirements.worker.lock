@@ -185,7 +185,7 @@ pygments==2.21.0
     #   rich
 pyperclip==1.11.0
     # via manga-ocr
-pytest==9.0.2
+pytest==9.1.1
     # via -r server/requirements.txt
 python-bidi==0.6.11
     # via easyocr
@@ -199,7 +199,7 @@ redis==7.2.1
     # via -r server/requirements.txt
 regex==2026.9.29
     # via transformers
-requests==2.32.5
+requests==2.34.2
     # via
     #   -r server/requirements.txt
     #   deep-translator

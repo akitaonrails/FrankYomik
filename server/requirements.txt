@@ -33,7 +33,7 @@ simple-lama-inpainting==0.1.0
 
 # Services and IO
 redis==7.2.1
-requests==2.32.5
+requests==2.34.2
 pyyaml==6.0.3
 deep-translator==1.11.4
 
@@ -41,4 +41,4 @@ deep-translator==1.11.4
 nodriver==0.48.1
 
 # Tests
-pytest==9.0.2
+pytest==9.1.1
