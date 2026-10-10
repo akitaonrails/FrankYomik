@@ -48,6 +48,7 @@ server/cache/
 
 # Compiled Go binaries
 server/server
+server/frank_manga
 
 # Webtoon data / scratch
 webtoon_data/

@@ -191,11 +191,11 @@
     },
     "runtime_requirements": {
       "path": "requirements.txt",
-      "sha256": "206e332c21e9d70df67f1ae0b9eb997c436b4fe617ede841f16d8ba2f15e5bfc"
+      "sha256": "bcc02418cb22bb05fa1d3782bf21c9528f5c62641f33f27d6548c958e7eeb16a"
     },
     "runtime_requirements_lock": {
       "path": "requirements.worker.lock",
-      "sha256": "b79c53d71334bd7b3c5612abf7bcb4feb3635249bc1175b923541b030f1294be"
+      "sha256": "4c04eda482803d90197110c0974967d6d83c77eb4328d4a448c1eba804d2ce50"
     },
     "sfx_font": {
       "path": "fonts/ComicNeue-Bold.otf",
@@ -234,7 +234,7 @@
       "model": {
         "id": "ogkalu/comic-text-and-bubble-detector",
         "weights_revision": "4269a0e53d40419f4746e8b3e30ae7faef3a26c6",
-        "runtime_package": "transformers==5.3.0"
+        "runtime_package": "transformers==5.10.4"
       },
       "prompt": null,
       "output_config": {
@@ -310,7 +310,7 @@
           "model": {
             "id": "JustANormalTinkerer/hayai-ocr-v2",
             "weights_revision": "4a4ce477c9a8841f208b94e1d9ed5c0938965e05",
-            "runtime_package": "transformers==5.3.0",
+            "runtime_package": "transformers==5.10.4",
             "license": "Apache-2.0",
             "files": {
               "config.json": "581b762f1dfd55d0108f3f84e3f157bc762524af37fb0c19a7172a18b75582e2",
@@ -520,7 +520,7 @@
       "model": {
         "id": "ogkalu/comic-text-and-bubble-detector",
         "weights_revision": "4269a0e53d40419f4746e8b3e30ae7faef3a26c6",
-        "runtime_package": "transformers==5.3.0"
+        "runtime_package": "transformers==5.10.4"
       },
       "prompt": null,
       "output_config": {

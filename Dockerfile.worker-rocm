@@ -18,8 +18,11 @@ ARG APP_GID=1026
 # base refreshes lag Ubuntu security fixes, so plain rebuilds don't clear these.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 gosu util-linux \
-    && apt-get install -y --only-upgrade linux-libc-dev \
-    && { apt-get purge -y linux-headers-6.8.0-106 linux-headers-6.8.0-106-generic || true; } \
+    && apt-get install -y --only-upgrade \
+        gir1.2-packagekitglib-1.0 libpackagekit-glib2-18 linux-libc-dev \
+        libssl3t64 openssl packagekit packagekit-tools rsync \
+    && { apt-get purge -y linux-headers-generic \
+        linux-headers-6.8.0-106 linux-headers-6.8.0-106-generic || true; } \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build

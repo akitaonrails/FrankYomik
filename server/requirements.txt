@@ -11,7 +11,7 @@
 # server/pipeline/stage_manifest.json. Update that manifest with these pins.
 # Japanese OCR (vertical manga and prose text)
 manga-ocr==0.1.16
-transformers==5.3.0
+transformers==5.10.4
 huggingface-hub==1.5.0
 
 # Morphological analysis behind furigana readings. fugashi needs a dictionary;
@@ -21,7 +21,7 @@ unidic-lite==1.0.8
 
 # Imaging
 opencv-python-headless==4.13.0.92
-Pillow==12.1.1
+Pillow==12.3.0
 numpy==2.4.2
 
 # Latin-script OCR for artwork text and webtoons

@@ -161,7 +161,8 @@ export V1_API_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-api@sha256:b6a9c
 export V1_WORKER_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-worker-rocm@sha256:0812dd7271818bcf827c927a4e724dab9d6c07f64e08f3d4942fbf0deb06abb1'
 export V1_CACHE_DIR=/var/opt/docker/frank/yomik/data/cache-v1-rehearsal
 docker compose -f docker-compose.prod.yml \
-  -f docker-compose.v1-rollback.yml up -d api worker
+  -f docker-compose.v1-rollback.yml up -d --no-deps --force-recreate \
+  --scale worker=2 api worker
 ```
 
 The override sets `PIPELINE_REVISION=legacy-v1`, enables the compatibility flag,

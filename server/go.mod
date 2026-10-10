@@ -1,6 +1,6 @@
 module github.com/akitaonrails/frank_manga
 
-go 1.25.6
+go 1.26.9
 
 require (
 	github.com/gorilla/websocket v1.5.3

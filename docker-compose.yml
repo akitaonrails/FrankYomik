@@ -1,6 +1,6 @@
 services:
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     ports:
       - "6379:6379"
     volumes:
@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
 
   ollama:
-    image: ollama/ollama
+    image: ollama/ollama:latest@sha256:b86366bb528bbf7f1424435d165028497a5b69bf6ddb4fa5a87102e2b79f44fb
     ports:
       - "11434:11434"
     volumes:
@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
 
   ollama-pull:
-    image: ollama/ollama
+    image: ollama/ollama:latest@sha256:b86366bb528bbf7f1424435d165028497a5b69bf6ddb4fa5a87102e2b79f44fb
     environment:
       OLLAMA_HOST: http://ollama:11434
     entrypoint: ["ollama", "pull", "qwen3:14b"]
@@ -46,7 +46,7 @@ services:
   # One-shot container that fixes shared-cache volume ownership before
   # the API or worker start.  Needed because distroless (API) has no chown.
   init-perms:
-    image: busybox
+    image: busybox:latest@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
     volumes:
       - ./cache:/data/cache
     command: ["sh", "-c", "chown -R ${APP_UID:-1026}:${APP_GID:-1026} /data/cache"]
@@ -111,7 +111,7 @@ services:
     restart: unless-stopped
 
   init-cloudflared:
-    image: busybox
+    image: busybox:latest@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
     volumes:
       - ./.cloudflared:/src:ro
       - cloudflared-config:/dest
@@ -119,7 +119,7 @@ services:
     restart: "no"
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:latest@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
     command: tunnel --config /etc/cloudflared/config.yml run yomik
     volumes:
       - cloudflared-config:/etc/cloudflared:ro

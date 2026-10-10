@@ -140,8 +140,8 @@ typed, validated persistence boundary produced after those stages.
 `server/pipeline/stage_manifest.json` is the authoritative identity manifest.
 `server/pipeline/current_backend.py` reads it to supply stage provenance,
 source language, and cleanup policy instead of making worker orchestration
-infer them from function or class names. Later phases can replace one injected
-boundary while the rest of the runtime and its document contract stay fixed.
+infer them from function or class names. These boundaries keep later backend
+changes isolated while the runtime and document contract stay fixed.
 
 ## Pipeline revision
 

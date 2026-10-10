@@ -25,10 +25,11 @@ estimate is empty. The shared API also accepts engine-supplied pixel masks.
 Manga artwork currently uses its detector rectangle because that path has no
 reliable background color or glyph mask.
 
-`PageDocument.region.mask` continues to reference the retained semantic mask.
-The removal mask is computed transiently from OCR geometry and is not yet stored
-in the cache artifact store, so `cleanup.mask` is deliberately omitted rather
-than pointing at the broader balloon mask.
+`PageDocument.region.mask` references the retained semantic mask.
+`cleanup.mask` references the exact effective removal mask as a verified
+content-addressed PNG object. The cleanup base stores the exact pixels given to
+the renderer. Both masks are dimension checked, hash checked, and contained by
+the region envelope before a document can be persisted or rerendered.
 
 ## Resource budget and failure behavior
 
@@ -61,5 +62,6 @@ outside the expanded cleanup mask are copied from the current target unchanged.
 - Book pipelines retain their gutter rendering and do not load an inpainting
   model.
 
-The controlled eight-case quality comparison and Strix Halo memory and latency
-gate must still pass before a release enables any additional learned backend.
+The controlled eight-case comparison and Strix Halo release gate passed for the
+shipped fill and LaMa policy. Any additional learned backend must repeat those
+quality, memory, latency, determinism, and failure-behavior gates.

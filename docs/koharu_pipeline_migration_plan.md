@@ -4,13 +4,16 @@
 
 Upgrade Frank Yomik one processing stage at a time using the Koharu ideas and models that improved measured quality, while preserving Frank's reader-focused product, API behavior, Kindle and Naver integrations, furigana modes, prose support, queueing, and cache guarantees.
 
-The target release is **v2.0.0**. The current release is v1.0.1, and this work changes model dependencies, intermediate data, cache identity, worker deployment, and output quality enough to warrant a major version.
+The target release is **v2.0.0**. The work changes model dependencies,
+intermediate data, cache identity, worker deployment, and output quality enough
+to warrant a major version.
 
 This is a sequential migration. A stage may start only after the previous stage is implemented, documented, tested in isolation, exercised through the complete pipeline, reviewed, and committed as a working delivery boundary.
 
 ## Status
 
-Phases 0 through 3 are complete. The foundation provides typed stage protocols,
+Phases 0 through 6 and the v2.0.0 release-candidate acceptance gate are
+complete. The foundation provides typed stage protocols,
 a validated [PageDocument v2](page_document_v2.md), cache manifest v4 revision
 identity, compatibility reads for legacy metadata and manifests, verified model
 and font identity, fail-closed translation and configured inpainting, and an
@@ -20,10 +23,12 @@ Phase 1 retained the current detector after the candidate failed its provenance
 and quality gates. Phase 2 confirmed Hayai's recognition quality and added a
 disabled, pinned adapter, while retaining Manga OCR as the production default
 because a safe router from Frank's current signals was not established. Every
-completed phase passed its independent review. Phase 3 replaces per-region
+completed phase passed its independent review. Phase 3 replaced per-region
 translation calls with validated stable-ID page batches while preserving target
-languages and furigana behavior. Each phase is committed as a working delivery
-boundary.
+languages and furigana behavior. Phases 4 and 5 added bounded cleanup with
+retained artifacts and document-driven rendering. Phase 6 passed all four live
+pipelines, two-worker deduplication and recovery, and the isolated v1 rollback
+rehearsal. Each phase is committed as a working delivery boundary.
 
 ## Product boundary
 
@@ -32,7 +37,7 @@ The migration includes:
 - semantic page detection and retained instance masks;
 - better OCR routing for difficult manga text;
 - page-level translation with stable region identities and context;
-- cheap cleanup before model inpainting and a high-quality fallback for difficult artwork;
+- cheap cleanup before bounded model inpainting and a safe deterministic fallback;
 - richer but compact page metadata to carry results between stages;
 - rendering changes required to consume those results safely;
 - reproducible CPU and ROCm worker packaging, model manifests, and operational checks.
@@ -49,7 +54,7 @@ Measured conclusions:
 - Frank and Koharu ordinary balloon masks were already close: 0.885 mean and 0.952 median IoU across 233 paired regions. Mask shape alone does not justify replacing Frank's normal monochrome path.
 - Hayai OCR produced 1.80% character error and 86.49% exact matches on 37 verified crops. Frank's Manga OCR produced 4.13% and 75.68%. The largest gain was on difficult, short, numeric, and stylized text.
 - Page-batched translation, stable IDs, terminology, and context are direct orchestration improvements; they do not require a translation model contest.
-- Frank LaMa slightly beat Koharu LaMa and AOT over all eight inpainting cases. FLUX.2 Klein reduced error by about 30% on the four hard artwork cases, at much higher latency. It should be a selective fallback.
+- Frank LaMa slightly beat Koharu LaMa and AOT over all eight inpainting cases. FLUX.2 Klein reduced error by about 30% on the four hard artwork cases, at much higher latency. It remains a future candidate pending a reproducible production router and operational gate.
 
 ## Architecture and test audit before Phase 0
 
@@ -80,9 +85,9 @@ machine.
 captured page
   -> semantic layout detector
   -> normalized page document with revision-scoped region IDs, relationships, masks, order, provenance
-  -> primary OCR plus selective Hayai fallback
+  -> Manga OCR with deterministic validation and recorded route signals
   -> validated page translation batch (translation mode) or furigana transform
-  -> cleanup policy: uniform fill -> Frank LaMa -> FLUX fallback for hard artwork
+  -> cleanup policy: uniform fill -> bounded Frank LaMa -> safe degraded fill
   -> mask-aware Frank renderer
   -> versioned cache object and unchanged image response to the reader
 ```
@@ -299,8 +304,11 @@ Document layout decisions and invariants, font requirements/licenses, rerender b
 
 ## Phase 6: production consolidation and migration rehearsal
 
-**Implementation status:** production consolidation is implemented locally;
-Strix Halo deployment rehearsal and release acceptance remain operational gates.
+**Implementation status:** complete. The production consolidation, two-worker
+Strix Halo deployment, all four live pipeline checks, failover, atomic
+deduplication, isolated v1 rollback, and cache-integrity rehearsal passed on
+2026-10-10. The sanitized evidence is in
+[`evaluation/koharu_baseline/phase6_strix_rehearsal.md`](../evaluation/koharu_baseline/phase6_strix_rehearsal.md).
 
 The production choices are now explicit: Manga OCR remains the Japanese OCR
 default, RT-DETR remains the semantic detector, and LaMa plus deterministic
@@ -334,6 +342,11 @@ Update every setup, architecture, configuration, troubleshooting, model, benchma
 
 The release phase follows the repository release workflow and the release audit process after all implementation phases have landed.
 
+**Implementation status:** release candidate acceptance passed. Client versions,
+release notes, compatibility, model, deployment, security, benchmark, and cache
+documentation are aligned for v2.0.0. The final tag and exact tagged-image
+deployment follow the green hosted release gate.
+
 ### Version and compatibility work
 
 - Set Flutter `version` to `2.0.0` with an appropriate monotonically increasing Android build number.
@@ -344,7 +357,7 @@ The release phase follows the repository release workflow and the release audit 
 
 ### Release sequence
 
-1. Freeze features after Phase 6 and cut a `v2.0.0-rc.1` candidate from the reviewed SHA.
+1. Freeze features after Phase 6 and cut versioned `v2.0.0-rc.N` container candidates from reviewed SHAs.
 2. Run the full release matrix and install its actual artifacts on supported clients.
 3. Run live Kindle manga, Kindle prose, and Naver webtoon smoke tests against the Strix Halo deployment.
 4. Compare release-corpus quality and resource metrics to the Phase 0 baseline and investigate every regression.

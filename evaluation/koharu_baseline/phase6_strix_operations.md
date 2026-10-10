@@ -4,20 +4,20 @@ Inventory date: 2026-10-10
 
 Host: `akitaonrails@192.168.0.90` (`marvin-server`)
 
-This document records a read-only inventory and the exact rehearsal to run
-after the Phase 6 API and worker images are frozen. The inventory did not pull
-images, build images, alter tags, restart containers, write Redis, or change
-the cache.
+This document records the pre-release read-only inventory and the rehearsal
+procedure designed from it. The procedure has now completed; normalized results
+are in [Phase 6 Strix Halo release rehearsal](phase6_strix_rehearsal.md). The
+inventory itself did not pull images, build images, alter tags, restart
+containers, write Redis, or change the cache.
 
 ## Promotion decision
 
 The host has enough CPU, unified GPU memory, storage, model storage, and two
-working ROCm worker slots for the rehearsal. The matching v1 rollback pair is
-now preserved in the local registry as `v1.0.1-rollback-20261010`. The remaining
-promotion prerequisites are a frozen Phase 6 commit, exact candidate registry
-digests, and the backups and isolated rehearsal below. The current repository
-deploy script records those digests, verifies OCI source and pipeline revision
-labels, and recreates only API and worker services.
+working ROCm worker slots. The matching v1 rollback pair is preserved in the
+local registry as `v1.0.1-rollback-20261010`. Backups, exact candidate registry
+digests, four-pipeline execution, recovery, deduplication, and isolated rollback
+have passed. The repository deploy script records digests, verifies OCI source
+and pipeline revision labels, and recreates only API and worker services.
 
 ## Read-only production inventory
 

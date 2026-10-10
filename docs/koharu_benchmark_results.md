@@ -5,15 +5,18 @@ The accepted findings are scheduled for staged implementation in the
 
 ## Decision
 
-Frank should adopt three Koharu capabilities while retaining its current product scope and fallbacks:
+The benchmark drove the v2 pipeline work. The release decision is:
 
-1. Add a multi-class instance-segmentation interface and evaluate a legally usable detector with Koharu's text, SFX, balloon, and panel semantics.
-2. Add Hayai OCR as a fallback for difficult manga crops. Keep Manga OCR for ordinary Japanese dialogue and Frank's prose and furigana paths.
-3. Keep LaMa and flat fills for routine cleanup, and add FLUX.2 Klein as an opt-in backend for difficult artwork. Do not adopt AOT or RORem as defaults.
+1. Ship the multi-class semantic detection and PageDocument contracts while retaining the faster, legally usable RT-DETR production checkpoint.
+2. Ship deterministic OCR routing and validation with Manga OCR. Keep Hayai disabled until its training-data provenance permits distribution.
+3. Ship bounded deterministic fills and supervised LaMa cleanup. Keep FLUX.2 Klein disabled until a reproducible router and production resource/failure gates exist. AOT and RORem are not production defaults.
 
 The Koharu detector checkpoint is suitable as an internal quality baseline. It should not become a shipping dependency until its Manga109-based model terms receive legal review.
 
-Koharu's page-batched translation, stable region identifiers, retained masks, and cheap-fill-before-inpaint flow remain direct implementation improvements. They do not require a product-level A/B test before implementation.
+Koharu's page-batched translation, stable region identifiers, retained masks,
+and cheap-fill-before-inpaint flow are implemented in v2.0.0. The original
+measurements below remain the baseline evidence; production choices and model
+status are authoritative in [Model inventory](models.md).
 
 ## Tested versions and hardware
 
@@ -68,7 +71,11 @@ The OCR set contains 37 verified Japanese crops: 19 ordinary and 18 difficult. T
 
 Hayai reduced overall character error by 56% relative to Frank and difficult-crop error by 79%. It correctly recovered several short numeric, sign, and stylized crops that Manga OCR reordered or hallucinated. On ordinary dialogue, Frank and Koharu Manga OCR remained excellent and effectively equivalent. Baberu improved exact-match count but produced more severe errors on difficult crops.
 
-Hayai should be added as a fallback selected for short, numeric, horizontally oriented, multilingual, or low-confidence Manga OCR results. Manga OCR should remain the default for ordinary vertical Japanese dialogue because Frank already keeps it warm and preserves specialized validation behavior.
+Hayai remains the measured quality leader for the difficult subset. Frank now
+records deterministic route reasons and alternatives, but v2.0.0 does not
+download or execute Hayai because its training-data provenance blocks a
+distribution decision. Manga OCR remains the default for ordinary vertical
+Japanese dialogue and preserves Frank's specialized validation behavior.
 
 ## Inpainting
 
@@ -94,11 +101,11 @@ The direct models remained weak on dense line art, halftones, and speed lines, s
 
 FLUX.2 Klein lowered hard-case error by 30% relative to Frank LaMa and won all four difficult reference cases. Visual review agreed with the metric: it preserved hair, street details, speed lines, and dense artwork more faithfully. RORem was the worst tested option and does not justify its runtime cost.
 
-The production cleanup policy should be:
+The benchmark-derived cleanup policy was refined for the production gate:
 
 1. Fill uniform balloon interiors directly.
 2. Use warmed LaMa for ordinary textured regions.
-3. Route only difficult artwork or failed LaMa results to FLUX.2 Klein.
+3. Retain FLUX.2 Klein as a future candidate for difficult artwork; do not route production pages to it until the selection and failure policy is reproducible.
 4. Composite generated pixels strictly inside the removal mask.
 5. Retain source, mask, backend, seed, and cleanup output in the page document.
 
@@ -129,4 +136,9 @@ The benchmark contains no Korean webtoon ground truth, so it provides no basis f
 - Inpainting uses controlled synthetic overlays with clean references. Real text-removal quality should continue to receive spot review because the hidden artwork behind native text is unknowable.
 - Timings mix warmed services and one-shot CLIs. They guide routing and capacity decisions, not production throughput forecasts.
 
-These limits do not change the implementation priorities: Hayai has a measured OCR advantage on difficult crops, FLUX.2 Klein has a measured advantage on difficult artwork, and Koharu's semantic detector output finds useful SFX that Frank currently misses.
+These limits support the shipped contract and orchestration improvements. They
+also keep the remaining model conclusions narrow: Hayai measured better on the
+verified difficult crops, FLUX.2 Klein measured better on four synthetic hard
+artwork cases, and Koharu's detector found useful additional SFX. None of those
+results alone clears the provenance, routing, reproducibility, and operations
+gates required to change a production model.

@@ -360,5 +360,5 @@ jobs:
           name: "Frank Yomik ${{ github.ref_name }}"
           body: ${{ steps.release-notes.outputs.body }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-rc.') }}
           files: artifacts/*

@@ -93,7 +93,7 @@ The protected debug API can also store original/translated page pairs uploaded f
 
 - Python 3.12+
 - [Ollama](https://ollama.ai) with `qwen3:14b` (~9 GB VRAM)
-- Go 1.25+
+- Go 1.26.9+
 - Redis
 - Flutter 3.11+ (for the client app)
 
@@ -173,6 +173,10 @@ The generic Compose file builds the pinned CPU worker. Production uses the
 ROCm Compose path described in [deployment documentation](docs/deployment.md).
 Workers appear in health output only after detector, OCR, translation, font,
 and cleanup preflight succeeds.
+
+Version 2 model pins and evaluated-but-disabled candidates are documented in
+[Model inventory](docs/models.md). Client/server and cache compatibility are in
+[Version 2 compatibility](docs/compatibility_v2.md).
 
 ### Submit a Job
 

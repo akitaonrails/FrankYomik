@@ -15,7 +15,7 @@ x-no-watchtower: &no-watchtower
 
 services:
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     container_name: yomik-redis
     security_opt:
       - label:disable
@@ -31,7 +31,7 @@ services:
     labels: *no-watchtower
 
   init-perms:
-    image: busybox
+    image: busybox:latest@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
     container_name: yomik-init-perms
     security_opt:
       - label:disable
@@ -111,7 +111,7 @@ services:
     logging: *default-logging
 
   init-cloudflared:
-    image: busybox
+    image: busybox:latest@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
     container_name: yomik-init-cloudflared
     volumes:
       - /var/opt/docker/frank/yomik/.cloudflared:/src:ro
@@ -122,7 +122,7 @@ services:
     labels: *no-watchtower
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:latest@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
     container_name: yomik-cloudflared
     command: tunnel --config /etc/cloudflared/config.yml run fdab897e-f6f9-4dee-ab84-bb1c5add5bde
     volumes:
