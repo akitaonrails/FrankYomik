@@ -8,40 +8,40 @@ concurrent GPU access.
 """
 
 import logging
-import threading
+from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image
+
+from pipeline.cleanup import (
+    CleanupBudgetExceeded,
+    CleanupPolicy,
+    build_cleanup_mask,
+    deadline,
+    gpu_memory_available,
+    host_memory_available,
+    plan_cleanup,
+)
+from webtoon.inpainter import SupervisedInpaintError, supervised_inpaint_tiles
 
 from .config import MANGA_INPAINT_PAD
 
 log = logging.getLogger(__name__)
 
-# Import the shared inference lock and backend class from webtoon
-from webtoon.inpainter import LamaBackend, _infer_lock
 
-_backend: LamaBackend | None = None
-_init_lock = threading.Lock()
-
-
-def _get_backend() -> LamaBackend | None:
-    """Lazy-load LaMa backend on first use."""
-    global _backend
-    if _backend is None:
-        with _init_lock:
-            if _backend is None:
-                instance = LamaBackend()
-                if not instance.load():
-                    return None
-                _backend = instance
-    return _backend
+@dataclass(frozen=True, slots=True)
+class MangaCleanupOutcome:
+    image: Image.Image
+    applied: bool
+    degraded: bool = False
+    reason: str | None = None
 
 
-def inpaint_region(
+def cleanup_region(
     img_pil: Image.Image,
     bbox: tuple[int, int, int, int],
     pad: int = MANGA_INPAINT_PAD,
-) -> Image.Image:
+) -> MangaCleanupOutcome:
     """Inpaint a text region on artwork. Returns modified image copy.
 
     Crops the region with padding, builds a mask covering the text bbox,
@@ -56,71 +56,56 @@ def inpaint_region(
         Modified copy of img_pil with text region inpainted.
         Returns the original image unchanged if inpainting fails.
     """
-    backend = _get_backend()
-    if backend is None:
-        log.warning("LaMa backend unavailable, skipping inpaint")
-        return img_pil
-
     img_w, img_h = img_pil.size
-    x1, y1, x2, y2 = bbox
+    try:
+        mask = build_cleanup_mask(
+            (img_w, img_h), [bbox], padding_px=4, dilation_px=2,
+        )
+    except CleanupBudgetExceeded:
+        return MangaCleanupOutcome(img_pil, False, True, "page_budget")
+    if mask is None:
+        return MangaCleanupOutcome(img_pil, False, True, "empty_mask")
+    policy = CleanupPolicy(context_px=pad)
+    try:
+        plan = plan_cleanup(img_pil, mask, semantic_mask=None, policy=policy)
+    except CleanupBudgetExceeded:
+        log.warning("Manga artwork cleanup exceeds tile budget")
+        return MangaCleanupOutcome(img_pil, False, True, "tile_budget")
+    if not host_memory_available(policy.min_host_available_mb):
+        return MangaCleanupOutcome(img_pil, False, True, "host_memory")
+    if not gpu_memory_available(policy.min_gpu_available_mb):
+        return MangaCleanupOutcome(img_pil, False, True, "gpu_memory")
+    end = deadline(policy)
+    requests: list[tuple[Image.Image, Image.Image, int]] = []
+    for index, tile in enumerate(plan.tiles):
+        crop_box = tile.bbox
+        requests.append((
+            img_pil.crop(crop_box), mask.crop(crop_box), plan.seed + index,
+        ))
+    try:
+        results = supervised_inpaint_tiles(requests, end=end)
+    except SupervisedInpaintError as error:
+        log.warning("Manga artwork cleanup degraded: %s", error.reason)
+        return MangaCleanupOutcome(img_pil, False, True, error.reason)
 
-    # Crop with padding for context
-    cx1 = max(0, x1 - pad)
-    cy1 = max(0, y1 - pad)
-    cx2 = min(img_w, x2 + pad)
-    cy2 = min(img_h, y2 + pad)
-
-    # Pad to multiple of 8 (required by LaMa)
-    cw = cx2 - cx1
-    ch = cy2 - cy1
-    pad_w = (8 - cw % 8) % 8
-    pad_h = (8 - ch % 8) % 8
-    cx2 = min(img_w, cx2 + pad_w)
-    cy2 = min(img_h, cy2 + pad_h)
-
-    crop_box = (cx1, cy1, cx2, cy2)
-    img_crop = img_pil.crop(crop_box)
-
-    # Build mask: white where text is (relative to crop)
-    crop_w = cx2 - cx1
-    crop_h = cy2 - cy1
-    mask = Image.new("L", (crop_w, crop_h), 0)
-    mask_arr = np.array(mask)
-
-    # Text bbox relative to crop, with small dilation for glyph edges
-    tx1 = max(0, x1 - cx1 - 4)
-    ty1 = max(0, y1 - cy1 - 4)
-    tx2 = min(crop_w, x2 - cx1 + 4)
-    ty2 = min(crop_h, y2 - cy1 + 4)
-    mask_arr[ty1:ty2, tx1:tx2] = 255
-
-    # Dilate mask slightly for antialiasing
-    mask = Image.fromarray(mask_arr)
-    mask = mask.filter(ImageFilter.MaxFilter(5))
-
-    # Thread-safe inference
-    with _infer_lock:
-        try:
-            result_crop = backend.inpaint(img_crop, mask)
-        except Exception:
-            log.exception("Inpainting failed for bbox %s", bbox)
-            return img_pil
-
-    # Composite: only replace pixels where mask is white
     result = img_pil.copy()
-    mask_arr = np.array(mask)
-    result_arr = np.array(result_crop)
-    target_arr = np.array(result.crop(crop_box))
+    for tile, result_crop in zip(plan.tiles, results, strict=True):
+        crop_box = tile.bbox
+        mask_arr = np.asarray(mask.crop(crop_box)) > 0
+        composite = np.where(
+            mask_arr[:, :, np.newaxis],
+            np.asarray(result_crop.convert("RGB")),
+            np.asarray(result.crop(crop_box).convert("RGB")),
+        )
+        result.paste(Image.fromarray(composite.astype(np.uint8)), crop_box[:2])
 
-    if result_arr.shape != target_arr.shape:
-        result_crop = result_crop.resize((crop_w, crop_h), Image.LANCZOS)
-        result_arr = np.array(result_crop)
+    return MangaCleanupOutcome(result, True)
 
-    composite = np.where(
-        mask_arr[:, :, np.newaxis] > 0,
-        result_arr,
-        target_arr,
-    )
-    result.paste(Image.fromarray(composite.astype(np.uint8)), (cx1, cy1))
 
-    return result
+def inpaint_region(
+    img_pil: Image.Image,
+    bbox: tuple[int, int, int, int],
+    pad: int = MANGA_INPAINT_PAD,
+) -> Image.Image:
+    """Compatibility wrapper returning the safely completed image."""
+    return cleanup_region(img_pil, bbox, pad).image

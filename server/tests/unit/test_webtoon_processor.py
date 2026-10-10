@@ -52,7 +52,7 @@ from webtoon.processor import (
 )
 
 
-def test_enabled_lama_cannot_fall_back_under_lama_provenance():
+def test_enabled_cleanup_degrades_to_safe_solid_fill():
     image = Image.new("RGB", (100, 100), "white")
     bubble = _make_bubble([_make_det(20, 20, 50, 40)])
 
@@ -60,11 +60,12 @@ def test_enabled_lama_cannot_fall_back_under_lama_provenance():
         patch("webtoon.processor.INPAINT_ENABLED", True),
         patch("webtoon.processor.inpaint_bubble", return_value=False),
         patch("webtoon.processor._clear_bubble_text") as solid_cleanup,
-        pytest.raises(RuntimeError, match="did not execute"),
     ):
-        _clean_bubble_for_render(image, image.copy(), bubble)
+        assert _clean_bubble_for_render(image, image.copy(), bubble) is False
 
-    solid_cleanup.assert_not_called()
+    solid_cleanup.assert_called_once()
+    assert bubble.cleanup_method == "uniform_fill:degraded"
+    assert bubble.cleanup_degraded is True
 
 
 def _make_det(x1, y1, x2, y2, text="테스트", conf=0.9):

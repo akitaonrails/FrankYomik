@@ -62,8 +62,17 @@ webtoon:
     text_pad: 24
     text_dilate: 6
     context_pad: 20
-    num_inference_steps: 28
-    prompt: "clean empty speech bubble interior, flat color"
+    max_tiles: 16
+    max_tile_width: 1024
+    max_tile_height: 1024
+    max_tile_pixels: 1048576
+    max_page_pixels: 40000000
+    max_wall_seconds: 30
+    min_host_available_mb: 512
+    min_gpu_available_mb: 512
+    seed: 0
+    uniform_stddev: 8
+    uniform_range: 28
 
 worker:
   # PIPELINE_REVISION is supplied through the environment to both API and worker.

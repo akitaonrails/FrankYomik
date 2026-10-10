@@ -36,6 +36,8 @@ class WebtoonBubble:
     bg_color: tuple[int, int, int] = (255, 255, 255)  # Sampled background color
     bubble_mask: np.ndarray | None = None      # Optional mask for contour-based clearing
     semantic_id: str | None = None             # Detector-contract identity, when present
+    cleanup_method: str | None = None           # Selected cleanup route after execution
+    cleanup_degraded: bool = False              # Prevents caching transient recovery
 
 
 def cluster_detections(detections: list[TextDetection],

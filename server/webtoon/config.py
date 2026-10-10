@@ -27,9 +27,13 @@ __all__ = [
     "EASYOCR_TEXT_THRESHOLD", "EASYOCR_LOW_TEXT", "EASYOCR_INVERTED_CONFIDENCE",
     "CLUSTER_GAP", "PAD_X", "PAD_Y",
     "FLOOD_FILL_TOLERANCE", "CONTOUR_EXPAND",
-    "INPAINT_ENABLED", "INPAINT_MODEL", "INPAINT_ERODE_PX",
+    "INPAINT_ENABLED", "INPAINT_ERODE_PX",
     "INPAINT_TEXT_PAD", "INPAINT_TEXT_DILATE", "INPAINT_CONTEXT_PAD",
-    "INPAINT_STEPS", "INPAINT_PROMPT",
+    "INPAINT_MAX_TILES", "INPAINT_MAX_TILE_WIDTH",
+    "INPAINT_MAX_TILE_HEIGHT", "INPAINT_MAX_WALL_SECONDS",
+    "INPAINT_MAX_TILE_PIXELS", "INPAINT_MAX_PAGE_PIXELS",
+    "INPAINT_MIN_HOST_MB", "INPAINT_MIN_GPU_MB", "INPAINT_SEED",
+    "INPAINT_UNIFORM_STDDEV", "INPAINT_UNIFORM_RANGE",
 ]
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -77,15 +81,21 @@ CONTOUR_EXPAND = _bubble_cfg.get("contour_expand", 5)
 
 # --- Inpainting ---
 INPAINT_ENABLED = _inpaint_cfg.get("enabled", False)
-INPAINT_MODEL = _inpaint_cfg.get("model", "lama")
 INPAINT_ERODE_PX = _inpaint_cfg.get("erode_px", 3)
 INPAINT_TEXT_PAD = _inpaint_cfg.get("text_pad", 14)
 INPAINT_TEXT_DILATE = _inpaint_cfg.get("text_dilate", 4)
 INPAINT_CONTEXT_PAD = _inpaint_cfg.get("context_pad", 20)
-INPAINT_STEPS = _inpaint_cfg.get("num_inference_steps", 28)
-INPAINT_PROMPT = _inpaint_cfg.get("prompt",
-                                   "clean empty speech bubble interior, flat color")
-
+INPAINT_MAX_TILES = int(_inpaint_cfg.get("max_tiles", 16))
+INPAINT_MAX_TILE_WIDTH = int(_inpaint_cfg.get("max_tile_width", 1024))
+INPAINT_MAX_TILE_HEIGHT = int(_inpaint_cfg.get("max_tile_height", 1024))
+INPAINT_MAX_TILE_PIXELS = int(_inpaint_cfg.get("max_tile_pixels", 1_048_576))
+INPAINT_MAX_PAGE_PIXELS = int(_inpaint_cfg.get("max_page_pixels", 40_000_000))
+INPAINT_MAX_WALL_SECONDS = float(_inpaint_cfg.get("max_wall_seconds", 30))
+INPAINT_MIN_HOST_MB = int(_inpaint_cfg.get("min_host_available_mb", 512))
+INPAINT_MIN_GPU_MB = int(_inpaint_cfg.get("min_gpu_available_mb", 512))
+INPAINT_SEED = int(_inpaint_cfg.get("seed", 0))
+INPAINT_UNIFORM_STDDEV = float(_inpaint_cfg.get("uniform_stddev", 8))
+INPAINT_UNIFORM_RANGE = int(_inpaint_cfg.get("uniform_range", 28))
 # --- Fonts ---
 FONT_KO = FONT_EN              # Dialogue text (Komika Text)
 FONT_KO_BOLD = FONT_SFX        # SFX overlay (BadaBoom BB)

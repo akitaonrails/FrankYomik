@@ -70,9 +70,13 @@ provide the required digest contract and is not accepted as verification.
 
 Before constructing LaMa, the worker downloads or locates `big-lama.pt` and
 checks its bytes against the manifest SHA-256. It does not load mismatched
-weights. When configured inpainting is enabled, model load, mask construction,
-and inference failures fail the page rather than silently applying solid
-cleanup while recording LaMa provenance.
+weights. LaMa runs in a persistent supervised process so the model remains
+warm across regions while the parent can terminate it. The cleanup deadline
+bounds model load, inference-lock wait, IPC, and inference. Timeout, OOM,
+wrong-size output, or expected backend failure kills and resets that process,
+rolls back model output, applies mask-bounded deterministic fill, and marks the
+page noncacheable. The recovered region records fill provenance without a LaMa
+model identity; unexpected orchestration errors still fail the page.
 
 Translation verifies the configured Ollama model before a page request. Its
 strict page schema, prompt, bounded recovery policy, and both language adapters

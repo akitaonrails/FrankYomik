@@ -71,8 +71,12 @@ The webtoon path applies the same semantic contract with vertical reading order
 and page-space stitching for tall strips. It then performs Korean OCR in a
 separate stage, translates dialogue and SFX, cleans dialogue regions, and then
 renders without model or network calls. Dialogue and SFX both require the pinned
-Ollama digest. Enabled LaMa cleanup verifies its local weight bytes and fails
-the page if cleanup cannot execute, keeping saved stage provenance truthful.
+Ollama digest. Enabled LaMa cleanup verifies its local weight bytes and runs in
+a persistent supervised child. A deadline covers model load, inference-lock
+wait, IPC, and inference. Timeout, OOM, invalid output dimensions, and expected
+backend failures terminate and reset the child, roll back its output, and use a
+mask-bounded deterministic fill. Recovered pages are returned as completed but
+are noncacheable, and their region provenance names the fill rather than LaMa.
 Its stage results are normalized into the same document contract as the other
 pipelines.
 

@@ -4,14 +4,26 @@ Tests mask-building logic without GPU. Backend inference is mocked.
 """
 
 import hashlib
+import time
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 from PIL import Image
 
+import webtoon.inpainter as inpainter_module
 from webtoon.bubble_detector import WebtoonBubble
-from webtoon.inpainter import LamaBackend, build_inpaint_mask, inpaint_bubble
+from webtoon.inpainter import (
+    CleanupPolicy,
+    LamaBackend,
+    SupervisedInpaintError,
+    UnexpectedInpaintError,
+    _PersistentSupervisor,
+    build_inpaint_mask,
+    cleanup_bubble,
+    inpaint_bubble,
+    supervised_inpaint_tiles,
+)
 from webtoon.ocr import TextDetection
 
 
@@ -87,6 +99,56 @@ def _make_circular_mask(w, h, cx, cy, r):
     dist = (X - cx) ** 2 + (Y - cy) ** 2
     mask[dist <= r ** 2] = 255
     return mask
+
+
+class _TestBackend:
+    def __init__(self, *, load_delay=0.0, inference_delay=0.0,
+                 failure=None, wrong_size=False, fail_after=None):
+        self.load_delay = load_delay
+        self.inference_delay = inference_delay
+        self.failure = failure
+        self.wrong_size = wrong_size
+        self.fail_after = fail_after
+        self.calls = 0
+
+    def load(self):
+        time.sleep(self.load_delay)
+        return True
+
+    def inpaint(self, image, _mask):
+        time.sleep(self.inference_delay)
+        self.calls += 1
+        if self.failure is not None or (
+            self.fail_after is not None and self.calls > self.fail_after
+        ):
+            error = self.failure or ValueError("failed")
+            raise error
+        size = (1, 1) if self.wrong_size else image.size
+        return Image.new("RGB", size, "red")
+
+    def unload(self):
+        return None
+
+
+class _CountingBackend(_TestBackend):
+    def __init__(self, marker):
+        super().__init__()
+        self.marker = marker
+
+    def load(self):
+        with open(self.marker, "ab") as marker:
+            marker.write(b"1")
+        return True
+
+
+def _short_policy():
+    return CleanupPolicy(
+        max_wall_seconds=0.08,
+        min_host_available_mb=0,
+        min_gpu_available_mb=0,
+        uniform_stddev=0,
+        uniform_range=0,
+    )
 
 
 # --- TestBuildInpaintMask ---
@@ -222,8 +284,8 @@ class TestBuildInpaintMask:
         assert np.any(result_arr[115:145, 45:105] > 0), \
             "Second text area should be in mask"
 
-    def test_text_outside_bubble_uses_text_rects(self):
-        """Text outside bubble mask triggers text-rects-only mode."""
+    def test_text_outside_bubble_is_clipped(self):
+        """Retained semantic geometry is an explicit cleanup boundary."""
         # Small circular mask
         mask = _make_circular_mask(200, 200, 100, 100, 30)
         # Text far outside the circle — coverage < 85%
@@ -233,11 +295,7 @@ class TestBuildInpaintMask:
 
         result = build_inpaint_mask(bubble, (200, 200), erode_px=0,
                                     text_pad=2, text_dilate=0)
-        # Low coverage → uses text rects directly (still returns a mask)
-        assert result is not None
-        result_arr = np.array(result)
-        # Text area should be white
-        assert np.any(result_arr[3:17, 3:27] > 0)
+        assert result is None
 
 
 # --- TestInpaintBubbleIntegration ---
@@ -257,18 +315,293 @@ class TestInpaintBubbleIntegration:
             result = inpaint_bubble(img, bubble)
         assert result is False
 
-    def test_enabled_backend_failure_is_not_reported_as_solid_cleanup(self):
+    def test_uniform_balloon_does_not_load_backend(self):
+        img = Image.new("RGB", (100, 100), (245, 246, 247))
+        semantic = np.full((100, 100), 255, dtype=np.uint8)
+        bubble = _make_bubble(
+            [_make_det(20, 20, 60, 50)], mask=semantic,
+            has_boundary=True,
+        )
+        with (
+            patch("webtoon.inpainter.INPAINT_ENABLED", True),
+            patch("webtoon.inpainter.supervised_inpaint_tiles") as run_backend,
+        ):
+            outcome = cleanup_bubble(img, bubble)
+        assert outcome.method == "uniform_fill"
+        assert outcome.degraded is False
+        run_backend.assert_not_called()
+
+    def test_resource_guard_runs_before_backend_load(self):
+        img = Image.new("RGB", (100, 100), "white")
+        bubble = _make_bubble([_make_det(20, 20, 60, 50)], mask=None)
+        with (
+            patch("webtoon.inpainter.INPAINT_ENABLED", True),
+            patch("webtoon.inpainter.host_memory_available", return_value=False),
+            patch("webtoon.inpainter.supervised_inpaint_tiles") as run_backend,
+        ):
+            outcome = cleanup_bubble(img, bubble)
+        assert outcome.degraded is True
+        assert outcome.reason == "host_memory"
+        run_backend.assert_not_called()
+
+    def test_second_tile_failure_rolls_back_partial_model_output(self):
+        img = Image.new("RGB", (120, 60), (100, 100, 100))
+        target = img.copy()
+        bubble = _make_bubble([
+            _make_det(10, 10, 20, 20),
+            _make_det(90, 35, 100, 45),
+        ], bbox=(0, 0, 120, 60), mask=None)
+        backend = _TestBackend(fail_after=1)
+        with (
+            patch("webtoon.inpainter.INPAINT_ENABLED", True),
+            patch("webtoon.inpainter.gpu_memory_available", return_value=True),
+        ):
+            outcome = cleanup_bubble(img, bubble, backend=backend,
+                                     target_img=target)
+        assert outcome.method == "uniform_fill"
+        assert outcome.degraded is True
+        assert np.asarray(target)[15, 15, 0] == 255
+        assert np.asarray(target)[40, 95, 0] == 255
+        assert np.asarray(target)[0, 55, 0] == 100
+
+    def test_enabled_backend_failure_degrades_without_failing_page(self):
         img = Image.new("RGB", (100, 100), (255, 255, 255))
         det = _make_det(20, 20, 60, 50)
         bubble = _make_bubble([det], mask=None)
-        backend = MagicMock()
-        backend.inpaint.side_effect = ValueError("bad model")
+        backend = _TestBackend(failure=ValueError("bad model"))
 
         with (
             patch("webtoon.inpainter.INPAINT_ENABLED", True),
-            pytest.raises(RuntimeError, match="inpainting failed"),
+            patch("webtoon.inpainter.gpu_memory_available", return_value=True),
         ):
-            inpaint_bubble(img, bubble, backend=backend)
+            outcome = cleanup_bubble(img, bubble, backend=backend)
+        assert outcome.applied is True
+        assert outcome.degraded is True
+        assert outcome.method == "uniform_fill"
+        assert outcome.reason == "backend_failure"
+
+    @pytest.mark.parametrize("delay_field", ["load_delay", "inference_delay"])
+    def test_supervisor_bounds_slow_load_and_inference(self, delay_field):
+        img = Image.new("RGB", (100, 100), (100, 100, 100))
+        bubble = _make_bubble([_make_det(20, 20, 60, 50)], mask=None)
+        backend = _TestBackend(**{delay_field: 0.5})
+        poisoned = MagicMock()
+        started = time.monotonic()
+        with (
+            patch("webtoon.inpainter.INPAINT_ENABLED", True),
+            patch("webtoon.inpainter._policy", return_value=_short_policy()),
+            patch.object(inpainter_module, "_supervisor", poisoned),
+        ):
+            outcome = cleanup_bubble(img, bubble, backend=backend)
+            assert inpainter_module._supervisor is None
+        assert time.monotonic() - started < 0.5
+        assert outcome.reason == "wall_time"
+        assert outcome.degraded is True
+        poisoned.close.assert_called_once()
+
+    def test_supervisor_bounds_lock_wait(self):
+        img = Image.new("RGB", (100, 100), (100, 100, 100))
+        bubble = _make_bubble([_make_det(20, 20, 60, 50)], mask=None)
+        inpainter_module._infer_lock.acquire()
+        started = time.monotonic()
+        try:
+            with (
+                patch("webtoon.inpainter.INPAINT_ENABLED", True),
+                patch("webtoon.inpainter._policy", return_value=_short_policy()),
+            ):
+                outcome = cleanup_bubble(img, bubble, backend=_TestBackend())
+        finally:
+            inpainter_module._infer_lock.release()
+        assert time.monotonic() - started < 0.5
+        assert outcome.reason == "lock_timeout"
+
+    @pytest.mark.parametrize("remaining", [-1.0, 0.001])
+    def test_max_payload_expired_deadline_never_starts_transport(
+        self, remaining,
+    ):
+        image = Image.new("RGB", (1024, 1024), "white")
+        mask = Image.new("L", (1024, 1024), "white")
+        requests = [(image, mask, index) for index in range(16)]
+        started = time.monotonic()
+        with (
+            patch("webtoon.inpainter._stage_artifacts") as stage,
+            pytest.raises(SupervisedInpaintError, match="wall_time"),
+        ):
+            supervised_inpaint_tiles(
+                requests, end=time.monotonic() + remaining,
+                backend=_TestBackend(),
+            )
+        assert time.monotonic() - started < 0.1
+        stage.assert_not_called()
+
+    def test_max_payload_uses_only_capped_control_datagrams(self):
+        image = Image.new("RGB", (1024, 1024), "white")
+        mask = Image.new("L", (1024, 1024), "white")
+        requests = [(image, mask, index) for index in range(16)]
+        supervisor = _PersistentSupervisor(_TestBackend, "fork")
+        sent_sizes = []
+        original_send = inpainter_module._send_control
+
+        def recording_send(connection, value, end):
+            sent_sizes.append(len(inpainter_module.json.dumps(value).encode()))
+            return original_send(connection, value, end)
+
+        try:
+            with (
+                patch.object(inpainter_module, "_supervisor", supervisor),
+                patch("webtoon.inpainter._send_control", recording_send),
+            ):
+                results = supervised_inpaint_tiles(
+                    requests, end=time.monotonic() + 10,
+                )
+            assert len(results) == 16
+            assert all(result.size == (1024, 1024) for result in results)
+            assert sent_sizes
+            assert max(sent_sizes) <= inpainter_module._MAX_CONTROL_BYTES
+        finally:
+            supervisor.close()
+
+    def test_control_send_and_receive_are_deadline_bounded(self):
+        sender, receiver = inpainter_module._control_pair()
+        try:
+            receiver.setblocking(False)
+            while True:
+                try:
+                    sender.send(b"x" * inpainter_module._MAX_CONTROL_BYTES)
+                except BlockingIOError:
+                    break
+            started = time.monotonic()
+            with pytest.raises(SupervisedInpaintError, match="wall_time"):
+                inpainter_module._send_control(
+                    sender, ("inpaint", []), time.monotonic() + 0.001,
+                )
+            assert time.monotonic() - started < 0.1
+
+            while True:
+                try:
+                    receiver.recv(inpainter_module._MAX_CONTROL_BYTES)
+                except BlockingIOError:
+                    break
+            started = time.monotonic()
+            with pytest.raises(SupervisedInpaintError, match="wall_time"):
+                inpainter_module._recv_control(
+                    receiver, time.monotonic() + 0.001,
+                )
+            assert time.monotonic() - started < 0.1
+        finally:
+            sender.close()
+            receiver.close()
+
+    def test_persistent_supervisor_reuses_warmed_process(self, tmp_path):
+        request = [(
+            Image.new("RGB", (10, 10), "white"),
+            Image.new("L", (10, 10), "white"), 0,
+        )]
+        marker = tmp_path / "loads"
+        supervisor = _PersistentSupervisor(
+            lambda: _CountingBackend(marker), "fork",
+        )
+        try:
+            with patch.object(inpainter_module, "_supervisor", supervisor):
+                first = supervised_inpaint_tiles(
+                    request, end=time.monotonic() + 1,
+                )
+                first_pid = supervisor.pid
+                second = supervised_inpaint_tiles(
+                    request, end=time.monotonic() + 1,
+                )
+                assert supervisor.pid == first_pid
+            assert first[0].size == second[0].size == (10, 10)
+            assert marker.read_bytes() == b"1"
+        finally:
+            supervisor.close()
+
+    def test_failed_persistent_supervisor_is_reset(self):
+        class FailBackend(_TestBackend):
+            def inpaint(self, image, mask):
+                raise MemoryError("OOM")
+
+        request = [(
+            Image.new("RGB", (10, 10), "white"),
+            Image.new("L", (10, 10), "white"), 0,
+        )]
+        supervisor = _PersistentSupervisor(FailBackend, "fork")
+        with patch.object(inpainter_module, "_supervisor", supervisor):
+            with pytest.raises(SupervisedInpaintError, match="oom"):
+                supervised_inpaint_tiles(request, end=time.monotonic() + 1)
+            assert inpainter_module._supervisor is None
+            assert not supervisor.alive()
+
+    def test_failure_is_followed_by_fresh_successful_supervisor(self):
+        class FailBackend(_TestBackend):
+            def inpaint(self, image, mask):
+                raise MemoryError("OOM")
+
+        request = [(
+            Image.new("RGB", (10, 10), "white"),
+            Image.new("L", (10, 10), "white"), 0,
+        )]
+        supervisors = iter([
+            _PersistentSupervisor(FailBackend, "fork"),
+            _PersistentSupervisor(_TestBackend, "fork"),
+        ])
+        with (
+            patch.object(inpainter_module, "_supervisor", None),
+            patch.object(
+                inpainter_module, "_supervisor_factory",
+                side_effect=lambda: next(supervisors),
+            ),
+        ):
+            with pytest.raises(SupervisedInpaintError, match="oom"):
+                supervised_inpaint_tiles(request, end=time.monotonic() + 1)
+            result = supervised_inpaint_tiles(
+                request, end=time.monotonic() + 1,
+            )
+            assert result[0].size == (10, 10)
+            inpainter_module._reset_backend()
+
+    def test_oom_resets_backend_and_degrades_non_model_result(self):
+        img = Image.new("RGB", (100, 100), (100, 100, 100))
+        bubble = _make_bubble([_make_det(20, 20, 60, 50)], mask=None)
+        backend = _TestBackend(failure=MemoryError("CUDA out of memory"))
+        with (
+            patch("webtoon.inpainter.INPAINT_ENABLED", True),
+            patch("webtoon.inpainter._policy", return_value=_short_policy()),
+        ):
+            outcome = cleanup_bubble(img, bubble, backend=backend)
+        assert outcome.method == "uniform_fill"
+        assert outcome.reason == "oom"
+        assert outcome.degraded is True
+
+    def test_wrong_size_output_rolls_back_without_lama_credit(self):
+        img = Image.new("RGB", (100, 100), (100, 100, 100))
+        target = img.copy()
+        bubble = _make_bubble([_make_det(20, 20, 60, 50)], mask=None)
+        with (
+            patch("webtoon.inpainter.INPAINT_ENABLED", True),
+            patch("webtoon.inpainter._policy", return_value=_short_policy()),
+        ):
+            outcome = cleanup_bubble(
+                img, bubble, backend=_TestBackend(wrong_size=True),
+                target_img=target,
+            )
+        assert outcome.method == "uniform_fill"
+        assert outcome.reason == "wrong_size"
+        assert outcome.degraded is True
+        assert np.asarray(target)[99, 99, 0] == 100
+
+    def test_unexpected_adapter_error_fails_instead_of_degrading(self):
+        img = Image.new("RGB", (100, 100), (100, 100, 100))
+        bubble = _make_bubble([_make_det(20, 20, 60, 50)], mask=None)
+        with (
+            patch("webtoon.inpainter.INPAINT_ENABLED", True),
+            patch("webtoon.inpainter._policy", return_value=_short_policy()),
+            pytest.raises(UnexpectedInpaintError, match="TypeError"),
+        ):
+            cleanup_bubble(
+                img, bubble,
+                backend=_TestBackend(failure=TypeError("programming bug")),
+            )
 
     def test_inpaints_without_bubble_mask(self):
         """Bubble without bubble_mask still inpaints using text rects."""
@@ -277,9 +610,7 @@ class TestInpaintBubbleIntegration:
         det = _make_det(50, 50, 150, 80)
         bubble = _make_bubble([det], mask=None)
 
-        mock_backend = MagicMock()
-        mock_backend.inpaint.return_value = Image.new("RGB", (200, 200),
-                                                       (255, 0, 0))
+        mock_backend = _TestBackend()
 
         with patch("webtoon.inpainter.INPAINT_ENABLED", True):
             result = inpaint_bubble(img, bubble, backend=mock_backend,
@@ -297,9 +628,7 @@ class TestInpaintBubbleIntegration:
                               mask=mask, has_boundary=True)
 
         # Mock backend that returns solid red
-        mock_backend = MagicMock()
-        red_img = Image.new("RGB", (200, 200), (255, 0, 0))
-        mock_backend.inpaint.return_value = red_img
+        mock_backend = _TestBackend()
 
         with patch("webtoon.inpainter.INPAINT_ENABLED", True):
             result = inpaint_bubble(img, bubble, backend=mock_backend,
@@ -320,21 +649,13 @@ class TestInpaintBubbleIntegration:
         target = img.copy()
 
         # Two separate bubbles at different locations
-        mask1 = np.zeros((300, 300), dtype=np.uint8)
-        mask1[40:80, 40:80] = 255
         det1 = _make_det(45, 45, 75, 75)
-        bubble1 = _make_bubble([det1], bbox=(30, 30, 90, 90),
-                               mask=mask1, has_boundary=True)
+        bubble1 = _make_bubble([det1], bbox=(30, 30, 90, 90), mask=None)
 
-        mask2 = np.zeros((300, 300), dtype=np.uint8)
-        mask2[180:220, 180:220] = 255
         det2 = _make_det(185, 185, 215, 215)
-        bubble2 = _make_bubble([det2], bbox=(170, 170, 230, 230),
-                               mask=mask2, has_boundary=True)
+        bubble2 = _make_bubble([det2], bbox=(170, 170, 230, 230), mask=None)
 
-        mock_backend = MagicMock()
-        mock_backend.inpaint.return_value = Image.new("RGB", (300, 300),
-                                                       (255, 0, 0))
+        mock_backend = _TestBackend()
 
         with patch("webtoon.inpainter.INPAINT_ENABLED", True):
             inpaint_bubble(img, bubble1, backend=mock_backend,
@@ -357,9 +678,7 @@ class TestInpaintBubbleIntegration:
         bubble = _make_bubble([det], bbox=(60, 60, 100, 100),
                               mask=mask, has_boundary=True)
 
-        mock_backend = MagicMock()
-        mock_backend.inpaint.return_value = Image.new("RGB", (100, 100),
-                                                       (255, 0, 0))
+        mock_backend = _TestBackend()
 
         with patch("webtoon.inpainter.INPAINT_ENABLED", True):
             # Should not raise

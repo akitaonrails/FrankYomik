@@ -240,6 +240,13 @@ Document the request/response schema, prompt policy, context and terminology beh
 
 ## Phase 4: cleanup and inpainting policy
 
+Implementation status: the shared deterministic mask, uniform-fill decision,
+bounded LaMa tiles, resource guards, deterministic seeds, persisted route, and
+safe degradation are implemented. Frank LaMa remains the production default.
+FLUX.2 Klein remains disabled pending an observably deterministic router, the
+two-replica/OOM operational gate, and resolution of incomplete training-data
+disclosure, in addition to the controlled quality gate below.
+
 ### Implementation
 
 - Build the cleanup mask from retained semantic masks and OCR strokes, with explicit dilation and clipping.

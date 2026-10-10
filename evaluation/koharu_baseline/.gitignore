@@ -16,6 +16,7 @@ outputs/**
 reviews/blind/**
 reviews/private/**
 !outputs/.gitkeep
+!outputs/phase4-production-policy.json
 !reviews/blind/.gitkeep
 !reviews/private/.gitkeep
 
@@ -23,4 +24,3 @@ reviews/private/**
 config.local.json
 **/__pycache__/
 *.pyc
-

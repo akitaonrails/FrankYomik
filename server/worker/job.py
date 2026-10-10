@@ -382,9 +382,35 @@ def _build_region(
 
     cleanup = None
     if cleanup_method is not None:
+        selected_cleanup_provenance = cleanup_provenance
+        if cleanup_method.startswith("uniform_fill"):
+            selected_cleanup_provenance = Provenance(
+                backend="deterministic-uniform-fill",
+                revision=cleanup_provenance.revision,
+                config_hash=cleanup_provenance.config_hash,
+            )
+        elif cleanup_method == "stroke_clear":
+            selected_cleanup_provenance = Provenance(
+                backend="deterministic-stroke-clear",
+                revision=cleanup_provenance.revision,
+                config_hash=cleanup_provenance.config_hash,
+            )
+        elif cleanup_method == "region_fill":
+            selected_cleanup_provenance = Provenance(
+                backend="deterministic-region-fill",
+                revision=cleanup_provenance.revision,
+                config_hash=cleanup_provenance.config_hash,
+            )
+        elif cleanup_method == "lama_tiles":
+            selected_cleanup_provenance = Provenance(
+                backend="simple-lama-inpainting",
+                revision=cleanup_provenance.revision,
+                model=cleanup_provenance.model,
+                config_hash=cleanup_provenance.config_hash,
+            )
         cleanup = CleanupMetadata(
             cleanup_method,
-            cleanup_provenance,
+            selected_cleanup_provenance,
         )
 
     return PageRegion(
@@ -848,7 +874,8 @@ def _process_manga(job: ProcessingJob,
             target_language=(job.target_lang
                              if mode_name == "translate" else None),
             confidence=None if confidence is None else float(confidence),
-            cleanup_method=_cleanup_method(deps, job.pipeline, kind),
+            cleanup_method=(getattr(br, "cleanup_method", None)
+                            or _cleanup_method(deps, job.pipeline, kind)),
             vertical=mode_name == "furigana",
             region_id=region_id,
             parent_id=(None if semantic is None or semantic.parent_id is None
@@ -895,7 +922,8 @@ def _process_manga(job: ProcessingJob,
             },
         ),
         cacheable=not any(
-            getattr(item, "ocr_degraded", False)
+            (getattr(item, "ocr_degraded", False)
+             or getattr(item, "cleanup_degraded", False))
             for item in page.bubble_results
         ),
         page_kind=page_kind,
@@ -1157,7 +1185,8 @@ def _process_webtoon(job: ProcessingJob,
             cleanup_provenance=cleanup_provenance,
             transformed=transformed_obj,
             target_language=job.target_lang,
-            cleanup_method=_cleanup_method(deps, job.pipeline, "bubble"),
+            cleanup_method=(getattr(bubble, "cleanup_method", None)
+                            or _cleanup_method(deps, job.pipeline, "bubble")),
             region_id=region_id,
             detector_label=(semantic.raw_label
                             if is_first_semantic_region else None),
@@ -1229,5 +1258,9 @@ def _process_webtoon(job: ProcessingJob,
                 "cleanup": cleanup_provenance,
                 "render": render_provenance,
             },
+        ),
+        cacheable=not any(
+            getattr(region.bubble, "cleanup_degraded", False)
+            for region in page.regions
         ),
     )

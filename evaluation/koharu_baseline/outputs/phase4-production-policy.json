@@ -1,0 +1,364 @@
+{
+  "pipeline_revision": "sha256:3d5e7eb24fe67d0882f9b30935890d759d1c2291b38b330dad3113a6f47e9551",
+  "historical_backend_baseline": {
+    "schema_version": 1,
+    "note": "The hard-case selection is a manually curated oracle subset; this does not validate a production router.",
+    "hard_cases": [
+      "synthetic_02_hair_halftone",
+      "synthetic_05_street_lines",
+      "synthetic_06_speed_lines",
+      "synthetic_08_dense_art"
+    ],
+    "systems": {
+      "frank_lama": {
+        "case_count": 8,
+        "mean_masked_mae": 29.142394145321482,
+        "median_masked_mae": 24.29181041993379,
+        "outside_mask_changed_pixels": 0
+      },
+      "koharu_lama": {
+        "case_count": 8,
+        "mean_masked_mae": 29.546327757449035,
+        "median_masked_mae": 27.35544519951211,
+        "outside_mask_changed_pixels": 0
+      },
+      "koharu_aot": {
+        "case_count": 8,
+        "mean_masked_mae": 30.551084683742815,
+        "median_masked_mae": 28.367346227565776,
+        "outside_mask_changed_pixels": 0
+      },
+      "koharu_flux_hard": {
+        "case_count": 4,
+        "mean_masked_mae": 25.751420108032757,
+        "outside_mask_changed_pixels": 0
+      }
+    },
+    "oracle_selective_mean_masked_mae": 23.599102631120402,
+    "per_case": {
+      "synthetic_01_portrait_suit": {
+        "frank_lama": 37.632584073880466,
+        "koharu_lama": 37.58337689492943,
+        "koharu_aot": 37.471127374106985
+      },
+      "synthetic_02_hair_halftone": {
+        "frank_lama": 16.935110646454085,
+        "koharu_lama": 14.334971249346577,
+        "koharu_aot": 20.410245687401986,
+        "koharu_flux": 13.32319219376198
+      },
+      "synthetic_03_action_art": {
+        "frank_lama": 13.297055236103851,
+        "koharu_lama": 12.664018121623977,
+        "koharu_aot": 12.558285415577627
+      },
+      "synthetic_04_face_flat": {
+        "frank_lama": 14.910367659871058,
+        "koharu_lama": 16.234884126154384,
+        "koharu_aot": 12.113469245513155
+      },
+      "synthetic_05_street_lines": {
+        "frank_lama": 43.41920195155951,
+        "koharu_lama": 41.31535110646454,
+        "koharu_aot": 42.812162397630246,
+        "koharu_flux": 30.809792646802578
+      },
+      "synthetic_06_speed_lines": {
+        "frank_lama": 28.636487192890748,
+        "koharu_lama": 34.25279665446942,
+        "koharu_aot": 36.32444676772957,
+        "koharu_flux": 21.33089388395191
+      },
+      "synthetic_07_table_texture": {
+        "frank_lama": 19.947133646976827,
+        "koharu_lama": 20.4580937445548,
+        "koharu_aot": 18.20853807283499
+      },
+      "synthetic_08_dense_art": {
+        "frank_lama": 58.361212754835336,
+        "koharu_lama": 59.52713016204914,
+        "koharu_aot": 64.51040250914794,
+        "koharu_flux": 37.54180170761457
+      }
+    },
+    "checks": {
+      "frank_mean_matches_frozen_result": true,
+      "flux_hard_mean_matches_frozen_result": true,
+      "routine_default_meets_29_14_reference": true,
+      "oracle_selective_beats_frank_mean": true,
+      "all_saved_outputs_preserve_outside_mask": true
+    }
+  },
+  "current_production_policy": {
+    "schema_version": 1,
+    "method": "Exact production planner, mask builder, tiler, cleanup_bubble, rollback, fill, and compositor with deterministic adapters.",
+    "saved_output_adapter_note": "The fake backend returns the frozen Frank LaMa pixels for each production tile. It evaluates current routing and compositing; it does not rerun LaMa inference.",
+    "background_proxy_note": "The frozen corpus lacks detector background metadata. Each case uses the observable median of the 8-pixel ring outside its frozen mask.",
+    "cases": [
+      {
+        "id": "synthetic_01_portrait_suit",
+        "background_proxy": [
+          78,
+          78,
+          78
+        ],
+        "lama_saved_output_adapter": {
+          "route": "lama_tiles",
+          "degraded": false,
+          "reason": null,
+          "effective_mask_pixels": 29267,
+          "effective_masked_mae": 12.299028484869194,
+          "frozen_reference_masked_mae": 37.632584073880466,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        },
+        "degraded_backend_failure": {
+          "route": "uniform_fill",
+          "degraded": true,
+          "reason": "oom",
+          "effective_mask_pixels": 29267,
+          "effective_masked_mae": 96.00390656142868,
+          "frozen_reference_masked_mae": 90.84683742812337,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        }
+      },
+      {
+        "id": "synthetic_02_hair_halftone",
+        "background_proxy": [
+          234,
+          234,
+          235
+        ],
+        "lama_saved_output_adapter": {
+          "route": "lama_tiles",
+          "degraded": false,
+          "reason": null,
+          "effective_mask_pixels": 28381,
+          "effective_masked_mae": 5.70749210152332,
+          "frozen_reference_masked_mae": 16.935110646454085,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        },
+        "degraded_backend_failure": {
+          "route": "uniform_fill",
+          "degraded": true,
+          "reason": "oom",
+          "effective_mask_pixels": 28381,
+          "effective_masked_mae": 112.54653935144404,
+          "frozen_reference_masked_mae": 129.01540338037987,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        }
+      },
+      {
+        "id": "synthetic_03_action_art",
+        "background_proxy": [
+          84,
+          84,
+          85
+        ],
+        "lama_saved_output_adapter": {
+          "route": "lama_tiles",
+          "degraded": false,
+          "reason": null,
+          "effective_mask_pixels": 29267,
+          "effective_masked_mae": 4.345724991742691,
+          "frozen_reference_masked_mae": 13.297055236103851,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        },
+        "degraded_backend_failure": {
+          "route": "uniform_fill",
+          "degraded": true,
+          "reason": "oom",
+          "effective_mask_pixels": 29267,
+          "effective_masked_mae": 94.38009817655835,
+          "frozen_reference_masked_mae": 93.58996340825928,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        }
+      },
+      {
+        "id": "synthetic_04_face_flat",
+        "background_proxy": [
+          98,
+          96,
+          97
+        ],
+        "lama_saved_output_adapter": {
+          "route": "lama_tiles",
+          "degraded": false,
+          "reason": null,
+          "effective_mask_pixels": 29267,
+          "effective_masked_mae": 4.872985501304085,
+          "frozen_reference_masked_mae": 14.910367659871058,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        },
+        "degraded_backend_failure": {
+          "route": "uniform_fill",
+          "degraded": true,
+          "reason": "oom",
+          "effective_mask_pixels": 29267,
+          "effective_masked_mae": 108.265589230191,
+          "frozen_reference_masked_mae": 102.0858337689493,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        }
+      },
+      {
+        "id": "synthetic_05_street_lines",
+        "background_proxy": [
+          136,
+          134,
+          134
+        ],
+        "lama_saved_output_adapter": {
+          "route": "lama_tiles",
+          "degraded": false,
+          "reason": null,
+          "effective_mask_pixels": 29267,
+          "effective_masked_mae": 14.190202845070102,
+          "frozen_reference_masked_mae": 43.41920195155951,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        },
+        "degraded_backend_failure": {
+          "route": "uniform_fill",
+          "degraded": true,
+          "reason": "oom",
+          "effective_mask_pixels": 29267,
+          "effective_masked_mae": 90.04933884579903,
+          "frozen_reference_masked_mae": 88.31754661090783,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        }
+      },
+      {
+        "id": "synthetic_06_speed_lines",
+        "background_proxy": [
+          252,
+          252,
+          252
+        ],
+        "lama_saved_output_adapter": {
+          "route": "lama_tiles",
+          "degraded": false,
+          "reason": null,
+          "effective_mask_pixels": 28121,
+          "effective_masked_mae": 9.740336403399594,
+          "frozen_reference_masked_mae": 28.636487192890748,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        },
+        "degraded_backend_failure": {
+          "route": "uniform_fill",
+          "degraded": true,
+          "reason": "oom",
+          "effective_mask_pixels": 28121,
+          "effective_masked_mae": 64.35005867501155,
+          "frozen_reference_masked_mae": 79.61495033978045,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        }
+      },
+      {
+        "id": "synthetic_07_table_texture",
+        "background_proxy": [
+          201,
+          199,
+          200
+        ],
+        "lama_saved_output_adapter": {
+          "route": "lama_tiles",
+          "degraded": false,
+          "reason": null,
+          "effective_mask_pixels": 29256,
+          "effective_masked_mae": 6.521545437972837,
+          "frozen_reference_masked_mae": 19.947133646976827,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        },
+        "degraded_backend_failure": {
+          "route": "uniform_fill",
+          "degraded": true,
+          "reason": "oom",
+          "effective_mask_pixels": 29256,
+          "effective_masked_mae": 31.369701941482088,
+          "frozen_reference_masked_mae": 25.232514375326712,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        }
+      },
+      {
+        "id": "synthetic_08_dense_art",
+        "background_proxy": [
+          205,
+          205,
+          206
+        ],
+        "lama_saved_output_adapter": {
+          "route": "lama_tiles",
+          "degraded": false,
+          "reason": null,
+          "effective_mask_pixels": 29264,
+          "effective_masked_mae": 19.075485237834883,
+          "frozen_reference_masked_mae": 58.361212754835336,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        },
+        "degraded_backend_failure": {
+          "route": "uniform_fill",
+          "degraded": true,
+          "reason": "oom",
+          "effective_mask_pixels": 29264,
+          "effective_masked_mae": 81.64603836340441,
+          "frozen_reference_masked_mae": 93.74263809025963,
+          "outside_effective_mask_changed_pixels": 0,
+          "planned_tile_count": 1,
+          "parent_observed_backend_calls": 0
+        }
+      }
+    ],
+    "uniform_control": {
+      "route": "uniform_fill",
+      "degraded": false,
+      "reason": null,
+      "effective_mask_pixels": 29267,
+      "effective_masked_mae": 0.0,
+      "frozen_reference_masked_mae": 0.0,
+      "outside_effective_mask_changed_pixels": 0,
+      "planned_tile_count": 1,
+      "parent_observed_backend_calls": 0
+    },
+    "summary": {
+      "lama_mean_effective_masked_mae": 9.594100125464589,
+      "lama_mean_frozen_reference_masked_mae": 29.142394145321482,
+      "degraded_mean_effective_masked_mae": 84.82640889316488,
+      "degraded_mean_frozen_reference_masked_mae": 87.8057109252483
+    },
+    "checks": {
+      "all_artwork_cases_route_lama": true,
+      "all_backend_failures_degrade_to_fill": true,
+      "all_production_runs_preserve_outside_effective_mask": true,
+      "uniform_control_skips_backend": true,
+      "production_compositor_retains_frozen_lama_quality": true
+    }
+  }
+}

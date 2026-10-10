@@ -41,8 +41,12 @@ def _clean_bubble_for_render(
     if applied:
         return True
     if INPAINT_ENABLED:
-        raise RuntimeError("enabled LaMa cleanup did not execute")
+        log.warning("configured cleanup produced no safe result; using solid fill")
     _clear_bubble_text(output, bubble)
+    bubble.cleanup_method = (
+        "uniform_fill:degraded" if INPAINT_ENABLED else "uniform_fill"
+    )
+    bubble.cleanup_degraded = bool(INPAINT_ENABLED)
     return False
 
 

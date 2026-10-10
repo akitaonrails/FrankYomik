@@ -52,7 +52,7 @@ def language_for(pipeline: str) -> str:
 
 def cleanup_for(pipeline: str, kind: str) -> str | None:
     if pipeline == "webtoon":
-        return "webtoon-policy"
+        return "stroke_clear" if kind == "sfx" else "webtoon-policy"
     if kind == "artwork_text":
         return "region_fill"
     if pipeline.startswith("manga_"):

@@ -7,25 +7,52 @@ brush textures) before rendering English text on top.
 Follows the lazy-singleton + thread-lock pattern from webtoon/ocr.py.
 """
 
+import atexit
+import json
 import logging
+import multiprocessing
 import os
+import select
+import socket
 import threading
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from tempfile import TemporaryDirectory
+from time import monotonic
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image
 
+from pipeline.cleanup import (
+    CleanupBudgetExceeded,
+    CleanupPolicy,
+    build_cleanup_mask,
+    deadline,
+    estimate_ocr_strokes,
+    gpu_memory_available,
+    host_memory_available,
+    plan_cleanup,
+    seed_inference,
+)
 from pipeline.model_verification import verify_file_sha256
 from pipeline.revision import stage_identity
 
 from .bubble_detector import WebtoonBubble
 from .config import (
     INPAINT_CONTEXT_PAD,
+    INPAINT_MAX_TILES,
+    INPAINT_MAX_TILE_WIDTH,
+    INPAINT_MAX_TILE_HEIGHT,
+    INPAINT_MAX_TILE_PIXELS,
+    INPAINT_MAX_PAGE_PIXELS,
+    INPAINT_MAX_WALL_SECONDS,
+    INPAINT_MIN_HOST_MB,
+    INPAINT_MIN_GPU_MB,
+    INPAINT_SEED,
+    INPAINT_UNIFORM_STDDEV,
+    INPAINT_UNIFORM_RANGE,
     INPAINT_ENABLED,
     INPAINT_ERODE_PX,
-    INPAINT_MODEL,
-    INPAINT_PROMPT,
-    INPAINT_STEPS,
     INPAINT_TEXT_DILATE,
     INPAINT_TEXT_PAD,
 )
@@ -99,87 +126,6 @@ class LamaBackend(InpaintBackend):
             _cuda_empty_cache()
 
 
-class FluxFillBackend(InpaintBackend):
-    """Flux.1-Fill-dev via diffusers with CPU offload."""
-
-    def __init__(self):
-        self._pipe = None
-
-    def load(self) -> bool:
-        try:
-            import torch
-            from diffusers import FluxFillPipeline
-            self._pipe = FluxFillPipeline.from_pretrained(
-                "black-forest-labs/FLUX.1-Fill-dev",
-                torch_dtype=torch.bfloat16,
-            )
-            self._pipe.enable_model_cpu_offload()
-            log.info("Flux.1-Fill-dev inpainting model loaded")
-            return True
-        except ImportError:
-            log.warning("diffusers/transformers/accelerate not installed; "
-                        "pip install diffusers transformers accelerate")
-            return False
-
-    def inpaint(self, image: Image.Image, mask: Image.Image) -> Image.Image:
-        result = self._pipe(
-            prompt=INPAINT_PROMPT,
-            image=image.convert("RGB"),
-            mask_image=mask.convert("L"),
-            num_inference_steps=INPAINT_STEPS,
-            height=image.height,
-            width=image.width,
-        ).images[0]
-        return result.convert("RGB")
-
-    def unload(self) -> None:
-        if self._pipe is not None:
-            del self._pipe
-            self._pipe = None
-            _cuda_empty_cache()
-
-
-class SDXLInpaintBackend(InpaintBackend):
-    """Stable Diffusion XL Inpainting via diffusers."""
-
-    def __init__(self):
-        self._pipe = None
-
-    def load(self) -> bool:
-        try:
-            import torch
-            from diffusers import StableDiffusionXLInpaintPipeline
-            self._pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-                "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
-                torch_dtype=torch.float16,
-            )
-            self._pipe.enable_model_cpu_offload()
-            log.info("SDXL inpainting model loaded")
-            return True
-        except ImportError:
-            log.warning("diffusers/transformers/accelerate not installed; "
-                        "pip install diffusers transformers accelerate")
-            return False
-
-    def inpaint(self, image: Image.Image, mask: Image.Image) -> Image.Image:
-        result = self._pipe(
-            prompt=INPAINT_PROMPT,
-            image=image.convert("RGB"),
-            mask_image=mask.convert("L"),
-            num_inference_steps=INPAINT_STEPS,
-        ).images[0]
-        # SDXL may resize; resize back to match input
-        if result.size != image.size:
-            result = result.resize(image.size, Image.LANCZOS)
-        return result.convert("RGB")
-
-    def unload(self) -> None:
-        if self._pipe is not None:
-            del self._pipe
-            self._pipe = None
-            _cuda_empty_cache()
-
-
 def _cuda_empty_cache():
     """Free GPU memory if torch is available."""
     try:
@@ -194,40 +140,356 @@ def _cuda_empty_cache():
 # Singleton backend management
 # ---------------------------------------------------------------------------
 
-_BACKEND_MAP = {
-    "lama": LamaBackend,
-    "flux-fill": FluxFillBackend,
-    "sdxl": SDXLInpaintBackend,
-}
-
-_backend: InpaintBackend | None = None
-_init_lock = threading.Lock()
+_BACKEND_MAP = {"lama": LamaBackend}
 _infer_lock = threading.Lock()
+_supervisor: "_PersistentSupervisor | None" = None
+_supervisor_factory = None
 
 
-def _get_backend() -> InpaintBackend | None:
-    """Lazy-load the configured inpainting backend. Returns None when disabled."""
-    global _backend
-    if not INPAINT_ENABLED:
-        return None
-    if _backend is None:
-        with _init_lock:
-            if _backend is None:
-                cls = _BACKEND_MAP.get(INPAINT_MODEL)
-                if cls is None:
-                    raise RuntimeError(
-                        f"unknown inpainting model {INPAINT_MODEL!r}; "
-                        f"choose from {list(_BACKEND_MAP)}"
-                    )
-                instance = cls()
-                if not instance.load():
-                    raise RuntimeError(
-                        f"configured inpainting model failed to load: "
-                        f"{INPAINT_MODEL}"
-                    )
-                _backend = instance
-    return _backend
+class SupervisedInpaintError(RuntimeError):
+    """A bounded worker failed, with a stable degradation reason."""
 
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+class UnexpectedInpaintError(Exception):
+    """An adapter programming error which must fail the page."""
+
+
+def _failure_reason(error: BaseException) -> str:
+    message = str(error).lower()
+    if isinstance(error, MemoryError) or "out of memory" in message or "oom" in message:
+        return "oom"
+    if message == "wrong_size":
+        return "wrong_size"
+    if message == "backend_unavailable":
+        return "backend_unavailable"
+    return "backend_failure"
+
+
+_MIN_TRANSPORT_SECONDS = 0.02
+_MAX_CONTROL_BYTES = 32 * 1024
+
+
+def _control_pair() -> tuple[socket.socket, socket.socket]:
+    parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    parent.setblocking(False)
+    child.setblocking(True)
+    return parent, child
+
+
+def _send_control(connection: socket.socket, value, end: float) -> None:
+    payload = json.dumps(value, separators=(",", ":")).encode("utf-8")
+    if len(payload) > _MAX_CONTROL_BYTES:
+        raise SupervisedInpaintError("backend_failure")
+    remaining = end - monotonic()
+    if remaining <= 0:
+        raise SupervisedInpaintError("wall_time")
+    _, writable, _ = select.select([], [connection], [], remaining)
+    if not writable:
+        raise SupervisedInpaintError("wall_time")
+    try:
+        written = connection.send(payload)
+    except BlockingIOError as error:
+        raise SupervisedInpaintError("wall_time") from error
+    if written != len(payload):
+        raise SupervisedInpaintError("backend_failure")
+
+
+def _recv_control(connection: socket.socket, end: float):
+    remaining = end - monotonic()
+    if remaining <= 0:
+        raise SupervisedInpaintError("wall_time")
+    readable, _, _ = select.select([connection], [], [], remaining)
+    if not readable:
+        raise SupervisedInpaintError("wall_time")
+    try:
+        payload = connection.recv(_MAX_CONTROL_BYTES)
+    except BlockingIOError as error:
+        raise SupervisedInpaintError("wall_time") from error
+    try:
+        return json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SupervisedInpaintError("backend_failure") from error
+
+
+def _child_send(connection: socket.socket, value) -> None:
+    payload = json.dumps(value, separators=(",", ":")).encode("utf-8")
+    if len(payload) <= _MAX_CONTROL_BYTES:
+        connection.send(payload)
+
+
+def _execute_artifacts(backend: InpaintBackend, specs) -> int:
+    for image_path, mask_path, output_path, seed in specs:
+        image_array = np.load(image_path, allow_pickle=False)
+        mask_array = np.load(mask_path, allow_pickle=False)
+        image = Image.fromarray(image_array).convert("RGB")
+        mask = Image.fromarray(mask_array).convert("L")
+        seed_inference(seed)
+        result = backend.inpaint(image, mask)
+        if not isinstance(result, Image.Image) or result.size != image.size:
+            raise ValueError("wrong_size")
+        np.save(output_path, np.asarray(result.convert("RGB")), allow_pickle=False)
+    return len(specs)
+
+
+def _stage_artifacts_process(connection, specs, requests) -> None:
+    try:
+        for spec, (image, mask, _seed) in zip(specs, requests, strict=True):
+            np.save(spec[0], np.asarray(image.convert("RGB")), allow_pickle=False)
+            np.save(spec[1], np.asarray(mask.convert("L")), allow_pickle=False)
+        _child_send(connection, ("ok", len(specs)))
+    except BaseException as error:
+        try:
+            _child_send(connection, ("unexpected", type(error).__name__))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        connection.close()
+
+
+def _one_shot_process(connection, backend, specs) -> None:
+    try:
+        if not backend.load():
+            raise RuntimeError("backend_unavailable")
+        _child_send(connection, ("ok", _execute_artifacts(backend, specs)))
+    except (MemoryError, OSError, RuntimeError, ValueError) as error:
+        try:
+            _child_send(connection, ("error", _failure_reason(error)))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    except BaseException as error:
+        try:
+            _child_send(connection, ("unexpected", type(error).__name__))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        try:
+            backend.unload()
+        except Exception:
+            pass
+        _cuda_empty_cache()
+        connection.close()
+
+
+def _persistent_process(connection, backend_factory) -> None:
+    backend = None
+    try:
+        backend = backend_factory()
+        if not backend.load():
+            raise RuntimeError("backend_unavailable")
+        _child_send(connection, ("ready", None))
+        while True:
+            command, payload = json.loads(connection.recv(_MAX_CONTROL_BYTES))
+            if command == "stop":
+                return
+            try:
+                _child_send(connection, ("ok", _execute_artifacts(backend, payload)))
+            except (MemoryError, OSError, RuntimeError, ValueError) as error:
+                _child_send(connection, ("error", _failure_reason(error)))
+                return
+            except BaseException as error:
+                _child_send(connection, ("unexpected", type(error).__name__))
+                return
+    except (MemoryError, OSError, RuntimeError, ValueError) as error:
+        try:
+            _child_send(connection, ("error", _failure_reason(error)))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    except BaseException as error:
+        try:
+            _child_send(connection, ("unexpected", type(error).__name__))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        if backend is not None:
+            try:
+                backend.unload()
+            except Exception:
+                pass
+        _cuda_empty_cache()
+        connection.close()
+
+
+class _PersistentSupervisor:
+    """Parent handle for one warmed, killable model process."""
+
+    def __init__(self, backend_factory=LamaBackend, context_name: str = "spawn"):
+        self._context = multiprocessing.get_context(context_name)
+        self._factory = backend_factory
+        self._process = None
+        self._connection = None
+
+    @property
+    def pid(self) -> int | None:
+        return None if self._process is None else self._process.pid
+
+    def alive(self) -> bool:
+        return self._process is not None and self._process.is_alive()
+
+    def _start(self, end: float) -> None:
+        parent, child = _control_pair()
+        process = self._context.Process(
+            target=_persistent_process,
+            args=(child, self._factory),
+            daemon=True,
+        )
+        process.start()
+        child.close()
+        self._connection, self._process = parent, process
+        status, reason = _recv_control(parent, end)
+        if status == "unexpected":
+            raise UnexpectedInpaintError(str(reason))
+        if status != "ready":
+            raise SupervisedInpaintError(str(reason))
+
+    def run(self, specs, end: float) -> None:
+        if not self.alive():
+            self.close()
+            self._start(end)
+        _send_control(self._connection, ("inpaint", specs), end)
+        status, value = _recv_control(self._connection, end)
+        if status == "unexpected":
+            raise UnexpectedInpaintError(str(value))
+        if status != "ok":
+            raise SupervisedInpaintError(str(value))
+        if value != len(specs):
+            raise SupervisedInpaintError("backend_failure")
+
+    def close(self) -> None:
+        connection, process = self._connection, self._process
+        self._connection = self._process = None
+        if connection is not None:
+            if process is not None and process.is_alive():
+                try:
+                    _send_control(connection, ("stop", None), monotonic() + 0.05)
+                except (BrokenPipeError, EOFError, OSError, SupervisedInpaintError):
+                    pass
+            connection.close()
+        if process is not None:
+            process.join(timeout=0.2)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1)
+            if process.is_alive():
+                process.kill()
+                process.join()
+
+
+def _reset_backend() -> None:
+    """Kill a poisoned model owner and release parent accelerator caches."""
+    global _supervisor
+    previous, _supervisor = _supervisor, None
+    if previous is not None:
+        previous.close()
+    _cuda_empty_cache()
+
+
+atexit.register(_reset_backend)
+
+
+def _bounded_child(target, args, end: float) -> tuple[str, object]:
+    context = multiprocessing.get_context("fork")
+    parent, child = _control_pair()
+    process = context.Process(target=target, args=(child, *args), daemon=True)
+    try:
+        process.start()
+        child.close()
+        status, value = _recv_control(parent, end)
+        process.join(timeout=max(0.0, end - monotonic()))
+        return status, value
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=1)
+        if process.is_alive():
+            process.kill()
+            process.join()
+        parent.close()
+
+
+def _stage_artifacts(specs, requests, end: float) -> None:
+    status, value = _bounded_child(
+        _stage_artifacts_process, (specs, requests), end,
+    )
+    if status == "unexpected":
+        raise UnexpectedInpaintError(str(value))
+    if status != "ok" or value != len(specs):
+        raise SupervisedInpaintError("backend_failure")
+
+
+def _run_one_shot(specs, backend, end: float) -> None:
+    status, value = _bounded_child(_one_shot_process, (backend, specs), end)
+    if status == "unexpected":
+        raise UnexpectedInpaintError(str(value))
+    if status != "ok":
+        raise SupervisedInpaintError(str(value))
+    if value != len(specs):
+        raise SupervisedInpaintError("backend_failure")
+
+
+def _read_artifacts(specs, end: float) -> list[Image.Image]:
+    results: list[Image.Image] = []
+    for image_path, _mask_path, output_path, _seed in specs:
+        if end - monotonic() < _MIN_TRANSPORT_SECONDS:
+            raise SupervisedInpaintError("wall_time")
+        result = np.load(output_path, allow_pickle=False)
+        expected = np.load(image_path, mmap_mode="r", allow_pickle=False).shape
+        if result.shape != expected:
+            raise SupervisedInpaintError("wrong_size")
+        results.append(Image.fromarray(result).convert("RGB"))
+        if monotonic() > end:
+            raise SupervisedInpaintError("wall_time")
+    return results
+
+
+def supervised_inpaint_tiles(
+    requests: list[tuple[Image.Image, Image.Image, int]],
+    *,
+    end: float,
+    backend: InpaintBackend | None = None,
+) -> list[Image.Image]:
+    """Bound staging, lock wait, model load, IPC, and inference."""
+    global _supervisor
+    if end - monotonic() < _MIN_TRANSPORT_SECONDS:
+        _reset_backend()
+        raise SupervisedInpaintError("wall_time")
+    remaining = end - monotonic()
+    if remaining <= 0 or not _infer_lock.acquire(timeout=remaining):
+        _reset_backend()
+        raise SupervisedInpaintError("lock_timeout")
+    try:
+        if end - monotonic() < _MIN_TRANSPORT_SECONDS:
+            raise SupervisedInpaintError("wall_time")
+        with TemporaryDirectory(prefix="yomik-cleanup-") as directory:
+            specs = [(
+                os.path.join(directory, f"image-{index}.npy"),
+                os.path.join(directory, f"mask-{index}.npy"),
+                os.path.join(directory, f"output-{index}.npy"),
+                seed,
+            ) for index, (_image, _mask, seed) in enumerate(requests)]
+            _stage_artifacts(specs, requests, end)
+            if backend is not None:
+                _run_one_shot(specs, backend, end)
+            else:
+                if _supervisor is None:
+                    factory = _supervisor_factory or _PersistentSupervisor
+                    _supervisor = factory()
+                _supervisor.run(specs, end)
+            return _read_artifacts(specs, end)
+    except SupervisedInpaintError:
+        _reset_backend()
+        raise
+    except UnexpectedInpaintError:
+        _reset_backend()
+        raise
+    except (EOFError, OSError, RuntimeError, ValueError) as error:
+        _reset_backend()
+        raise SupervisedInpaintError("backend_failure") from error
+    finally:
+        _infer_lock.release()
 
 def get_backend_for_name(name: str) -> InpaintBackend | None:
     """Create and load a backend by name (for A/B testing). Caller manages lifecycle."""
@@ -245,6 +507,32 @@ def get_backend_for_name(name: str) -> InpaintBackend | None:
 # Mask building
 # ---------------------------------------------------------------------------
 
+def _policy(context_pad: int = INPAINT_CONTEXT_PAD) -> CleanupPolicy:
+    return CleanupPolicy(
+        dilation_px=INPAINT_TEXT_DILATE,
+        context_px=context_pad,
+        max_tiles=INPAINT_MAX_TILES,
+        max_tile_width=INPAINT_MAX_TILE_WIDTH,
+        max_tile_height=INPAINT_MAX_TILE_HEIGHT,
+        max_tile_pixels=INPAINT_MAX_TILE_PIXELS,
+        max_page_pixels=INPAINT_MAX_PAGE_PIXELS,
+        max_wall_seconds=INPAINT_MAX_WALL_SECONDS,
+        min_host_available_mb=INPAINT_MIN_HOST_MB,
+        min_gpu_available_mb=INPAINT_MIN_GPU_MB,
+        uniform_stddev=INPAINT_UNIFORM_STDDEV,
+        uniform_range=INPAINT_UNIFORM_RANGE,
+        seed=INPAINT_SEED,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupOutcome:
+    applied: bool
+    method: str
+    degraded: bool = False
+    reason: str | None = None
+
+
 def build_inpaint_mask(
     bubble: WebtoonBubble,
     img_size: tuple[int, int],
@@ -252,80 +540,105 @@ def build_inpaint_mask(
     text_pad: int = INPAINT_TEXT_PAD,
     text_dilate: int = INPAINT_TEXT_DILATE,
 ) -> Image.Image | None:
-    """Build binary mask: white=inpaint (text inside balloon), black=keep.
-
-    When bubble_mask is available:
-      1. Erode by erode_px (preserve balloon outline)
-      2. Build text rects mask (union of padded detection bboxes)
-      3. Intersect: eroded_bubble AND text_rects (only inpaint where text is)
-         — if bubble mask coverage < 85%, use text rects alone
-      4. Dilate result by text_dilate px (catch glyph antialiasing edges)
-
-    When bubble_mask is absent (padded-bbox fallback bubbles):
-      Use text rects directly so inpainting can still clean text areas
-      instead of falling back to solid-color filling.
-    """
-    if not bubble.text_regions:
-        return None
-
-    w, h = img_size
-
-    # Step 1: build text rects mask (always needed)
-    text_mask = Image.new("L", (w, h), 0)
-    text_arr = np.array(text_mask)
-    for det in bubble.text_regions:
-        x1, y1, x2, y2 = det.bbox_rect
-        x1 = max(0, x1 - text_pad)
-        y1 = max(0, y1 - text_pad)
-        x2 = min(w, x2 + text_pad)
-        y2 = min(h, y2 + text_pad)
-        text_arr[y1:y2, x1:x2] = 255
-    text_mask = Image.fromarray(text_arr)
-
-    if bubble.bubble_mask is None:
-        # No contour mask — use text rects directly
-        result_arr = text_arr
-    else:
-        # Step 2: bubble mask as PIL, eroded
-        bubble_mask = Image.fromarray(bubble.bubble_mask)
-        if erode_px > 0:
-            bubble_mask = bubble_mask.filter(ImageFilter.MinFilter(erode_px * 2 + 1))
-
-        # Step 3: intersect — only inpaint where text is AND inside bubble.
-        # If the bubble mask poorly covers the text area (<85%), skip the
-        # intersection and use text rects alone.  Incomplete masks leave
-        # Korean remnants that the AI model can't clean.
-        bubble_arr = np.array(bubble_mask)
-        text_arr = np.array(text_mask)
-
-        text_pixels = np.count_nonzero(text_arr)
-        overlap_pixels = np.count_nonzero((bubble_arr > 0) & (text_arr > 0))
-        coverage = overlap_pixels / max(1, text_pixels)
-
-        if coverage >= 0.85:
-            # Good coverage — clip to bubble boundary
-            result_arr = np.where((bubble_arr > 0) & (text_arr > 0), 255, 0).astype(np.uint8)
-        else:
-            # Poor coverage — use text rects directly so all text gets inpainted
-            log.info("Bubble mask coverage %.0f%% < 85%%, using text rects only",
-                     coverage * 100)
-            result_arr = text_arr.copy()
-
-    # Step 5: dilate to catch glyph antialiasing
-    if text_dilate > 0:
-        result = Image.fromarray(result_arr)
-        result = result.filter(ImageFilter.MaxFilter(text_dilate * 2 + 1))
-        result_arr = np.array(result)
-
-    if np.count_nonzero(result_arr) == 0:
-        return None
-
-    return Image.fromarray(result_arr)
+    """Build an expanded OCR mask, clipped to the retained balloon mask."""
+    return build_cleanup_mask(
+        img_size,
+        [det.bbox_rect for det in bubble.text_regions],
+        semantic_mask=bubble.bubble_mask,
+        padding_px=text_pad,
+        dilation_px=text_dilate,
+        erosion_px=erode_px,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Main inpainting function
-# ---------------------------------------------------------------------------
+def build_effective_cleanup_mask(
+    original_img: Image.Image,
+    bubble: WebtoonBubble,
+    policy: CleanupPolicy | None = None,
+) -> Image.Image | None:
+    """Build the exact production removal mask for one webtoon bubble."""
+    selected = policy or _policy()
+    boxes = [det.bbox_rect for det in bubble.text_regions]
+    return build_cleanup_mask(
+        original_img.size,
+        boxes,
+        semantic_mask=bubble.bubble_mask,
+        padding_px=INPAINT_TEXT_PAD,
+        dilation_px=INPAINT_TEXT_DILATE,
+        erosion_px=INPAINT_ERODE_PX,
+        max_page_pixels=selected.max_page_pixels,
+        ocr_stroke_mask=estimate_ocr_strokes(
+            original_img, boxes, bubble.bg_color,
+        ),
+    )
+
+
+def _fill_masked(
+    target: Image.Image, mask: Image.Image, color: tuple[int, int, int],
+) -> None:
+    fill = Image.new("RGB", target.size, color)
+    target.paste(fill, (0, 0), mask)
+
+
+def cleanup_bubble(
+    original_img: Image.Image,
+    bubble: WebtoonBubble,
+    context_pad: int = INPAINT_CONTEXT_PAD,
+    backend: InpaintBackend | None = None,
+    target_img: Image.Image | None = None,
+) -> CleanupOutcome:
+    """Apply bounded cleanup and preserve the last valid result on failure."""
+    if not INPAINT_ENABLED:
+        return CleanupOutcome(False, "disabled")
+    dest = target_img if target_img is not None else original_img
+    policy = _policy(context_pad)
+    try:
+        mask = build_effective_cleanup_mask(original_img, bubble, policy)
+    except CleanupBudgetExceeded:
+        return CleanupOutcome(False, "none", True, "page_budget")
+    if mask is None:
+        return CleanupOutcome(False, "none", True, "empty_mask")
+    try:
+        plan = plan_cleanup(
+            original_img, mask, semantic_mask=bubble.bubble_mask, policy=policy,
+        )
+    except CleanupBudgetExceeded as error:
+        _fill_masked(dest, mask, bubble.bg_color)
+        return CleanupOutcome(True, "uniform_fill", True, str(error))
+
+    if plan.uniform_color is not None:
+        _fill_masked(dest, mask, plan.uniform_color)
+        return CleanupOutcome(True, "uniform_fill")
+    if not host_memory_available(policy.min_host_available_mb):
+        _fill_masked(dest, mask, bubble.bg_color)
+        return CleanupOutcome(True, "uniform_fill", True, "host_memory")
+    if not gpu_memory_available(policy.min_gpu_available_mb):
+        _fill_masked(dest, mask, bubble.bg_color)
+        return CleanupOutcome(True, "uniform_fill", True, "gpu_memory")
+
+    end = deadline(policy)
+    requests: list[tuple[Image.Image, Image.Image, int]] = []
+    for index, tile in enumerate(plan.tiles):
+        crop_box = tile.bbox
+        requests.append((
+            original_img.crop(crop_box), mask.crop(crop_box), plan.seed + index,
+        ))
+    try:
+        results = supervised_inpaint_tiles(requests, end=end, backend=backend)
+    except SupervisedInpaintError as error:
+        log.warning("LaMa cleanup degraded: %s", error.reason)
+        _reset_backend()
+        _fill_masked(dest, mask, bubble.bg_color)
+        return CleanupOutcome(True, "uniform_fill", True, error.reason)
+    for tile, result_crop in zip(plan.tiles, results, strict=True):
+        crop_box = tile.bbox
+        result_arr = np.asarray(result_crop.convert("RGB"))
+        target_arr = np.asarray(dest.crop(crop_box).convert("RGB"))
+        mask_arr = np.asarray(mask.crop(crop_box)) > 0
+        composite = np.where(mask_arr[:, :, None], result_arr, target_arr)
+        dest.paste(Image.fromarray(composite.astype(np.uint8)), crop_box[:2])
+    return CleanupOutcome(True, "lama_tiles")
+
 
 def inpaint_bubble(
     original_img: Image.Image,
@@ -334,78 +647,12 @@ def inpaint_bubble(
     backend: InpaintBackend | None = None,
     target_img: Image.Image | None = None,
 ) -> bool:
-    """Inpaint a single bubble's text area.
-
-    Args:
-        original_img: Original unmodified page image (PIL RGB).
-            Used as input for the AI model (it needs surrounding context).
-        bubble: The bubble whose text to inpaint.
-        context_pad: Extra pixels around bubble crop for model context.
-        backend: Override backend (for A/B testing). Uses singleton if None.
-        target_img: Image to paste the inpainted result onto (accumulated
-            output). If None, pastes onto original_img.
-
-    Returns:
-        True if inpainting was applied, False if unavailable/failed.
-    """
-    be = backend or _get_backend()
-    if be is None:
-        if INPAINT_ENABLED:
-            raise RuntimeError("enabled inpainting backend is unavailable")
-        return False
-
-    img_w, img_h = original_img.size
-    mask = build_inpaint_mask(bubble, (img_w, img_h))
-    if mask is None:
-        raise RuntimeError("enabled inpainting produced no text mask")
-
-    # Crop to bubble bbox + context padding
-    bx1, by1, bx2, by2 = bubble.bbox
-    cx1 = max(0, bx1 - context_pad)
-    cy1 = max(0, by1 - context_pad)
-    cx2 = min(img_w, bx2 + context_pad)
-    cy2 = min(img_h, by2 + context_pad)
-
-    # Pad to multiple of 8 (diffusion models require this)
-    cw = cx2 - cx1
-    ch = cy2 - cy1
-    pad_w = (8 - cw % 8) % 8
-    pad_h = (8 - ch % 8) % 8
-    cx2 = min(img_w, cx2 + pad_w)
-    cy2 = min(img_h, cy2 + pad_h)
-
-    crop_box = (cx1, cy1, cx2, cy2)
-    img_crop = original_img.crop(crop_box)
-    mask_crop = mask.crop(crop_box)
-
-    # Thread-safe inference (GPU not safe for concurrent use)
-    with _infer_lock:
-        try:
-            result_crop = be.inpaint(img_crop, mask_crop)
-        except Exception as error:
-            raise RuntimeError(
-                f"inpainting failed for bubble at {bubble.bbox}"
-            ) from error
-
-    # Composite: paste inpainted pixels onto the target image
-    dest = target_img if target_img is not None else original_img
-    crop_size = img_crop.size  # (width, height)
-
-    # Ensure result matches crop dimensions (backend may return different size)
-    if result_crop.size != crop_size:
-        result_crop = result_crop.resize(crop_size, Image.LANCZOS)
-
-    mask_arr = np.array(mask_crop)
-    result_arr = np.array(result_crop)
-    # Use pixels from the current target (preserves previous inpainting work)
-    target_crop_arr = np.array(dest.crop(crop_box))
-
-    # Only replace pixels where mask is white
-    composite = np.where(
-        mask_arr[:, :, np.newaxis] > 0,
-        result_arr,
-        target_crop_arr,
+    """Compatibility adapter returning whether a safe cleanup was applied."""
+    outcome = cleanup_bubble(
+        original_img, bubble, context_pad, backend, target_img,
     )
-    dest.paste(Image.fromarray(composite.astype(np.uint8)), (cx1, cy1))
-
-    return True
+    bubble.cleanup_method = outcome.method
+    bubble.cleanup_degraded = outcome.degraded
+    if outcome.degraded:
+        bubble.cleanup_method = f"{outcome.method}:degraded"
+    return outcome.applied

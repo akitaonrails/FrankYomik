@@ -3,7 +3,7 @@
   "artifacts": {
     "config": {
       "path": "config.yaml",
-      "sha256": "c1b41dd607a1ac529be7b28fb5140a046e1a1c0d61cfc21e196b970e421305a6"
+      "sha256": "4f2972e8ed527dea2c0fc037d3020b990d2d9704fd677bd4ba80961246c5a41b"
     },
     "manga_detector": {
       "path": "kindle/bubble_detector.py",
@@ -23,7 +23,7 @@
     },
     "manga_pipeline": {
       "path": "kindle/processor.py",
-      "sha256": "87c9885f2f7fcf251c95f8d34800afd9cde41ee093bba831e06741c0d68ea662"
+      "sha256": "7ed083f77f0559472fe1472c31cf5f09964ff345484e6d312d8f6bf5d9672511"
     },
     "manga_renderer": {
       "path": "kindle/text_renderer.py",
@@ -43,7 +43,7 @@
     },
     "webtoon_pipeline": {
       "path": "webtoon/processor.py",
-      "sha256": "874f1c80005d344428162a8f84ce2fdc31dc0eec9922abb65b2d86551aef21f9"
+      "sha256": "03b65b530590918d74ee9d0f98156c1771ab7cf4a4e3c262897c4f1f5eb68d34"
     },
     "webtoon_ocr": {
       "path": "webtoon/ocr.py",
@@ -55,7 +55,7 @@
     },
     "webtoon_inpainter": {
       "path": "webtoon/inpainter.py",
-      "sha256": "24f498de6e382a21807425dfc556373146b7cc0a9bef9836ac216fb462965223"
+      "sha256": "9a8fc8c6cbef89852cfd12f8bbf8d514152788def0e924ddbfadffd1a80e1ca2"
     },
     "dialogue_font": {
       "path": "fonts/KomikaText-Regular.ttf",
@@ -75,7 +75,7 @@
     },
     "python_pipeline_current_backend": {
       "path": "pipeline/current_backend.py",
-      "sha256": "335e8755b82225af1e8835f919520b7731fa13ad2b98a421975d77657df1da33"
+      "sha256": "122a6a323609966408c5413de81be143806674f873793a428e51b8d3fbb53bb9"
     },
     "python_pipeline_document": {
       "path": "pipeline/document.py",
@@ -107,7 +107,7 @@
     },
     "python_worker_job": {
       "path": "worker/job.py",
-      "sha256": "3ea34009f68ee6887c6c46299fec402da65b1aec7bc5c3a77a64c2e67b509312"
+      "sha256": "ccc433d2f89156278b590afe34c0e4e22a04f440404a97682dcf5910d04bcefb"
     },
     "python_worker_main": {
       "path": "worker/main.py",
@@ -131,7 +131,7 @@
     },
     "python_kindle_inpainter": {
       "path": "kindle/inpainter.py",
-      "sha256": "422b120d8b5b851fb8b0e301ed900eb201b6f6db1a0bdbec4e526c5b8f7c9cf9"
+      "sha256": "377eb50db886cef3af1315a1fb8bcf034c2512225b86c429b2312a3bcdebb8aa"
     },
     "python_kindle_text_detector": {
       "path": "kindle/text_detector.py",
@@ -143,11 +143,11 @@
     },
     "python_webtoon_bubble_detector": {
       "path": "webtoon/bubble_detector.py",
-      "sha256": "b2356615b320d0e7c7df1ed1aa103d7b90ab8827ce34567ecba99ccf8801ea86"
+      "sha256": "02a8a2d4fe3d4aa5d77f8070dadd3a97c71600e9f143d2050284c4c02395a325"
     },
     "python_webtoon_config": {
       "path": "webtoon/config.py",
-      "sha256": "628bc3e9962252a90acf44719805e872c1a4cfe71aff7ebeb3fd8278ad95753c"
+      "sha256": "f9035c28e7896c671c5ac6932ca794ffd85927009f68c786db27261be27f600b"
     },
     "python_webtoon_image_utils": {
       "path": "webtoon/image_utils.py",
@@ -200,6 +200,10 @@
     "python_pipeline_translation": {
       "path": "pipeline/translation.py",
       "sha256": "97c8a721c7e567798b52b64bbcfb3949ad36ed3bb3db3381464994e4346f9c28"
+    },
+    "python_pipeline_cleanup": {
+      "path": "pipeline/cleanup.py",
+      "sha256": "2f00f03d091c125a175b2279e15e2e6cd919aabfba89d42b5653935e464c7a2a"
     }
   },
   "stages": {
@@ -207,7 +211,7 @@
       "backend": "rtdetr-v2",
       "implementation": {
         "id": "kindle.bubble_detector",
-        "revision": "sha256:447b5b8134e9ce54641318be7c516267698f1ef4b6ea0c89148adafc86a56ebc",
+        "revision": "sha256:4fa0079c906bcf07db8d0867dac9ce23e361364c711bb84bbdc21ac7a24d4945",
         "component_artifacts": [
           "manga_detector",
           "manga_pipeline",
@@ -233,7 +237,7 @@
       "backend": "manga-ocr",
       "implementation": {
         "id": "pipeline.japanese-ocr-router",
-        "revision": "sha256:dc494fedd89e3471b953965131d024a655afb41cc9c32aa3687e6ddf929bec67",
+        "revision": "sha256:1d417ac2736714d0f193267ca9f8253309501a93944bed1223773c8cb6fbd247",
         "component_artifacts": [
           "config",
           "manga_ocr",
@@ -315,7 +319,7 @@
       "backend": "ollama-chat",
       "implementation": {
         "id": "page-translation-v1",
-        "revision": "sha256:d5c15c8856e39205e3160b664360bafe3957bc7d7b0e3d483be141904d4e680f",
+        "revision": "sha256:6f9046ad7582e48c21f2ea81e5ab9bcfae719094419415160df5b026e8769689",
         "component_artifacts": [
           "manga_translator",
           "python_pipeline_translation",
@@ -361,16 +365,45 @@
     "manga.cleanup": {
       "backend": "manga-cleanup-policy",
       "implementation": {
-        "id": "kindle.processor",
-        "revision": "sha256:f6708ae5adbc8c8395e4549dce28aec23ae5324652c773f6655dd288102c94b7"
+        "id": "pipeline.cleanup+kindle.inpainter",
+        "revision": "sha256:084d544591796adb2095563eaac8e8afac16864632d7995856a0aa5045b6d799",
+        "component_artifacts": [
+          "config",
+          "manga_pipeline",
+          "python_kindle_inpainter",
+          "python_pipeline_cleanup",
+          "python_worker_job"
+        ]
       },
-      "model": null,
+      "model": {
+        "id": "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt",
+        "weights_revision": "sha256:7ba7aa7ac37a4d41fdbbeba3a2af7ead18058552997e3a3cd1a3b2210c9e6b4c",
+        "runtime_package": "simple-lama-inpainting==0.1.0"
+      },
       "prompt": null,
       "output_config": {
         "artwork_text": "region_fill",
         "bubble": "stroke_clear",
         "inpainting_enabled": false,
-        "inpainting_pad": 20
+        "inpainting_pad": 20,
+        "max_tiles": 16,
+        "max_tile_width": 1024,
+        "max_tile_height": 1024,
+        "max_tile_pixels": 1048576,
+        "max_page_pixels": 40000000,
+        "max_wall_seconds": 30,
+        "seed": 0,
+        "degraded_behavior": "last_safe_cleanup",
+        "cleanup_mask_persisted": false,
+        "model_process": "persistent_supervised_spawn",
+        "deadline_scope": [
+          "lock_wait",
+          "model_load",
+          "ipc",
+          "inference"
+        ],
+        "invalid_output_policy": "rollback_degraded_non_cacheable_fill",
+        "transient_failure_policy": "kill_reset_rollback_degraded_non_cacheable_fill"
       }
     },
     "manga.render": {
@@ -449,7 +482,7 @@
       "backend": "rtdetr-v2",
       "implementation": {
         "id": "webtoon.processor",
-        "revision": "sha256:bd3e4d13a4eb678ca5233a1d21a1cf6cd0216315545dfc54d686faa2dc48e4e1",
+        "revision": "sha256:9cb92f5a6337606064cb138edfff8c609ba3d17e6e08d2f38f8a98abdd3eb928",
         "component_artifacts": [
           "manga_detector",
           "webtoon_pipeline",
@@ -496,7 +529,7 @@
       "backend": "ollama-chat",
       "implementation": {
         "id": "page-translation-v1",
-        "revision": "sha256:7a940a54f04cc7319a23a8c9e9366fd250341b4693ca316a962af911bd29c559",
+        "revision": "sha256:94151bbe1b096a14be42c3ed7342fc619056712aa43569499f10f1edc9a822ea",
         "component_artifacts": [
           "manga_translator",
           "webtoon_translator",
@@ -535,18 +568,24 @@
     "webtoon.cleanup": {
       "backend": "webtoon-inpainter",
       "implementation": {
-        "id": "webtoon.inpainter",
-        "revision": "sha256:24f498de6e382a21807425dfc556373146b7cc0a9bef9836ac216fb462965223"
+        "id": "pipeline.cleanup+webtoon.inpainter",
+        "revision": "sha256:0bbb356f8efb04b403d93aa2fdead792d89d3a8bc098ec899848ef7b1bfbf023",
+        "component_artifacts": [
+          "config",
+          "python_pipeline_cleanup",
+          "python_webtoon_config",
+          "python_webtoon_bubble_detector",
+          "webtoon_inpainter",
+          "webtoon_pipeline",
+          "python_worker_job"
+        ]
       },
       "model": {
         "id": "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt",
         "weights_revision": "sha256:7ba7aa7ac37a4d41fdbbeba3a2af7ead18058552997e3a3cd1a3b2210c9e6b4c",
         "runtime_package": "simple-lama-inpainting==0.1.0"
       },
-      "prompt": {
-        "id": "clean-bubble-v1",
-        "sha256": "24f498de6e382a21807425dfc556373146b7cc0a9bef9836ac216fb462965223"
-      },
+      "prompt": null,
       "output_config": {
         "enabled": true,
         "model": "lama",
@@ -554,8 +593,32 @@
         "text_pad": 24,
         "text_dilate": 6,
         "context_pad": 20,
-        "num_inference_steps": 28,
-        "prompt": "clean empty speech bubble interior, flat color"
+        "max_tiles": 16,
+        "max_tile_width": 1024,
+        "max_tile_height": 1024,
+        "max_tile_pixels": 1048576,
+        "max_page_pixels": 40000000,
+        "max_wall_seconds": 30,
+        "min_host_available_mb": 512,
+        "min_gpu_available_mb": 512,
+        "seed": 0,
+        "uniform_stddev": 8,
+        "uniform_range": 28,
+        "degraded_behavior": "last_safe_cleanup",
+        "cleanup_mask_persisted": false,
+        "policy_order": [
+          "uniform_fill",
+          "lama_tiles"
+        ],
+        "model_process": "persistent_supervised_spawn",
+        "deadline_scope": [
+          "lock_wait",
+          "model_load",
+          "ipc",
+          "inference"
+        ],
+        "invalid_output_policy": "rollback_degraded_non_cacheable_fill",
+        "transient_failure_policy": "kill_reset_rollback_degraded_non_cacheable_fill"
       }
     },
     "webtoon.render": {

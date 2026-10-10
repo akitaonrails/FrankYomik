@@ -18,6 +18,7 @@ from kindle.processor import (
     transform_furigana,
     transform_translate,
 )
+from kindle.inpainter import MangaCleanupOutcome
 
 
 @pytest.fixture(autouse=True)
@@ -190,3 +191,25 @@ class TestRenderPageImage:
         assert output.startswith(b"\x89PNG")
         clear_again.assert_not_called()
         render.assert_called_once()
+
+    def test_failed_artwork_inpaint_is_not_credited(self):
+        source = Image.new("RGB", (100, 140), "white")
+        region = BubbleResult(
+            bbox=(20, 20, 70, 100), ocr_text="ドン", is_valid=True,
+            transformed="BOOM", is_artwork_text=True,
+        )
+        page = PageResult(
+            image_path="", name="page", img_pil=source,
+            bubble_results=[region],
+        )
+        outcome = MangaCleanupOutcome(
+            source, applied=False, degraded=True, reason="backend_failure",
+        )
+        with (
+            patch("kindle.processor.MANGA_INPAINT_ENABLED", True),
+            patch("kindle.inpainter.cleanup_region", return_value=outcome),
+        ):
+            cleanup_page(page, PipelineMode.TRANSLATE)
+        assert page.render_plan.artwork_inpainted == frozenset()
+        assert region.cleanup_method is None
+        assert region.cleanup_degraded is True

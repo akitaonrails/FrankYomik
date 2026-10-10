@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "audited_at": "2026-10-10",
+  "implementation": {
+    "repository": "https://github.com/koharu-rs/koharu",
+    "revision": "2c78c0cd6eeec4dbf607f0a22e3a7e1f932b6ff3",
+    "source": "crates/koharu-ml/src/flux2_klein",
+    "license": "MIT OR Apache-2.0",
+    "remote_binary_sha256": "61c8ce97dcfd010f2c784b0999f14c73bc5fc168de8468f079a8572285238154"
+  },
+  "artifacts": [
+    {
+      "repository": "unsloth/FLUX.2-klein-4B-GGUF",
+      "revision": "0084d1df98e2e2137fe776d55170bc4792ec1d66",
+      "path": "flux-2-klein-4b-Q4_K_M.gguf",
+      "bytes": 2604311104,
+      "sha256": "0b25d143c8469b342bc5af3bce92b783bf6b0636d285f7b2f75e38af63af9a15",
+      "license": "Apache-2.0",
+      "role": "quantized FLUX.2 Klein 4B transformer"
+    },
+    {
+      "repository": "black-forest-labs/FLUX.2-small-decoder",
+      "revision": "a3efc24f613ef42d9428af62fdbd6f5fd8856c4a",
+      "path": "full_encoder_small_decoder.safetensors",
+      "bytes": 249519092,
+      "sha256": "ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62",
+      "license": "Apache-2.0",
+      "role": "VAE encoder and distilled decoder"
+    },
+    {
+      "repository": "unsloth/Qwen3-4B-GGUF",
+      "revision": "22c9fc8a8c7700b76a1789366280a6a5a1ad1120",
+      "path": "Qwen3-4B-Q4_K_M.gguf",
+      "bytes": 2497281312,
+      "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a",
+      "license": "Apache-2.0",
+      "role": "text encoder"
+    }
+  ],
+  "total_weight_bytes": 5351111708,
+  "verification": {
+    "hugging_face_api_blobs": true,
+    "remote_cached_files_rehashed": true,
+    "remote_host": "192.168.0.90",
+    "cache_root": "/var/opt/docker/frank/yomik-eval/cache/koharu"
+  }
+}

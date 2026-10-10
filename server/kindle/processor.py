@@ -73,6 +73,8 @@ class BubbleResult:
     ocr_alternatives: tuple[OcrAlternative, ...] = ()
     ocr_routing_reason: str | None = None
     ocr_degraded: bool = False
+    cleanup_method: str | None = None
+    cleanup_degraded: bool = False
 
 
 @dataclass(frozen=True)
@@ -389,9 +391,13 @@ def cleanup_page(page: PageResult, mode: PipelineMode,
             continue
         if br.is_artwork_text and mode == PipelineMode.TRANSLATE:
             if MANGA_INPAINT_ENABLED:
-                from .inpainter import inpaint_region
-                page.output_img = inpaint_region(page.output_img, br.bbox)
-                artwork_inpainted.add(i)
+                from .inpainter import cleanup_region
+                outcome = cleanup_region(page.output_img, br.bbox)
+                page.output_img = outcome.image
+                br.cleanup_degraded = outcome.degraded
+                if outcome.applied:
+                    artwork_inpainted.add(i)
+                    br.cleanup_method = "lama_tiles"
             continue
         clear_text_strokes(page.output_img, br.bbox, mask=br.mask)
 

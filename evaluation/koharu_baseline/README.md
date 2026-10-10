@@ -27,6 +27,10 @@ The current translation baseline, deterministic page-batch contract fixture,
 failure behavior, privacy boundary, and Phase 3 promotion gates are recorded in
 [`phase3_translation_evaluation.md`](phase3_translation_evaluation.md).
 
+The cleanup policy audit, frozen eight-case recomputation, FLUX.2 Klein model
+manifest, Strix runtime evidence, and Phase 4 promotion gates are recorded in
+[`phase4_cleanup_evaluation.md`](phase4_cleanup_evaluation.md).
+
 ## What should be compared
 
 ### 1. Detection and segmentation

@@ -16,6 +16,9 @@ from pipeline.detection import SemanticDetection
 from pipeline.document import BoundingBox, OcrAlternative, Polygon, Provenance
 from pipeline.translation import PageTranslationResult, TranslationValue
 from webtoon.processor import WebtoonPageResult, detect_bubbles_rtdetr
+from webtoon.bubble_detector import WebtoonBubble
+from webtoon.inpainter import build_effective_cleanup_mask, cleanup_bubble
+from webtoon.ocr import TextDetection
 from worker.consumer import STREAM_HIGH, Consumer
 from worker.job import (
     PipelineDependencies,
@@ -26,6 +29,48 @@ from worker.job import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+class _SolidCleanupBackend:
+    def load(self):
+        return True
+
+    def inpaint(self, image, _mask):
+        return Image.new("RGB", image.size, (7, 8, 9))
+
+    def unload(self):
+        return None
+
+
+def test_production_cleanup_stage_preserves_pixels_outside_effective_mask():
+    pixels = np.indices((80, 100)).sum(axis=0).astype(np.uint8)
+    original_array = np.stack((pixels, 255 - pixels, pixels // 2), axis=2)
+    original = Image.fromarray(original_array)
+    target = original.copy()
+    detection = TextDetection(
+        bbox_poly=[[30, 25], [60, 25], [60, 45], [30, 45]],
+        text="테스트", confidence=0.9, bbox_rect=(30, 25, 60, 45),
+    )
+    semantic_mask = np.zeros((80, 100), dtype=np.uint8)
+    semantic_mask[10:70, 10:90] = 255
+    bubble = WebtoonBubble(
+        bbox=(10, 10, 90, 70), text_regions=[detection],
+        has_bubble_boundary=True, bg_color=(255, 255, 255),
+        bubble_mask=semantic_mask,
+    )
+
+    with patch("webtoon.inpainter.INPAINT_ENABLED", True):
+        outcome = cleanup_bubble(
+            original, bubble, backend=_SolidCleanupBackend(), target_img=target,
+        )
+
+    effective_mask = np.asarray(
+        build_effective_cleanup_mask(original, bubble),
+    ) > 0
+    assert outcome.method == "lama_tiles"
+    assert np.array_equal(
+        np.asarray(target)[~effective_mask], original_array[~effective_mask],
+    )
 
 
 @dataclass
@@ -264,6 +309,33 @@ def _fake_dependencies(
         cleanup_webtoon=lambda _page: count("cleanup"),
         render_webtoon=lambda page: count("render") or encode(page.img_pil),
     )
+
+
+def test_degraded_uniform_cleanup_is_truthful_and_non_cacheable():
+    calls: dict[str, int] = {}
+    deps = _fake_dependencies("webtoon", calls)
+
+    def cleanup(page) -> None:
+        calls["cleanup"] = calls.get("cleanup", 0) + 1
+        for region in page.regions:
+            region.bubble.cleanup_method = "uniform_fill:degraded"
+            region.bubble.cleanup_degraded = True
+
+    result = process_job(ProcessingJob(
+        job_id="cleanup-degraded", pipeline="webtoon",
+        image_bytes=_png_bytes(), source_hash="e" * 64,
+        target_lang="pt-br",
+    ), dependencies=replace(deps, cleanup_webtoon=cleanup))
+
+    assert result.status == "completed", result.error
+    assert result.cacheable is False
+    cleanup_metadata = result.metadata_payload["regions"][1]["cleanup"]
+    assert cleanup_metadata["method"] == "uniform_fill:degraded"
+    assert cleanup_metadata["provenance"]["backend"] == (
+        "deterministic-uniform-fill"
+    )
+    assert "model" not in cleanup_metadata["provenance"]
+    assert "mask" not in cleanup_metadata
 
 
 def _message_fields(
