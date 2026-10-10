@@ -29,6 +29,13 @@ const (
 	queuedDedupStaleThreshold    = 2 * time.Minute
 )
 
+const releaseDedupReservationLua = `
+if redis.call("HGET", KEYS[1], ARGV[1]) == ARGV[2] then
+  return redis.call("HDEL", KEYS[1], ARGV[1])
+end
+return 0
+`
+
 // Queue handles Redis stream operations for job submission.
 type Queue struct {
 	rdb              *redis.Client
@@ -104,10 +111,33 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 	// revisions into the same result key when submissions share a millisecond.
 	identityHash := sha256.Sum256([]byte(q.pipelineRevision + "\x00" + targetLang))
 	jobID := fmt.Sprintf("job-%s-%x-%d", hash[:12], identityHash[:4], time.Now().UnixMilli())
+	reservedDedup := false
+	if !forceNew {
+		reserved, err := q.rdb.HSetNX(ctx, dedupKey, dedupField, jobID).Result()
+		if err != nil {
+			return "", false, fmt.Errorf("reserving dedup identity: %w", err)
+		}
+		if !reserved {
+			existingJobID, err := q.rdb.HGet(ctx, dedupKey, dedupField).Result()
+			if err != nil {
+				return "", false, fmt.Errorf("reading dedup reservation: %w", err)
+			}
+			q.updateLatestMarker(ctx, priority, meta)
+			return existingJobID, true, nil
+		}
+		reservedDedup = true
+		if err := q.rdb.Expire(ctx, dedupKey, dedupTTL).Err(); err != nil {
+			q.releaseDedupReservation(ctx, dedupField, jobID)
+			return "", false, fmt.Errorf("expiring dedup reservation: %w", err)
+		}
+	}
 
 	// Store image bytes
 	imageKey := imageKeyPrefix + hash
 	if err := q.rdb.Set(ctx, imageKey, imageBytes, imageTTL).Err(); err != nil {
+		if reservedDedup {
+			q.releaseDedupReservation(ctx, dedupField, jobID)
+		}
 		return "", false, fmt.Errorf("storing image: %w", err)
 	}
 
@@ -171,20 +201,21 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 		err = q.rdb.XAdd(ctx, addArgs).Err()
 	}
 	if err != nil {
+		if reservedDedup {
+			q.releaseDedupReservation(ctx, dedupField, jobID)
+		}
 		return "", false, fmt.Errorf("enqueuing job: %w", err)
 	}
 
-	// Store dedup mapping (keyed by hash + pipeline)
-	if !forceNew {
-		if err := q.rdb.HSet(ctx, dedupKey, dedupField, jobID).Err(); err != nil {
-			log.Printf("WARN: dedup HSet: %v", err)
-		}
-		if err := q.rdb.Expire(ctx, dedupKey, dedupTTL).Err(); err != nil {
-			log.Printf("WARN: dedup Expire: %v", err)
-		}
-	}
-
 	return jobID, false, nil
+}
+
+func (q *Queue) releaseDedupReservation(ctx context.Context, field, jobID string) {
+	if err := q.rdb.Eval(
+		ctx, releaseDedupReservationLua, []string{dedupKey}, field, jobID,
+	).Err(); err != nil {
+		log.Printf("WARN: releasing dedup reservation: %v", err)
+	}
 }
 
 type latestMarker struct {

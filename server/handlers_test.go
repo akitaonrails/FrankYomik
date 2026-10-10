@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1899,6 +1900,56 @@ func TestQueuePipelineRevisionScopesDedupAndStream(t *testing.T) {
 	}
 	if got := msgs[1].Values["pipeline_revision"]; got != "pipeline-b" {
 		t.Fatalf("second stream revision = %v", got)
+	}
+}
+
+func TestQueueConcurrentSubmissionsReserveOneJob(t *testing.T) {
+	_, rdb := newTestServer(t)
+	ctx := context.Background()
+	queue := NewQueueWithRevision(rdb, "pipeline-concurrent")
+	imageBytes := makePNGBytes()
+	meta := &JobMetadata{TargetLang: "en"}
+
+	const submissions = 20
+	start := make(chan struct{})
+	type outcome struct {
+		jobID string
+		hit   bool
+		err   error
+	}
+	outcomes := make(chan outcome, submissions)
+	var ready sync.WaitGroup
+	ready.Add(submissions)
+	for range submissions {
+		go func() {
+			ready.Done()
+			<-start
+			jobID, hit, err := queue.SubmitJob(
+				ctx, imageBytes, "manga_translate", "high", meta,
+			)
+			outcomes <- outcome{jobID, hit, err}
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	jobIDs := map[string]bool{}
+	misses := 0
+	for range submissions {
+		result := <-outcomes
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		jobIDs[result.jobID] = true
+		if !result.hit {
+			misses++
+		}
+	}
+	if len(jobIDs) != 1 || misses != 1 {
+		t.Fatalf("job IDs=%d initial submissions=%d, want 1 each", len(jobIDs), misses)
+	}
+	if length := rdb.XLen(ctx, streamHigh).Val(); length != 1 {
+		t.Fatalf("stream messages = %d, want 1", length)
 	}
 }
 
