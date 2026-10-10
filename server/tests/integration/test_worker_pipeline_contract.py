@@ -687,7 +687,9 @@ def test_artwork_text_uses_cleanup_mask_and_specialized_document_renderer():
         page.output_img.paste("white", (20, 30, 90, 100))
         page.render_plan = SimpleNamespace(base_font_size=18, font_sizes={0: 18})
         mask = np.zeros((160, 120), dtype=np.uint8)
-        mask[30:100, 20:90] = 255
+        # Cleanup dilation may extend beyond the detector box. The document
+        # region encloses the persisted mask while retaining the render target.
+        mask[25:105, 15:95] = 255
         page.bubble_results[0].cleanup_mask = mask
         page.bubble_results[0].cleanup_method = "region_fill"
 
@@ -702,6 +704,8 @@ def test_artwork_text_uses_cleanup_mask_and_specialized_document_renderer():
     assert calls["artwork_inpainted"] is True
     region = result.metadata_payload["regions"][0]
     assert region["kind"] == "artwork_text"
+    assert region["bbox"] == [15, 25, 95, 105]
+    assert region["render"]["bbox"] == [20, 30, 90, 100]
     assert region["cleanup"]["method"] == "region_fill"
     assert region["cleanup"]["mask"]["encoding"] == "png-mask-l1"
     assert region["render"]["fit_status"] == "fit"

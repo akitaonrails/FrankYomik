@@ -167,7 +167,7 @@
     },
     "python_worker_job": {
       "path": "worker/job.py",
-      "sha256": "beca8ba260472f3303176c280162b8c9bdd0b6694c7caa992e207194fc9ad94b"
+      "sha256": "d7fc789625f900b23f20cf84473e1509544706fa312bd7de78649b8acca91fac"
     },
     "python_worker_main": {
       "path": "worker/main.py",
@@ -249,7 +249,7 @@
       "backend": "manga-ocr",
       "implementation": {
         "id": "pipeline.japanese-ocr-router",
-        "revision": "sha256:70f3d2bc589b095d1c0f3de1fb8af0be84d8a048ca96993b1662a2da9d90b1c3",
+        "revision": "sha256:74c40fefdf6504f6b391310a4512604da871f4c5c6c968400b30ecc3693dc32f",
         "component_artifacts": [
           "config",
           "manga_ocr",
@@ -331,7 +331,7 @@
       "backend": "ollama-chat",
       "implementation": {
         "id": "page-translation-v1",
-        "revision": "sha256:d6fe42d9b53fa902d02c6bdc70cbebdc282a47e6df77c51827edc441ecba7ba2",
+        "revision": "sha256:d8bda2cd00b6c0d828709dc7d2089e7fb2728d6a923b9773c217c260db756910",
         "component_artifacts": [
           "manga_translator",
           "python_pipeline_translation",
@@ -378,7 +378,7 @@
       "backend": "manga-cleanup-policy",
       "implementation": {
         "id": "pipeline.cleanup+kindle.inpainter",
-        "revision": "sha256:da443d70deb1e2330ed49cd72e7d771022509aed35bf6f61d656779d34738379",
+        "revision": "sha256:4c86bfb2a3d33c1496ff301a429033ca1c561b3993c9839200620ef755063c28",
         "component_artifacts": [
           "config",
           "manga_pipeline",
@@ -425,7 +425,7 @@
       "backend": "manga-renderer",
       "implementation": {
         "id": "kindle.text_renderer",
-        "revision": "sha256:ad68651204e9624f0e925bd6e581c681d4fa5f6117b56540984a20cc228467fb",
+        "revision": "sha256:a2559af21f7112e8d86c9dbf8199206555534dc773baeb55b64f02d7ddda72ef",
         "component_artifacts": [
           "config",
           "dialogue_font",
@@ -554,7 +554,7 @@
       "backend": "ollama-chat",
       "implementation": {
         "id": "page-translation-v1",
-        "revision": "sha256:44a56dac4e7ddd4fc9d083bb7c0a3fdcca828ab7864fe613139a9c84773b5f5a",
+        "revision": "sha256:e54d9b3c50a3e3693fd8a8675338a4118de108145becfc1bab24efe62af236c2",
         "component_artifacts": [
           "manga_translator",
           "webtoon_translator",
@@ -594,7 +594,7 @@
       "backend": "webtoon-inpainter",
       "implementation": {
         "id": "pipeline.cleanup+webtoon.inpainter",
-        "revision": "sha256:0d7acb23c5e6d4510efab78a2d39b8a886c8b35f106b91f465d255d1d78f05a4",
+        "revision": "sha256:25d5513c52bb421999736ebbf298c4e7cdb74ff040f7134c354c7ac2cb94eff9",
         "component_artifacts": [
           "config",
           "python_pipeline_artifacts",
@@ -652,7 +652,7 @@
       "backend": "webtoon-renderer",
       "implementation": {
         "id": "webtoon.processor",
-        "revision": "sha256:7a9540fcc82eb0c1d20a4594ded830ff3624c723b5832161b96f9eb625f82721",
+        "revision": "sha256:d5d8c6bf4d7afa003689ae4a03fe8f1b6cf28f42a751e3b82e27436e2e6bf560",
         "component_artifacts": [
           "config",
           "dialogue_font",

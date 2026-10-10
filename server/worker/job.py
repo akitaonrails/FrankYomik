@@ -602,6 +602,38 @@ def _cleanup_mask_reference(
     return store_mask_artifact(selected, artifacts)
 
 
+def _enclosing_region_bbox(
+    bbox: tuple[int, int, int, int] | list[int],
+    width: int,
+    height: int,
+    *,
+    semantic_bbox: BoundingBox | None = None,
+    masks: tuple[Any, ...] = (),
+) -> tuple[int, int, int, int]:
+    """Return page-clipped bounds enclosing the region and persisted masks."""
+    boxes = [tuple(int(value) for value in bbox)]
+    if semantic_bbox is not None:
+        boxes.append(tuple(semantic_bbox.as_list()))
+    for mask in masks:
+        if mask is None:
+            continue
+        pixels = np.asarray(mask)
+        if pixels.shape != (height, width):
+            raise ValueError("region mask dimensions must match the page")
+        ys, xs = np.nonzero(pixels)
+        if xs.size:
+            boxes.append((
+                int(xs.min()), int(ys.min()),
+                int(xs.max()) + 1, int(ys.max()) + 1,
+            ))
+    return (
+        max(0, min(box[0] for box in boxes)),
+        max(0, min(box[1] for box in boxes)),
+        min(width, max(box[2] for box in boxes)),
+        min(height, max(box[3] for box in boxes)),
+    )
+
+
 def _validate_render_artifacts(
     document: PageDocument,
     source: Any,
@@ -1041,11 +1073,20 @@ def _process_manga(job: ProcessingJob,
         confidence = raw.get("score") if isinstance(raw, dict) else None
         if not isinstance(confidence, (int, float)):
             confidence = None
+        cleanup_mask = getattr(br, "cleanup_mask", None)
+        region_bbox = _enclosing_region_bbox(
+            br.bbox, img_w, img_h,
+            semantic_bbox=None if semantic is None else semantic.bbox,
+            masks=(
+                cleanup_mask,
+                None if semantic is None else semantic.mask,
+            ),
+        )
         regions.append(_build_region(
             page_id=page_id,
             collisions=collisions,
             kind=kind,
-            bbox=br.bbox,
+            bbox=region_bbox,
             reading_order=reading_order,
             ocr_text=br.ocr_text,
             is_valid=bool(br.is_valid),
@@ -1065,7 +1106,7 @@ def _process_manga(job: ProcessingJob,
             cleanup_method=(getattr(br, "cleanup_method", None)
                             or _cleanup_method(deps, job.pipeline, kind)),
             cleanup_mask=_cleanup_mask_reference(
-                getattr(br, "cleanup_mask", None), img_w, img_h,
+                cleanup_mask, img_w, img_h,
                 artifact_payloads,
             ),
             vertical=mode_name == "furigana",
@@ -1075,6 +1116,7 @@ def _process_manga(job: ProcessingJob,
                     idx, page.render_plan.base_font_size,
                 )
             ),
+            render_bbox=br.bbox,
             region_id=region_id,
             parent_id=(None if semantic is None or semantic.parent_id is None
                        else semantic_ids[semantic.parent_id]),
@@ -1387,11 +1429,20 @@ def _process_webtoon(job: ProcessingJob,
         transformed_obj = None
         if region.english:
             transformed_obj = {"kind": "text", "value": region.english}
+        cleanup_mask = getattr(bubble, "cleanup_mask", None)
+        region_bbox = _enclosing_region_bbox(
+            bubble.bbox, img_w, img_h,
+            semantic_bbox=(semantic.bbox if is_first_semantic_region else None),
+            masks=(
+                cleanup_mask,
+                semantic.mask if is_first_semantic_region else None,
+            ),
+        )
         regions.append(_build_region(
             page_id=page_id,
             collisions=collisions,
             kind=kind,
-            bbox=bubble.bbox,
+            bbox=region_bbox,
             reading_order=reading_order,
             ocr_text=(region.source_text or bubble.combined_text),
             is_valid=bool(region.is_valid),
@@ -1407,7 +1458,7 @@ def _process_webtoon(job: ProcessingJob,
             cleanup_method=(getattr(bubble, "cleanup_method", None)
                             or _cleanup_method(deps, job.pipeline, "bubble")),
             cleanup_mask=_cleanup_mask_reference(
-                getattr(bubble, "cleanup_mask", None), img_w, img_h,
+                cleanup_mask, img_w, img_h,
                 artifact_payloads,
             ),
             render_bbox=render_bbox,
