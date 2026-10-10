@@ -25,6 +25,7 @@ def _fake_tools(
     build_failure: bool = False,
     use_forward: bool = False,
     lookup_failure: bool = False,
+    sync_failure: bool = False,
 ) -> tuple[dict[str, str], Path]:
     tools = tmp_path / "tools"
     tools.mkdir()
@@ -88,6 +89,13 @@ esac
         f"""#!/bin/sh
 printf 'ssh %s\\n' "$*" >> '{log}'
 case "$*" in
+  *.release-*)
+    cat >/dev/null || true
+    if [ "${{FAKE_SYNC_FAILURE:-0}}" = 1 ]; then exit 55; fi
+    exit 0
+    ;;
+esac
+case "$*" in
   *\" -O exit \"*)
     while [ "$#" -gt 0 ]; do
       if [ "$1" = -S ]; then control="$2"; shift 2; continue; fi
@@ -129,6 +137,7 @@ cat >/dev/null || true
             "FAKE_EXISTING_MATCH": "1" if existing_match else "0",
             "FAKE_BUILD_FAILURE": "1" if build_failure else "0",
             "FAKE_LOOKUP_FAILURE": "1" if lookup_failure else "0",
+            "FAKE_SYNC_FAILURE": "1" if sync_failure else "0",
         }
     )
     if use_forward:
@@ -166,6 +175,14 @@ def test_deploy_records_and_uses_verified_digests(tmp_path: Path) -> None:
     assert f"API_IMAGE='registry.remote/project/frank-yomik-api@{API_DIGEST}'" in calls
     assert f"WORKER_IMAGE='registry.remote/project/frank-yomik-worker-rocm@{WORKER_DIGEST}'" in calls
     assert "--no-deps --force-recreate --scale worker=2 api worker" in calls
+    assert calls.count(".release-") == 3
+    assert "docker compose -f docker-compose.prod.yml" in calls
+    assert "docker compose up" not in calls
+    assert "docker compose ps" not in calls
+    assert f"PIPELINE_REVISION='{PIPELINE}'" in calls
+    assert calls.index("docker-compose.prod.yml.release-") < calls.index(
+        "docker compose -f docker-compose.prod.yml"
+    )
     assert "compose down" not in calls
     record = json.loads((tmp_path / "manifests/v-test.json").read_text())
     assert record["source_revision"] == SOURCE
@@ -304,3 +321,21 @@ def test_deploy_fails_closed_on_transient_release_tag_lookup(tmp_path: Path) -> 
     assert "docker tag" not in calls
     assert "docker push registry.test/project/frank-yomik-api:v-test" not in calls
     assert "ssh " not in calls
+
+
+def test_deploy_sync_failure_stops_before_remote_pull_or_recreation(tmp_path: Path) -> None:
+    env, log = _fake_tools(tmp_path, sync_failure=True)
+    result = subprocess.run(
+        [str(ROOT / "bin/deploy"), "v-test", "rocm"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    calls = log.read_text()
+    assert calls.count(".release-") == 1
+    assert "docker pull" not in calls
+    assert "docker compose" not in calls

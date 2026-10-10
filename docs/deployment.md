@@ -58,7 +58,14 @@ AUTH_TOKEN=... bin/deploy v2.0.0 rocm
 The command requires a clean worktree. It refuses an existing release tag if
 the new image digest differs, verifies both OCI revision labels locally and on
 the host, and writes the resulting JSON record under `release-manifests/`
-locally and beside the remote Compose project. Because the homelab registry is
+locally and beside the remote Compose project. Before any service recreation,
+it uploads `docker-compose.prod.yml`, `docker-compose.v1-rollback.yml`, and
+`config.prod.yaml` to temporary files in the remote project, verifies their
+SHA-256 values, and atomically renames them. The remote `.env` is never copied
+or replaced. Every production command explicitly selects
+`docker-compose.prod.yml` and supplies the derived `PIPELINE_REVISION`.
+
+Because the homelab registry is
 HTTP, the command opens a temporary local port for pushes. The host prohibits
 native OpenSSH TCP forwarding, so a bounded local proxy relays each registry
 connection through an authenticated SSH command to the registry address. It
@@ -80,6 +87,7 @@ For a manual restart, copy the `deployed` references from that release manifest:
 cd /var/opt/docker/frank/yomik
 export API_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-api@sha256:<digest>'
 export WORKER_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-worker-rocm@sha256:<digest>'
+export PIPELINE_REVISION='sha256:<derived-revision>'
 docker compose -f docker-compose.prod.yml pull api worker
 docker compose -f docker-compose.prod.yml up -d --no-deps \
   --force-recreate --scale worker=2 api worker

@@ -309,6 +309,21 @@ publish_image() {
   printf '%s\n' "${release_digest}"
 }
 
+sync_remote_file() {
+  local local_path="$1"
+  local remote_name="$2"
+  local expected_sha remote_tmp
+  expected_sha="$(sha256sum "${local_path}" | awk '{print $1}')" || return 1
+  remote_tmp=".${remote_name}.release-${BASHPID}"
+  ssh_cmd "set -eu; cd '${REMOTE_DIR}'; tmp='${remote_tmp}'; \
+    trap 'rm -f \"\$tmp\"' EXIT; cat >\"\$tmp\"; \
+    actual=\$(sha256sum \"\$tmp\" | awk '{print \$1}'); \
+    test \"\$actual\" = '${expected_sha}'; chmod 0644 \"\$tmp\"; \
+    mv -f -- \"\$tmp\" '${remote_name}'; trap - EXIT; \
+    test \"\$(sha256sum '${remote_name}' | awk '{print \$1}')\" = '${expected_sha}'" \
+    <"${local_path}"
+}
+
 cd "${ROOT}"
 if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
   echo "Refusing release build from a dirty worktree." >&2
@@ -341,6 +356,11 @@ WORKER_PUSH_REF="${REGISTRY}/frank-yomik-worker-rocm@${WORKER_DIGEST}"
 API_IMAGE="${REMOTE_REGISTRY}/frank-yomik-api@${API_DIGEST}"
 WORKER_IMAGE="${REMOTE_REGISTRY}/frank-yomik-worker-rocm@${WORKER_DIGEST}"
 
+echo "==> Atomically syncing verified production descriptors"
+sync_remote_file docker-compose.prod.yml docker-compose.prod.yml
+sync_remote_file docker-compose.v1-rollback.yml docker-compose.v1-rollback.yml
+sync_remote_file config.prod.yaml config.prod.yaml
+
 echo "==> Pulling and verifying exact release digests on ${SERVER}"
 ssh_cmd "set -eu; docker pull '${API_IMAGE}' >/dev/null; docker pull '${WORKER_IMAGE}' >/dev/null; \
   case \"\$(docker image inspect '${API_IMAGE}' --format '{{json .RepoDigests}}')\" in *'${API_DIGEST}'*) ;; *) exit 1 ;; esac; \
@@ -352,12 +372,15 @@ ssh_cmd "set -eu; docker pull '${API_IMAGE}' >/dev/null; docker pull '${WORKER_I
 
 echo "==> Recreating API and two workers without restarting Redis or tunnel"
 ssh_cmd "cd '${REMOTE_DIR}' && API_IMAGE='${API_IMAGE}' WORKER_IMAGE='${WORKER_IMAGE}' \
-  docker compose up -d --no-deps --force-recreate --scale worker=2 api worker"
+  PIPELINE_REVISION='${PIPELINE_REVISION}' docker compose -f docker-compose.prod.yml \
+  up -d --no-deps --force-recreate --scale worker=2 api worker"
 
 echo "==> Verifying deployed container image digests"
 ssh_cmd "set -eu; cd '${REMOTE_DIR}'; \
   test \"\$(docker inspect yomik-api --format '{{.Image}}')\" = \"\$(docker image inspect '${API_IMAGE}' --format '{{.Id}}')\"; \
-  workers=\$(docker compose ps -q worker); test \"\$(printf '%s\n' \${workers} | sed '/^$/d' | wc -l)\" -eq 2; \
+  workers=\$(API_IMAGE='${API_IMAGE}' WORKER_IMAGE='${WORKER_IMAGE}' PIPELINE_REVISION='${PIPELINE_REVISION}' \
+    docker compose -f docker-compose.prod.yml ps -q worker); \
+  test \"\$(printf '%s\n' \${workers} | sed '/^$/d' | wc -l)\" -eq 2; \
   for container in \${workers}; do test \"\$(docker inspect \${container} --format '{{.Image}}')\" = \"\$(docker image inspect '${WORKER_IMAGE}' --format '{{.Id}}')\"; done"
 
 MANIFEST_DIR="${RELEASE_MANIFEST_DIR:-${ROOT}/release-manifests}"
@@ -396,4 +419,5 @@ ssh_cmd "mkdir -p '${REMOTE_DIR}/release-manifests' && cat > '${REMOTE_DIR}/rele
 
 echo "==> Release manifest: ${MANIFEST_PATH}"
 echo "==> Current status"
-ssh_cmd "cd '${REMOTE_DIR}' && API_IMAGE='${API_IMAGE}' WORKER_IMAGE='${WORKER_IMAGE}' docker compose ps"
+ssh_cmd "cd '${REMOTE_DIR}' && API_IMAGE='${API_IMAGE}' WORKER_IMAGE='${WORKER_IMAGE}' \
+  PIPELINE_REVISION='${PIPELINE_REVISION}' docker compose -f docker-compose.prod.yml ps"
