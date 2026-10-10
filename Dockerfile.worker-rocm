@@ -34,7 +34,7 @@ COPY server/requirements.txt server/requirements.worker.lock ./
 
 # Base image has torch pre-installed with ROCm support.
 # Install torchvision from ROCm index, then our deps (skipping torch).
-RUN pip install --no-cache-dir pip==25.3.1 && \
+RUN pip install --no-cache-dir pip==25.3 && \
     pip install --no-cache-dir torchvision==0.24.1 --index-url https://download.pytorch.org/whl/rocm7.2 && \
     grep -v '^simple-lama' requirements.txt | \
         grep -vi '^torch' | \
