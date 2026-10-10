@@ -80,7 +80,7 @@ services:
   worker:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile.worker-cpu
       args:
         APP_UID: ${APP_UID:-1026}
         APP_GID: ${APP_GID:-1026}
@@ -90,19 +90,15 @@ services:
       APP_GID: ${APP_GID:-1026}
       PIPELINE_REVISION: ${PIPELINE_REVISION:-}
       ALLOW_LEGACY_PIPELINE_REVISION: ${ALLOW_LEGACY_PIPELINE_REVISION:-0}
+      MANGA_OCR_DEVICE: cpu
+      TEXT_DETECTION_GPU: "false"
+      EASYOCR_GPU: "false"
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
     volumes:
       - ./cache:/app/server/cache
       - mangaocr-cache:/home/worker/.cache/manga_ocr
       - huggingface-cache:/home/worker/.cache/huggingface
       - easyocr-cache:/home/worker/.EasyOCR
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     depends_on:
       redis:
         condition: service_healthy

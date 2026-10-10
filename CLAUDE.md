@@ -499,7 +499,7 @@ The server and worker share the same cache layout.
 The manifest is the source of truth. Redis is short-lived delivery state, not durable storage.
 
 Do not conflate the three persistence version labels: `cache/v2` is the
-filesystem layout, manifest schema version 3 points at stored objects, and
+filesystem layout, manifest schema version 4 points at stored objects, and
 PageDocument schema version 2 is the page metadata payload. Metadata version 1
 and manifest version 2 remain readable for compatibility. The authoritative
 specifications are `docs/cache_metadata_v2.md` and `docs/page_document_v2.md`.
@@ -512,6 +512,11 @@ optional environment value asserts the expected fingerprint and fails startup
 on a mismatch. Only old queue messages without the field and pre-revision
 manifests map to `legacy-v1`; selecting it requires
 `ALLOW_LEGACY_PIPELINE_REVISION=1`.
+
+Current workers run a strict startup preflight before connecting to the shared
+queues. Their heartbeat companion records all four pipeline capabilities, the
+derived revision, and verified model names. Partial workers are rejected
+because the shared priority streams cannot filter by pipeline before claiming.
 
 For non-English output, the durable cache namespace is
 `<pipeline>_<target-language>` (for example `manga_translate_pt-br`). Its

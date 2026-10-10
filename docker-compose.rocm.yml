@@ -4,7 +4,9 @@
 #   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up worker
 services:
   worker:
-    image: localhost:3007/akitaonrails/frank-yomik-worker-rocm:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.worker-rocm
     devices:
       - /dev/kfd
       - /dev/dri

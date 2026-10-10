@@ -19,13 +19,14 @@ from worker.consumer import (
     STREAM_LOW,
     Consumer,
 )
+from worker.preflight import ALL_PIPELINES, PreflightReport
+from pipeline.revision import DEFAULT_PIPELINE_REVISION
+from worker.job import ProcessingResult
 
 # Aliases for backward-compat with test assertions
 RESULT_TTL = DEFAULT_RESULT_TTL
 HEARTBEAT_TTL = DEFAULT_HEARTBEAT_TTL
 PROGRESS_TTL = DEFAULT_PROGRESS_TTL
-from pipeline.revision import DEFAULT_PIPELINE_REVISION
-from worker.job import ProcessingResult
 
 
 def _make_consumer(**kwargs) -> Consumer:
@@ -36,6 +37,10 @@ def _make_consumer(**kwargs) -> Consumer:
         "pipeline_revision": "legacy-v1",
     }
     defaults.update(kwargs)
+    defaults.setdefault("capabilities", PreflightReport(
+        ALL_PIPELINES, defaults.get("pipeline_revision", DEFAULT_PIPELINE_REVISION),
+        ("test-models",),
+    ))
     c = Consumer(**defaults)
     c._rdb = MagicMock()
     return c
@@ -45,8 +50,19 @@ def _make_consumer(**kwargs) -> Consumer:
 
 
 class TestConsumerInit:
+    def test_requires_successful_preflight_report(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="preflight"):
+            Consumer(redis_url="redis://localhost:6379")
+
     def test_defaults(self):
-        c = Consumer(redis_url="redis://localhost:6379")
+        c = Consumer(
+            redis_url="redis://localhost:6379",
+            capabilities=PreflightReport(
+                ALL_PIPELINES, DEFAULT_PIPELINE_REVISION, ("test-models",),
+            ),
+        )
         assert c.consumer_group == "workers"
         assert c.heartbeat_interval == 30
         assert c.job_timeout == 300
@@ -63,6 +79,9 @@ class TestConsumerInit:
             consumer_name="w-1",
             heartbeat_interval=10,
             job_timeout=60,
+            capabilities=PreflightReport(
+                ALL_PIPELINES, DEFAULT_PIPELINE_REVISION, ("test-models",),
+            ),
         )
         assert c.consumer_name == "w-1"
         assert c.consumer_group == "mygroup"
@@ -71,13 +90,21 @@ class TestConsumerInit:
 
     def test_default_consumer_name_includes_pid(self):
         import os
-        c = Consumer(redis_url="redis://localhost:6379")
+        c = Consumer(
+            redis_url="redis://localhost:6379",
+            capabilities=PreflightReport(
+                ALL_PIPELINES, DEFAULT_PIPELINE_REVISION, ("test-models",),
+            ),
+        )
         assert c.consumer_name == f"worker-{os.getpid()}"
 
     def test_explicit_pipeline_revision(self):
         c = Consumer(
             redis_url="redis://localhost:6379",
             pipeline_revision="detector-v2",
+            capabilities=PreflightReport(
+                ALL_PIPELINES, "detector-v2", ("test-models",),
+            ),
         )
         assert c.pipeline_revision == "detector-v2"
 
@@ -129,19 +156,44 @@ class TestHeartbeat:
         c._heartbeat()
 
         expected_key = f"{HEARTBEAT_PREFIX}test-w:heartbeat"
-        c._rdb.set.assert_called_once()
-        args, kwargs = c._rdb.set.call_args
+        pipe = c._rdb.pipeline.return_value
+        assert pipe.set.call_count == 2
+        args, kwargs = pipe.set.call_args_list[0]
         assert args[0] == expected_key
         assert kwargs["ex"] == HEARTBEAT_TTL
         # Value is unix timestamp
         ts = int(args[1])
         assert abs(ts - int(time.time())) <= 2
+        capability_args, capability_kwargs = pipe.set.call_args_list[1]
+        assert capability_args[0] == f"{HEARTBEAT_PREFIX}test-w:capabilities"
+        payload = json.loads(capability_args[1])
+        assert payload["pipelines"] == list(ALL_PIPELINES)
+        assert payload["pipeline_revision"] == "legacy-v1"
+        assert payload["preflight"] == "passed"
+        assert capability_kwargs["ex"] == HEARTBEAT_TTL
+        pipe.execute.assert_called_once_with()
 
     def test_updates_last_heartbeat_timestamp(self):
         c = _make_consumer()
         assert c._last_heartbeat == 0.0
         c._heartbeat()
         assert c._last_heartbeat > 0
+
+    def test_rejects_capabilities_from_another_revision(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="revision"):
+            _make_consumer(capabilities=PreflightReport(
+                ALL_PIPELINES, "different-revision", (),
+            ))
+
+    def test_rejects_partial_worker_before_it_can_claim_shared_queue(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="every pipeline"):
+            _make_consumer(capabilities=PreflightReport(
+                ("webtoon",), "legacy-v1", ("easyocr-ko",),
+            ))
 
 
 # --- connect ---
@@ -154,7 +206,7 @@ class TestConnect:
         mock_redis_module.from_url.return_value = mock_rdb
         mock_redis_module.ResponseError = Exception
 
-        c = Consumer(redis_url="redis://localhost:6379")
+        c = _make_consumer()
         c.connect()
 
         assert mock_rdb.xgroup_create.call_count == 2
@@ -173,7 +225,7 @@ class TestConnect:
         mock_redis_module.ResponseError = FakeResponseError
         mock_rdb.xgroup_create.side_effect = FakeResponseError("BUSYGROUP already exists")
 
-        c = Consumer(redis_url="redis://localhost:6379")
+        c = _make_consumer()
         c.connect()  # Should not raise
 
     @patch("worker.consumer.redis")
@@ -186,7 +238,7 @@ class TestConnect:
         mock_redis_module.ResponseError = FakeResponseError
         mock_rdb.xgroup_create.side_effect = FakeResponseError("WRONGTYPE some error")
 
-        c = Consumer(redis_url="redis://localhost:6379")
+        c = _make_consumer()
         import pytest
         with pytest.raises(FakeResponseError, match="WRONGTYPE"):
             c.connect()

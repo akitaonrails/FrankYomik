@@ -66,7 +66,9 @@ SCROLL_PAUSE = _scraper.get("scroll_pause", 0.5)
 DOWNLOAD_TIMEOUT = _scraper.get("download_timeout", 30)
 
 # --- EasyOCR ---
-EASYOCR_GPU = _easyocr_cfg.get("gpu", True)
+EASYOCR_GPU = os.environ.get(
+    "EASYOCR_GPU", str(_easyocr_cfg.get("gpu", True))
+).lower() in {"1", "true", "yes"}
 EASYOCR_CONFIDENCE_THRESHOLD = _easyocr_cfg.get("confidence_threshold", 0.3)
 EASYOCR_TEXT_THRESHOLD = _easyocr_cfg.get("text_threshold", 0.7)
 EASYOCR_LOW_TEXT = _easyocr_cfg.get("low_text", 0.4)

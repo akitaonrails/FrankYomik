@@ -1,5 +1,7 @@
 """Tests for bytes I/O functions (Phase 1 of web service)."""
 
+import struct
+import zlib
 from unittest.mock import patch
 
 import numpy as np
@@ -15,6 +17,18 @@ def _make_test_image(width: int = 100, height: int = 80) -> Image.Image:
     draw = ImageDraw.Draw(img)
     draw.rectangle((20, 20, 60, 60), fill=(0, 0, 0))
     return img
+
+
+def _png_header(width: int, height: int) -> bytes:
+    """Build a valid PNG header whose pixels are deliberately absent."""
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        checksum = zlib.crc32(kind + payload) & 0xFFFFFFFF
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(
+            ">I", checksum,
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IEND", b"")
 
 
 # --- encode_image_pil ---
@@ -85,6 +99,25 @@ class TestDecodeImageBytes:
         import pytest
         with pytest.raises((ValueError, Exception)):
             decode_image_bytes(b"")
+
+    def test_rejects_oversize_header_before_pixel_decode(self):
+        import pytest
+        with pytest.raises(ValueError, match="pixel count"):
+            decode_image_bytes(_png_header(8_000, 6_000))
+
+    def test_rejects_extreme_dimension_before_pixel_decode(self):
+        import pytest
+        with pytest.raises(ValueError, match="dimensions"):
+            decode_image_bytes(_png_header(1, 32_769))
+
+    def test_legitimate_tall_webtoon_is_accepted(self):
+        tall = Image.new("RGB", (12, 3_000), (20, 40, 60))
+        data = encode_image_pil(tall)
+
+        img_cv, img_pil = decode_image_bytes(data)
+
+        assert img_pil.size == (12, 3_000)
+        assert img_cv.shape == (3_000, 12, 3)
 
     def test_pixel_values_preserved_png(self):
         """PNG is lossless — pixel values should be exactly preserved."""

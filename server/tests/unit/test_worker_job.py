@@ -580,6 +580,7 @@ class TestProcessJobError:
         assert result.status == "failed"
         assert result.error != ""
         assert result.processing_time_ms >= 0
+        assert result.cacheable is False
 
     def test_exception_during_processing_caught(self):
         """Exceptions during pipeline execution should be caught."""

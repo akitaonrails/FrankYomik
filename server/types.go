@@ -35,18 +35,25 @@ type JobStatusResponse struct {
 
 // HealthResponse is the API response for health checks.
 type HealthResponse struct {
-	Status        string       `json:"status"`
-	Redis         string       `json:"redis"`
-	QueueHigh     int64        `json:"queue_high"`
-	QueueLow      int64        `json:"queue_low"`
-	ActiveWorkers int          `json:"active_workers"`
-	Workers       []WorkerInfo `json:"workers,omitempty"`
+	Status           string       `json:"status"`
+	Redis            string       `json:"redis"`
+	QueueHigh        int64        `json:"queue_high"`
+	QueueLow         int64        `json:"queue_low"`
+	ActiveWorkers    int          `json:"active_workers"`
+	ReadyWorkers     int          `json:"ready_workers"`
+	PipelineRevision string       `json:"pipeline_revision,omitempty"`
+	Workers          []WorkerInfo `json:"workers,omitempty"`
 }
 
 // WorkerInfo represents a single worker's health.
 type WorkerInfo struct {
-	Name          string `json:"name"`
-	LastHeartbeat int64  `json:"last_heartbeat"`
+	Name             string   `json:"name"`
+	LastHeartbeat    int64    `json:"last_heartbeat"`
+	Pipelines        []string `json:"pipelines,omitempty"`
+	PipelineRevision string   `json:"pipeline_revision,omitempty"`
+	Models           []string `json:"models,omitempty"`
+	Preflight        string   `json:"preflight,omitempty"`
+	Ready            bool     `json:"ready"`
 }
 
 // WSMessage is a WebSocket message from the client.

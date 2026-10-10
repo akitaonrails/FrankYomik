@@ -17,7 +17,7 @@ import (
 // the Python pipeline, but it must still prove that the revision it advertises
 // describes the exact checked-in worker sources and assets.
 //
-//go:embed pipeline/stage_manifest.json config.yaml requirements.txt pipeline/*.py pipeline/adapters/*.py worker/*.py kindle/*.py webtoon/*.py fonts/*.otf fonts/genei_antique/*.ttf
+//go:embed pipeline/stage_manifest.json config.yaml requirements.txt requirements.worker.lock pipeline/*.py pipeline/adapters/*.py worker/*.py kindle/*.py webtoon/*.py fonts/*.otf fonts/genei_antique/*.ttf
 var stageIdentityFS embed.FS
 
 var stageManifestJSON = mustReadStageIdentityFile("pipeline/stage_manifest.json")

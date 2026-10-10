@@ -61,5 +61,8 @@ server/tests/ab_*_results.json
 .ai-jail
 .slim/deepwork/
 
+# Generated deployment provenance records
+/release-manifests/
+
 # Extension packaged artifacts
 extension/dist/

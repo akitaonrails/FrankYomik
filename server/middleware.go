@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 )
@@ -15,8 +16,10 @@ func AuthMiddleware(token string, next http.Handler) http.Handler {
 		}
 
 		auth := r.Header.Get("Authorization")
-		if auth == "" {
-			// Also check query param for WebSocket connections
+		if auth == "" && r.URL.Path == "/api/v1/ws" {
+			// Browser WebSocket APIs cannot set Authorization headers. Keep the
+			// query fallback scoped to the WebSocket route so tokens on ordinary
+			// URLs are never accepted as credentials.
 			if qtoken := r.URL.Query().Get("token"); qtoken != "" {
 				auth = "Bearer " + qtoken
 			}
@@ -28,7 +31,7 @@ func AuthMiddleware(token string, next http.Handler) http.Handler {
 		}
 
 		providedToken := strings.TrimPrefix(auth, "Bearer ")
-		if providedToken != token {
+		if subtle.ConstantTimeCompare([]byte(providedToken), []byte(token)) != 1 {
 			http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 			return
 		}

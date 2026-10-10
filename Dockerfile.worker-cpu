@@ -1,22 +1,29 @@
 # CPU-only worker — no CUDA, smaller image
-FROM python:3.12-bookworm AS builder
+FROM python:3.12-bookworm@sha256:5560e9ab8709f459489e5b8aa696eda8a07ef821e14bb122be62d91234bfa98b AS builder
 
 WORKDIR /build
-COPY server/requirements.txt .
-# See Dockerfile.worker-rocm: bump to pull dependencies fresh within their
-# major bounds instead of reusing whatever the last build resolved.
-ARG DEPS_REFRESH=2026-09-05
+COPY server/requirements.txt server/requirements.worker.lock ./
 # Install CPU-only PyTorch first, then the rest
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-    grep -v simple-lama requirements.txt | pip install --no-cache-dir -r /dev/stdin && \
+RUN pip install --no-cache-dir pip==25.3.1 && \
+    pip install --no-cache-dir torch==2.9.1 torchvision==0.24.1 \
+      --index-url https://download.pytorch.org/whl/cpu && \
+    grep -v '^simple-lama' requirements.txt > /tmp/requirements-without-lama.txt && \
+    pip install --no-cache-dir -c requirements.worker.lock \
+      -r /tmp/requirements-without-lama.txt && \
     pip install --no-cache-dir --no-deps "$(grep '^simple-lama' requirements.txt)"
 
 # Runtime
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
 
 ARG APP_UID=1026
 ARG APP_GID=1026
+ARG SOURCE_REVISION
+ARG PIPELINE_REVISION
+ARG RELEASE_VERSION
+LABEL org.opencontainers.image.source="https://github.com/akitaonrails/FrankYomik" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      io.frank-yomik.pipeline-revision="${PIPELINE_REVISION}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 gosu \

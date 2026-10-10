@@ -22,6 +22,7 @@ from .job import (
     process_job,
 )
 from .page_cache import PageCache
+from .preflight import ALL_PIPELINES, PreflightReport
 
 log = logging.getLogger(__name__)
 
@@ -88,7 +89,8 @@ class Consumer:
                  progress_ttl: int = DEFAULT_PROGRESS_TTL,
                  high_burst_before_low: int = DEFAULT_HIGH_BURST_BEFORE_LOW,
                  pipeline_revision: str | None = None,
-                 job_dependencies: PipelineDependencies | None = None):
+                 job_dependencies: PipelineDependencies | None = None,
+                 capabilities: PreflightReport | None = None):
         self.redis_url = redis_url
         self.consumer_group = consumer_group
         self.consumer_name = consumer_name or f"worker-{os.getpid()}"
@@ -104,6 +106,15 @@ class Consumer:
         self._page_cache = PageCache(cache_dir, pipeline_revision=pipeline_revision)
         self.pipeline_revision = self._page_cache.pipeline_revision
         self.job_dependencies = job_dependencies
+        if capabilities is None:
+            raise ValueError("successful worker preflight report is required")
+        self.capabilities = capabilities
+        if set(self.capabilities.pipelines) != set(ALL_PIPELINES):
+            raise ValueError(
+                "shared queues require capabilities for every pipeline"
+            )
+        if self.capabilities.pipeline_revision != self.pipeline_revision:
+            raise ValueError("capability revision does not match worker revision")
         self._running = False
         log.info("Cache v2 directory: %s (pipeline revision: %s)",
                  os.path.abspath(cache_dir), self.pipeline_revision)
@@ -606,7 +617,15 @@ class Consumer:
     def _heartbeat(self) -> None:
         """Update worker heartbeat key in Redis."""
         key = f"{HEARTBEAT_PREFIX}{self.consumer_name}:heartbeat"
-        self._rdb.set(key, str(int(time.time())), ex=self.heartbeat_ttl)
+        capability_key = f"{HEARTBEAT_PREFIX}{self.consumer_name}:capabilities"
+        pipe = self._rdb.pipeline(transaction=False)
+        pipe.set(key, str(int(time.time())), ex=self.heartbeat_ttl)
+        pipe.set(
+            capability_key,
+            json.dumps(self.capabilities.heartbeat_payload(), sort_keys=True),
+            ex=self.heartbeat_ttl,
+        )
+        pipe.execute()
         self._last_heartbeat = time.monotonic()
 
     def _handle_signal(self, signum, frame) -> None:

@@ -5,6 +5,7 @@
 # Documentation
 *.md
 docs/
+!server/THIRD_PARTY_NOTICES.md
 
 # Flutter client (separate build)
 client/

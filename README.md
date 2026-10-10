@@ -169,6 +169,11 @@ docker compose logs -f worker
 curl -H "Authorization: Bearer mysecret" http://localhost:8080/api/v1/health
 ```
 
+The generic Compose file builds the pinned CPU worker. Production uses the
+ROCm Compose path described in [deployment documentation](docs/deployment.md).
+Workers appear in health output only after detector, OCR, translation, font,
+and cleanup preflight succeeds.
+
 ### Submit a Job
 
 ```bash

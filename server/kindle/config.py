@@ -60,7 +60,9 @@ FONT_SFX = _resolve_font(_fonts.get("sfx", "fonts/ComicNeue-Bold.otf"))
 BUBBLE_PADDING = 5            # Pixels to pad inside bubble for text rendering
 
 # --- OCR settings ---
-MANGA_OCR_DEVICE = _ocr.get("device", "cpu")  # Force CPU to avoid VRAM conflicts with Ollama
+MANGA_OCR_DEVICE = os.environ.get(
+    "MANGA_OCR_DEVICE", _ocr.get("device", "cpu")
+)
 _hayai = _ocr.get("hayai", {})
 HAYAI_ENABLED = bool(_hayai.get("enabled", False))
 HAYAI_DEVICE = str(_hayai.get("device", "auto"))
@@ -88,7 +90,9 @@ BOOK_GLYPHS_PER_CHUNK = int(_book.get("glyphs_per_chunk", 12))
 
 # --- Text detection (EasyOCR for artwork text outside bubbles) ---
 TEXT_DETECTION_CONFIDENCE = _text_det.get("confidence", 0.3)
-TEXT_DETECTION_GPU = _text_det.get("gpu", True)
+TEXT_DETECTION_GPU = os.environ.get(
+    "TEXT_DETECTION_GPU", str(_text_det.get("gpu", True))
+).lower() in {"1", "true", "yes"}
 
 # --- Manga inpainting (artwork text) ---
 MANGA_INPAINT_ENABLED = _manga_inp.get("enabled", False)

@@ -7,20 +7,27 @@ SERVER="${SERVER:-192.168.0.90}"
 SSH_USER="${SSH_USER:-akitaonrails}"
 REMOTE_DIR="${REMOTE_DIR:-/var/opt/docker/frank/yomik}"
 REGISTRY="${REGISTRY:-192.168.0.90:3007/akitaonrails}"
-TAG="${1:-latest}"
+REMOTE_REGISTRY="${REMOTE_REGISTRY:-localhost:3007/akitaonrails}"
+TAG="${1:?Usage: bin/deploy <release-tag> [rocm]}"
 VARIANT="${2:-rocm}"
 
+if [[ "${TAG}" == *[!A-Za-z0-9._-]* || -z "${TAG}" ]]; then
+  echo "Release tag contains unsupported characters: ${TAG}" >&2
+  exit 1
+fi
+if [[ "${TAG}" == "latest" ]]; then
+  echo "Refusing the moving tag 'latest'; provide a release version." >&2
+  exit 1
+fi
 if [[ "${VARIANT}" != "rocm" ]]; then
-  echo "Remote compose currently deploys frank-yomik-worker-rocm:latest. Use variant: rocm."
+  echo "Remote compose deploys the ROCm worker. Use variant: rocm." >&2
   exit 1
 fi
 
 SSH_OPTS=(-F /dev/null)
-
 if [[ -n "${SSH_KNOWN_HOSTS:-}" ]]; then
   SSH_OPTS+=(-o "UserKnownHostsFile=${SSH_KNOWN_HOSTS}")
 fi
-
 if [[ "${SSH_STRICT_HOST_KEY_CHECKING:-yes}" == "no" ]]; then
   SSH_OPTS+=(-o StrictHostKeyChecking=no)
 fi
@@ -29,35 +36,166 @@ ssh_cmd() {
   ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SERVER}" "$@"
 }
 
-push_image() {
+resolve_digest() {
+  local manifest
+  manifest="$(docker manifest inspect --insecure --verbose "$1" 2>/dev/null)" || return 1
+  printf '%s' "${manifest}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+entries = data if isinstance(data, list) else [data]
+matches = [
+    item["Descriptor"]["digest"]
+    for item in entries
+    if item.get("Descriptor", {}).get("platform", {}).get("os") == "linux"
+    and item["Descriptor"]["platform"].get("architecture") == "amd64"
+]
+if len(matches) != 1:
+    raise SystemExit("registry reference must resolve to exactly one linux/amd64 manifest")
+print(matches[0])
+'
+}
+
+inspect_local_label() {
+  local reference="$1"
+  local label="$2"
+  docker image inspect "${reference}" \
+    --format "{{ index .Config.Labels \"${label}\" }}"
+}
+
+verify_local_labels() {
+  local reference="$1"
+  local actual_source actual_pipeline
+  actual_source="$(inspect_local_label "${reference}" org.opencontainers.image.revision)"
+  actual_pipeline="$(inspect_local_label "${reference}" io.frank-yomik.pipeline-revision)"
+  [[ "${actual_source}" == "${SOURCE_REVISION}" ]] || {
+    echo "Source revision label mismatch for ${reference}: ${actual_source}" >&2
+    return 1
+  }
+  [[ "${actual_pipeline}" == "${PIPELINE_REVISION}" ]] || {
+    echo "Pipeline revision label mismatch for ${reference}: ${actual_pipeline}" >&2
+    return 1
+  }
+}
+
+publish_image() {
   local dockerfile="$1"
   local image_name="$2"
   local image="${REGISTRY}/${image_name}"
+  local release_ref="${image}:${TAG}"
+  local candidate_tag="candidate-${SOURCE_REVISION:0:12}-${BASHPID}-$RANDOM"
+  local candidate_ref="${image}:${candidate_tag}"
+  local candidate_digest existing_digest release_digest
 
-  if [[ "${TAG}" == "latest" ]]; then
-    docker build -f "${dockerfile}" -t "${image}:latest" .
-    docker push "${image}:latest"
-    return
+  docker build -f "${dockerfile}" \
+    --build-arg "SOURCE_REVISION=${SOURCE_REVISION}" \
+    --build-arg "PIPELINE_REVISION=${PIPELINE_REVISION}" \
+    --build-arg "RELEASE_VERSION=${TAG}" \
+    -t "${candidate_ref}" . >&2
+  verify_local_labels "${candidate_ref}"
+  docker push "${candidate_ref}" >&2
+  candidate_digest="$(resolve_digest "${candidate_ref}")"
+  [[ "${candidate_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "Registry returned an invalid digest for ${candidate_ref}" >&2
+    return 1
+  }
+  existing_digest="$(resolve_digest "${release_ref}" || true)"
+  if [[ -n "${existing_digest}" && "${existing_digest}" != "${candidate_digest}" ]]; then
+    echo "Refusing to overwrite ${release_ref}: existing ${existing_digest}, candidate ${candidate_digest}" >&2
+    return 1
+  fi
+  if [[ -z "${existing_digest}" ]]; then
+    docker tag "${candidate_ref}" "${release_ref}"
+    docker push "${release_ref}" >&2
   fi
 
-  docker build -f "${dockerfile}" -t "${image}:${TAG}" -t "${image}:latest" .
-  docker push "${image}:${TAG}"
-  docker push "${image}:latest"
+  release_digest="$(resolve_digest "${release_ref}")"
+  [[ "${release_digest}" == "${candidate_digest}" ]] || {
+    echo "Release tag verification failed for ${release_ref}" >&2
+    return 1
+  }
+  printf '%s\n' "${release_digest}"
 }
 
 cd "${ROOT}"
+if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+  echo "Refusing release build from a dirty worktree." >&2
+  exit 1
+fi
+SOURCE_REVISION="$(git rev-parse --verify HEAD)"
+REVISION_PYTHON="${REVISION_PYTHON:-${ROOT}/server/.venv/bin/python}"
+if [[ ! -x "${REVISION_PYTHON}" ]]; then
+  REVISION_PYTHON="python3"
+fi
+PIPELINE_REVISION="$(PYTHONPATH="${ROOT}/server" "${REVISION_PYTHON}" -c \
+  'from pipeline.revision import get_pipeline_revision; print(get_pipeline_revision())')"
+[[ "${PIPELINE_REVISION}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+  echo "Could not derive a valid pipeline revision." >&2
+  exit 1
+}
 
-echo "==> Building and pushing api image"
-push_image "Dockerfile.api" "frank-yomik-api"
+echo "==> Building and publishing API image"
+API_DIGEST="$(publish_image Dockerfile.api frank-yomik-api)"
+echo "==> Building and publishing ROCm worker image"
+WORKER_DIGEST="$(publish_image Dockerfile.worker-rocm frank-yomik-worker-rocm)"
 
-echo "==> Building and pushing worker image"
-push_image "Dockerfile.worker-rocm" "frank-yomik-worker-rocm"
+API_PUSH_REF="${REGISTRY}/frank-yomik-api@${API_DIGEST}"
+WORKER_PUSH_REF="${REGISTRY}/frank-yomik-worker-rocm@${WORKER_DIGEST}"
+API_IMAGE="${REMOTE_REGISTRY}/frank-yomik-api@${API_DIGEST}"
+WORKER_IMAGE="${REMOTE_REGISTRY}/frank-yomik-worker-rocm@${WORKER_DIGEST}"
 
-echo "==> Pulling latest images on ${SERVER}"
-ssh_cmd "cd ${REMOTE_DIR} && docker compose pull api worker"
+echo "==> Pulling and verifying exact release digests on ${SERVER}"
+ssh_cmd "set -eu; docker pull '${API_IMAGE}' >/dev/null; docker pull '${WORKER_IMAGE}' >/dev/null; \
+  case \"\$(docker image inspect '${API_IMAGE}' --format '{{json .RepoDigests}}')\" in *'${API_DIGEST}'*) ;; *) exit 1 ;; esac; \
+  case \"\$(docker image inspect '${WORKER_IMAGE}' --format '{{json .RepoDigests}}')\" in *'${WORKER_DIGEST}'*) ;; *) exit 1 ;; esac; \
+  test \"\$(docker image inspect '${API_IMAGE}' --format '{{ index .Config.Labels \"org.opencontainers.image.revision\" }}')\" = '${SOURCE_REVISION}'; \
+  test \"\$(docker image inspect '${API_IMAGE}' --format '{{ index .Config.Labels \"io.frank-yomik.pipeline-revision\" }}')\" = '${PIPELINE_REVISION}'; \
+  test \"\$(docker image inspect '${WORKER_IMAGE}' --format '{{ index .Config.Labels \"org.opencontainers.image.revision\" }}')\" = '${SOURCE_REVISION}'; \
+  test \"\$(docker image inspect '${WORKER_IMAGE}' --format '{{ index .Config.Labels \"io.frank-yomik.pipeline-revision\" }}')\" = '${PIPELINE_REVISION}'"
 
-echo "==> Restarting docker compose in ${REMOTE_DIR}"
-ssh_cmd "cd ${REMOTE_DIR} && docker compose down && docker compose up -d"
+echo "==> Recreating API and two workers without restarting Redis or tunnel"
+ssh_cmd "cd '${REMOTE_DIR}' && API_IMAGE='${API_IMAGE}' WORKER_IMAGE='${WORKER_IMAGE}' \
+  docker compose up -d --no-deps --force-recreate --scale worker=2 api worker"
 
+echo "==> Verifying deployed container image digests"
+ssh_cmd "set -eu; cd '${REMOTE_DIR}'; \
+  test \"\$(docker inspect yomik-api --format '{{.Image}}')\" = \"\$(docker image inspect '${API_IMAGE}' --format '{{.Id}}')\"; \
+  workers=\$(docker compose ps -q worker); test \"\$(printf '%s\n' \${workers} | sed '/^$/d' | wc -l)\" -eq 2; \
+  for container in \${workers}; do test \"\$(docker inspect \${container} --format '{{.Image}}')\" = \"\$(docker image inspect '${WORKER_IMAGE}' --format '{{.Id}}')\"; done"
+
+MANIFEST_DIR="${RELEASE_MANIFEST_DIR:-${ROOT}/release-manifests}"
+MANIFEST_PATH="${MANIFEST_DIR}/${TAG}.json"
+mkdir -p "${MANIFEST_DIR}"
+export TAG SOURCE_REVISION PIPELINE_REVISION API_DIGEST WORKER_DIGEST API_PUSH_REF WORKER_PUSH_REF API_IMAGE WORKER_IMAGE MANIFEST_PATH
+python3 - <<'PY'
+import datetime
+import json
+import os
+from pathlib import Path
+
+record = {
+    "schema_version": 1,
+    "release_tag": os.environ["TAG"],
+    "created_at": datetime.datetime.now(datetime.UTC).isoformat(),
+    "source_revision": os.environ["SOURCE_REVISION"],
+    "pipeline_revision": os.environ["PIPELINE_REVISION"],
+    "images": {
+        "api": {
+            "published": os.environ["API_PUSH_REF"],
+            "deployed": os.environ["API_IMAGE"],
+            "digest": os.environ["API_DIGEST"],
+        },
+        "worker": {
+            "published": os.environ["WORKER_PUSH_REF"],
+            "deployed": os.environ["WORKER_IMAGE"],
+            "digest": os.environ["WORKER_DIGEST"],
+        },
+    },
+}
+path = Path(os.environ["MANIFEST_PATH"])
+path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+PY
+ssh_cmd "mkdir -p '${REMOTE_DIR}/release-manifests' && cat > '${REMOTE_DIR}/release-manifests/${TAG}.json'" < "${MANIFEST_PATH}"
+
+echo "==> Release manifest: ${MANIFEST_PATH}"
 echo "==> Current status"
-ssh_cmd "cd ${REMOTE_DIR} && docker compose ps"
+ssh_cmd "cd '${REMOTE_DIR}' && API_IMAGE='${API_IMAGE}' WORKER_IMAGE='${WORKER_IMAGE}' docker compose ps"

@@ -1,239 +1,179 @@
-# Production Deployment: RunPod + Kamal
+# Production deployment
 
-> **Status:** Legacy deployment guide. Current production uses the homelab
-> Docker Compose and ROCm configuration in `docker-compose.prod.yml` on the
-> Strix Halo host. Phase 6 of the
-> [v2 pipeline migration](koharu_pipeline_migration_plan.md) will replace this
-> page with tested current and generic deployment instructions.
+Frank Yomik production runs on the Strix Halo homelab host with Docker Compose,
+ROCm workers, Redis, llama-swap/Ollama, and Cloudflare Tunnel. The public API
+contract remains `/api/v1`; deployment and worker capability details are
+internal.
 
-The API and worker derive `PIPELINE_REVISION` from the pinned stage manifest.
-They verify the checked-in artifacts before accepting work. An optional value
-in `.env` acts as a deployment assertion and must exactly match that derived
-fingerprint:
+## Images and revision identity
 
-```dotenv
-PIPELINE_REVISION=sha256:<64 hex characters>
+Worker builds are reproducible from these inputs:
+
+- `Dockerfile.api` pins both its Go builder and distroless runtime by digest.
+- `Dockerfile.worker-rocm` uses the pinned ROCm/PyTorch base image digest.
+- `Dockerfile.worker-cpu` uses pinned Python base image digests and exact CPU
+  PyTorch packages.
+- `server/requirements.txt` pins direct packages and
+  `server/requirements.worker.lock` freezes transitive resolution.
+- `server/pipeline/stage_manifest.json` pins implementation and model identity.
+
+Production Compose requires `API_IMAGE` and `WORKER_IMAGE` as exact
+`repository@sha256:...` references. A release tag is a human-readable index;
+the deploy script refuses to replace it with different content and deploys
+only the registry digests it resolved after pushing. Both images carry the Git
+source revision and derived pipeline revision as OCI labels. The API and worker
+independently derive the same `PIPELINE_REVISION`. Supplying
+`PIPELINE_REVISION` is optional and acts as an assertion: a mismatch stops
+startup.
+
+## Strix Halo ROCm deployment
+
+The checked-in production topology is `docker-compose.prod.yml`. It expects the
+persistent directory layout already used on `192.168.0.90`:
+
+```text
+/var/opt/docker/frank/yomik/
+├── .cloudflared/
+└── data/
+    ├── cache/
+    ├── redis/
+    ├── mangaocr-cache/
+    ├── huggingface-cache/
+    └── easyocr-cache/
 ```
 
-Leaving it unset uses the derived value directly in every Compose environment.
-An explicit mismatch stops startup. `legacy-v1` additionally requires
-`ALLOW_LEGACY_PIPELINE_REVISION=1` and is only for reading pre-revision data
-during migration. A mismatched worker rejects the job, and a cache entry from
-another revision is a miss. See [Pipeline stage manifest](pipeline_stage_manifest.md)
-for the update and verification procedure.
+The worker uses `/dev/kfd` and `/dev/dri`, `gfx1151`, and two replicas. Translation
+uses the host llama-swap/Ollama endpoint configured by `OLLAMA_BASE_URL`. Before
+starting a consumer, each replica verifies and loads the pinned detector, OCR,
+furigana dictionary, translation model, fonts, and enabled LaMa backend. A
+missing model, digest mismatch, incompatible accelerator, or unavailable
+translation model stops that replica before it reads Redis streams.
 
-Deploy Frank Manga to a RunPod GPU pod using Kamal for container orchestration.
-
-## Architecture
-
-Single RunPod GPU pod running all services:
-
-```
-Internet → Traefik (Kamal proxy) → Go API (:8080)
-                                       ↕ Redis (:6379)
-                                       ↕ Python Worker (GPU)
-                                       ↕ Ollama (GPU, :11434)
-```
-
-All persistent data lives on a RunPod **Network Volume** that survives pod restarts.
-
-## Prerequisites
-
-- [Kamal 2](https://kamal-deploy.org/) installed locally (`gem install kamal`)
-- Docker Hub account (or other registry) for pushing images
-- RunPod account with a GPU pod (RTX 4090 / A6000 recommended, 24GB+ VRAM)
-- RunPod Network Volume attached to the pod
-
-## 1. Network Volume Layout
-
-Attach a network volume to your RunPod pod at `/runpod-volume/`. Create the directory structure on first setup:
+Build, push, record, and restart from exact registry digests:
 
 ```bash
-ssh root@<RUNPOD_IP>
-mkdir -p /runpod-volume/{models/mangaocr,models/easyocr,models/huggingface,ollama,redis,cache}
+AUTH_TOKEN=... bin/deploy v2.0.0 rocm
 ```
 
-Layout:
-```
-/runpod-volume/
-├── models/
-│   ├── mangaocr/       # manga-ocr transformer weights
-│   ├── easyocr/        # EasyOCR models (.pth)
-│   └── huggingface/    # HuggingFace hub cache
-├── ollama/             # Ollama model blobs
-├── redis/              # Redis AOF/RDB persistence
-└── cache/              # Translated image filesystem cache
-```
+The command requires a clean worktree. It refuses an existing release tag if
+the new image digest differs, verifies both OCI revision labels locally and on
+the host, and writes the resulting JSON record under `release-manifests/`
+locally and beside the remote Compose project. Registry lookup uses
+`docker manifest inspect --insecure` because the homelab registry is HTTP, and
+selects exactly one Linux/amd64 manifest; ambiguous platform results fail.
 
-## 2. Build & Push Images
-
-From the project root:
+For a manual restart, copy the `deployed` references from that release manifest:
 
 ```bash
-# Tag with your registry
-export REGISTRY=docker.io/yourusername
-
-docker build -f Dockerfile.api -t $REGISTRY/frank-api:latest .
-docker build -f Dockerfile.worker -t $REGISTRY/frank-worker:latest .
-
-docker push $REGISTRY/frank-api:latest
-docker push $REGISTRY/frank-worker:latest
+cd /var/opt/docker/frank/yomik
+export API_IMAGE='localhost:3007/akitaonrails/frank-yomik-api@sha256:<digest>'
+export WORKER_IMAGE='localhost:3007/akitaonrails/frank-yomik-worker-rocm@sha256:<digest>'
+docker compose -f docker-compose.prod.yml pull api worker
+docker compose -f docker-compose.prod.yml up -d --no-deps \
+  --force-recreate --scale worker=2 api worker
 ```
 
-## 3. Kamal Configuration
-
-Create `config/deploy.yml`:
-
-```yaml
-service: frank-manga
-image: yourusername/frank-api
-
-servers:
-  web:
-    hosts:
-      - <RUNPOD_IP>
-    labels:
-      traefik.http.routers.frank-manga.rule: PathPrefix(`/`)
-
-registry:
-  username: yourusername
-  password:
-    - KAMAL_REGISTRY_PASSWORD
-
-env:
-  clear:
-    REDIS_URL: redis://frank-manga-redis:6379
-    CACHE_DIR: /data/cache
-  secret:
-    - AUTH_TOKEN
-
-volumes:
-  - /runpod-volume/cache:/data/cache:ro
-
-accessories:
-  redis:
-    image: redis:7-alpine
-    host: <RUNPOD_IP>
-    port: 6379
-    volumes:
-      - /runpod-volume/redis:/data
-    cmd: redis-server --appendonly yes
-    options:
-      health-cmd: "redis-cli ping"
-      health-interval: 5s
-
-  ollama:
-    image: ollama/ollama
-    host: <RUNPOD_IP>
-    port: 11434
-    volumes:
-      - /runpod-volume/ollama:/root/.ollama
-    options:
-      gpus: all
-
-  worker:
-    image: yourusername/frank-worker
-    host: <RUNPOD_IP>
-    env:
-      clear:
-        OLLAMA_BASE_URL: http://frank-manga-ollama:11434
-    cmd: --pipeline both --redis-url redis://frank-manga-redis:6379
-    volumes:
-      - /runpod-volume/cache:/app/cache
-      - /runpod-volume/models/mangaocr:/home/worker/.cache/manga_ocr
-      - /runpod-volume/models/huggingface:/home/worker/.cache/huggingface
-      - /runpod-volume/models/easyocr:/home/worker/.EasyOCR
-    options:
-      gpus: all
-```
-
-## 4. Secrets
-
-Create `.kamal/secrets` (git-ignored):
+Check startup and capability identity:
 
 ```bash
-AUTH_TOKEN=your-secret-token-here
-KAMAL_REGISTRY_PASSWORD=your-docker-hub-password
+curl -s http://192.168.0.90:8080/api/v1/health | jq .
+docker compose -f docker-compose.prod.yml logs worker
 ```
 
-## 5. Pre-Seed Ollama Model
+Each active worker entry reports `pipelines`, `pipeline_revision`, verified
+`models`, `preflight`, and `ready`. `ready` is true only when the worker passed
+preflight, advertises all four shared-queue pipelines, and its revision equals
+the API revision. Health returns HTTP 503 while no ready worker exists. Legacy
+timestamp-only heartbeats remain visible but are not marked ready.
 
-After the first deploy (or manually before), pull the translation model:
+## Generic CPU deployment
+
+The root `docker-compose.yml` is the supported generic path. It builds
+`Dockerfile.worker-cpu`; no GPU device reservation is required. CPU inference is
+slower and still needs enough memory for the detector, OCR, and LaMa. The
+generic Compose service sets `MANGA_OCR_DEVICE=cpu`,
+`TEXT_DETECTION_GPU=false`, and `EASYOCR_GPU=false`. The image retains the
+manifest-verified `server/config.yaml`; neither deployment replaces that file
+with an untracked host copy.
 
 ```bash
-# SSH into pod
-ssh root@<RUNPOD_IP>
-
-# Pull model into the network volume
-docker exec frank-manga-ollama ollama pull qwen3:14b
+export AUTH_TOKEN='replace-me'
+docker compose build api worker
+docker compose up -d
+curl -s http://localhost:8080/api/v1/health | jq .
 ```
 
-This downloads ~9GB to `/runpod-volume/ollama/` and persists across restarts.
+Model caches are mounted under the worker home directory. Startup may download
+pinned Hugging Face or EasyOCR artifacts into empty caches. The configured
+Ollama model must already exist and match the stage manifest digest; preflight
+does not silently accept another tag or digest.
 
-## 6. First Deploy
+For local ROCm development, layer the checked-in override:
 
 ```bash
-kamal setup
+docker compose -f docker-compose.yml -f docker-compose.rocm.yml build worker
+docker compose -f docker-compose.yml -f docker-compose.rocm.yml up
 ```
 
-This will:
-1. Install Docker on the host (if needed)
-2. Start Traefik proxy
-3. Start accessories (Redis, Ollama, Worker)
-4. Deploy the Go API behind Traefik
+## Rollback window
 
-## 7. Subsequent Deploys
-
-After code changes, rebuild and deploy:
+`docker-compose.v1-rollback.yml` preserves the explicit v1 escape hatch without
+making it a production default. Never attach a v1 writer to the live v2 cache:
+an older cache implementation could replace a schema 4 manifest. Stop metadata
+edits briefly, clone the live cache to a separate rollback directory, and record
+the source tree hash before rehearsal:
 
 ```bash
-docker build -f Dockerfile.api -t $REGISTRY/frank-api:latest .
-docker push $REGISTRY/frank-api:latest
-kamal deploy
-
-# If worker code changed:
-docker build -f Dockerfile.worker -t $REGISTRY/frank-worker:latest .
-docker push $REGISTRY/frank-worker:latest
-kamal accessory reboot worker
+export V1_CACHE_DIR=/var/opt/docker/frank/yomik/data/cache-v1-rehearsal
+mkdir -p "$V1_CACHE_DIR"
+rsync -a --delete /var/opt/docker/frank/yomik/data/cache/ "$V1_CACHE_DIR/"
+find /var/opt/docker/frank/yomik/data/cache -type f -print0 \
+  | sort -z | xargs -0 sha256sum > /tmp/yomik-live-cache.before.sha256
 ```
 
-## 8. Monitoring
+Set immutable v1 image references for both API and worker so queue revisions
+agree, then layer the rollback override:
 
 ```bash
-# Service status
-kamal details
-
-# API logs
-kamal app logs
-
-# Worker logs
-kamal accessory logs worker
-
-# Health check
-curl -s https://<RUNPOD_IP>/api/v1/health | jq .
-
-# Redis queue lengths
-kamal accessory exec redis "redis-cli XLEN frank:jobs:high"
-kamal accessory exec redis "redis-cli XLEN frank:jobs:low"
+export API_IMAGE='localhost:3007/akitaonrails/frank-yomik-api@sha256:<v2-digest>'
+export WORKER_IMAGE='localhost:3007/akitaonrails/frank-yomik-worker-rocm@sha256:<v2-digest>'
+export V1_API_IMAGE='localhost:3007/akitaonrails/frank-yomik-api@sha256:b6a9c755aca637ea6cbd45f744058ac93d1acc3bc6138e57366de001769eb25f'
+export V1_WORKER_IMAGE='localhost:3007/akitaonrails/frank-yomik-worker-rocm@sha256:0812dd7271818bcf827c927a4e724dab9d6c07f64e08f3d4942fbf0deb06abb1'
+export V1_CACHE_DIR=/var/opt/docker/frank/yomik/data/cache-v1-rehearsal
+docker compose -f docker-compose.prod.yml \
+  -f docker-compose.v1-rollback.yml up -d api worker
 ```
 
-## 9. Troubleshooting
+The override sets `PIPELINE_REVISION=legacy-v1`, enables the compatibility flag,
+and replaces both cache mounts with `V1_CACHE_DIR`. After rehearsal, verify the
+live tree against `/tmp/yomik-live-cache.before.sha256`; discard the isolated
+clone. Return to v2 by removing the override and starting the recorded v2
+digest references.
 
-### Worker can't connect to Ollama
-Ollama takes 20-30s to start. The worker will retry on connection failure. Check:
-```bash
-kamal accessory logs ollama
-curl http://localhost:11434/api/tags  # from inside the pod
-```
+## Troubleshooting
 
-### Out of VRAM
-The worker loads manga-ocr (~350MB), EasyOCR (~600MB), and LaMa (~200MB) into VRAM. Ollama loads qwen3:14b (~9GB). Total ~10GB. If using a 24GB GPU, there's headroom. For 16GB GPUs, set `ocr.device: cpu` in `config.yaml`.
+### Worker is absent from health output
 
-### Model cache not persisting
-Verify volume mounts: `docker inspect frank-manga-worker | jq '.[0].Mounts'`. The HuggingFace cache must map to `/home/worker/.cache/huggingface` (not `/root/`).
+Read worker logs. Preflight names the failed capability and underlying error.
+Check cache volume permissions, configured device availability, model digests,
+and the Ollama endpoint. The worker intentionally has no heartbeat until all
+checks pass.
 
-### Stale results after redeploy
-Redis data persists. To flush: `kamal accessory exec redis "redis-cli FLUSHDB"`.
+### Worker is active but `ready` is false
 
-### Pod restarted, models gone
-If using a RunPod Network Volume, models survive restarts. Without a network volume, you'll need to re-pull `ollama pull qwen3:14b` and the worker will re-download OCR models on first job.
+Compare the worker and top-level `pipeline_revision`. Restart API and workers
+from the digest references in the same release manifest. A timestamp-only
+heartbeat belongs to an older worker that does not publish the capability
+contract.
+
+### Ollama model verification fails
+
+List models at the configured endpoint and compare the tag and digest with
+`server/pipeline/stage_manifest.json`. Pull the pinned model through the
+homelab model service, then restart the worker.
+
+### ROCm initialization fails
+
+Confirm `/dev/kfd` and `/dev/dri` are present, the configured group IDs match the
+host, and the host supports the pinned ROCm image. Use the generic CPU Compose
+service as a complete unit when testing without ROCm.

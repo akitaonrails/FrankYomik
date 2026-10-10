@@ -35,6 +35,10 @@ The renderer, font, PageDocument rerender, Flutter/WebView, extension lens, and
 real-Chromium gates are recorded in
 [`phase5_rendering_evaluation.md`](phase5_rendering_evaluation.md).
 
+The read-only Strix Halo production inventory, rollback blockers, Phase 6
+rehearsal sequence, and evidence template are recorded in
+[`phase6_strix_operations.md`](phase6_strix_operations.md).
+
 ## What should be compared
 
 ### 1. Detection and segmentation

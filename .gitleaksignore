@@ -1,0 +1,8 @@
+# Reviewed during the v2.0 security audit. The first four findings are pinned
+# SHA-256 checksums for Hayai tokenizer artifacts; the fifth is prose in the
+# repository map. Exact fingerprints keep new findings in those files visible.
+6bb78f9da19b6cab0d99b1027462018782954f98:server/pipeline/stage_manifest.json:generic-api-key:298
+6bb78f9da19b6cab0d99b1027462018782954f98:server/pipeline/stage_manifest.json:generic-api-key:299
+6bb78f9da19b6cab0d99b1027462018782954f98:server/kindle/hayai_ocr.py:generic-api-key:24
+6bb78f9da19b6cab0d99b1027462018782954f98:server/kindle/hayai_ocr.py:generic-api-key:25
+7a5c0b5119314ef05e9539d3107578903eafd2f4:CLAUDE.md:generic-api-key:225

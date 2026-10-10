@@ -1,0 +1,22 @@
+# Explicit rollback override. Use only with immutable v1 image references.
+# It preserves the cache volume and opts both API and worker into legacy-v1.
+services:
+  api:
+    image: ${V1_API_IMAGE:?Set V1_API_IMAGE to the immutable v1 API image}
+    environment:
+      PIPELINE_REVISION: legacy-v1
+      ALLOW_LEGACY_PIPELINE_REVISION: "1"
+    volumes:
+      - ${V1_CACHE_DIR:?Set V1_CACHE_DIR to an isolated v1 cache clone}:/data/cache
+
+  worker:
+    image: ${V1_WORKER_IMAGE:?Set V1_WORKER_IMAGE to the immutable v1 worker image}
+    environment:
+      PIPELINE_REVISION: legacy-v1
+      ALLOW_LEGACY_PIPELINE_REVISION: "1"
+    volumes:
+      - ${V1_CACHE_DIR:?Set V1_CACHE_DIR to an isolated v1 cache clone}:/app/server/cache
+
+  init-perms:
+    volumes:
+      - ${V1_CACHE_DIR:?Set V1_CACHE_DIR to an isolated v1 cache clone}:/data/cache

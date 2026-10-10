@@ -214,6 +214,7 @@ def process_job(job: ProcessingJob,
             pipeline=job.pipeline,
             source_hash=job.source_hash,
             pipeline_revision=job.pipeline_revision,
+            cacheable=False,
         )
 
 

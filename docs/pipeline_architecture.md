@@ -39,6 +39,13 @@ HTTP/WebSocket surface. The Python worker owns model execution, document
 construction, cache writes, and metadata rerendering. Redis contains transient
 queue and delivery state. The filesystem cache is the persistent result store.
 
+Before allocating decoded pixels, the worker parses the image header with
+Pillow and rejects unsupported or malformed files, dimensions above 32,768,
+and pages above 40,000,000 pixels. It loads an accepted image once and derives
+the OpenCV BGR array from that RGB decode. This complements the API compressed
+body limit and prevents a small authenticated upload from expanding without
+bound.
+
 ## Processing flows
 
 ### Manga translation
@@ -167,6 +174,14 @@ stages. Per-stage provenance contains the actual implementation revision,
 model weights, and prompt/configuration hash; it does not repeat the global
 deployment fingerprint. See [Pipeline stage manifest](pipeline_stage_manifest.md)
 for the pinning, verification, and update procedure.
+
+Before connecting to Redis, a production worker preflights every model and data
+dependency needed by all four pipelines. Current priority streams are shared,
+so a partial-capability process is rejected at startup rather than claiming a
+job it cannot execute. After preflight, each heartbeat has a companion JSON
+record containing the pipeline list, revision, verified model names, and
+preflight status. `/api/v1/health` exposes that record and marks a worker ready
+only when its revision matches the API.
 
 ## Pipeline name and cache namespace
 

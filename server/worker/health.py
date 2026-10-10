@@ -1,5 +1,6 @@
 """Worker health check utilities."""
 
+import json
 import logging
 import time
 
@@ -39,7 +40,19 @@ def check_health(redis_url: str, consumer_group: str = "workers") -> dict:
         if ts and now - int(ts) < ACTIVE_WORKER_WINDOW_SECONDS:
             # Extract worker name from key pattern
             name = key.replace(HEARTBEAT_PREFIX, "").replace(":heartbeat", "")
-            active_workers.append({"name": name, "last_heartbeat": int(ts)})
+            worker = {"name": name, "last_heartbeat": int(ts)}
+            capability_value = rdb.get(
+                f"{HEARTBEAT_PREFIX}{name}:capabilities"
+            )
+            if capability_value:
+                try:
+                    capabilities = json.loads(capability_value)
+                except (TypeError, json.JSONDecodeError):
+                    capabilities = None
+                if (isinstance(capabilities, dict)
+                        and capabilities.get("schema_version") == 1):
+                    worker.update(capabilities)
+            active_workers.append(worker)
 
     # Pending messages per consumer group
     pending = {}

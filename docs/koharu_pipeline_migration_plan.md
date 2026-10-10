@@ -11,7 +11,7 @@ This is a sequential migration. A stage may start only after the previous stage 
 ## Status
 
 Phases 0 through 3 are complete. The foundation provides typed stage protocols,
-a validated [PageDocument v2](page_document_v2.md), cache manifest v3 revision
+a validated [PageDocument v2](page_document_v2.md), cache manifest v4 revision
 identity, compatibility reads for legacy metadata and manifests, verified model
 and font identity, fail-closed translation and configured inpainting, and an
 injected, consumer-level
@@ -299,13 +299,25 @@ Document layout decisions and invariants, font requirements/licenses, rerender b
 
 ## Phase 6: production consolidation and migration rehearsal
 
+**Implementation status:** production consolidation is implemented locally;
+Strix Halo deployment rehearsal and release acceptance remain operational gates.
+
+The production choices are now explicit: Manga OCR remains the Japanese OCR
+default, RT-DETR remains the semantic detector, and LaMa plus deterministic
+fills remain cleanup. The unused CUDA worker image and partial shared-queue
+worker modes were removed. Hayai stays disabled as a benchmark/diagnostic
+adapter because its training-data disclosure still blocks distribution; it is
+not advertised as a worker capability. The isolated v1 Compose override is the
+rollback path during the v2.0 window.
+
 ### Implementation
 
 - Select new defaults and remove temporary experimental paths that have no rollback or diagnostic value. Keep the v1 backend configuration for the v2.0 rollback window.
 - Build CPU and ROCm worker images from pinned dependencies. Preflight every required model and expose worker capabilities/revisions in health output.
 - Add startup failure messages for missing/incompatible weights and prevent an incapable worker from claiming a job it cannot run.
 - Rehearse v1 cache reading, v2 cache writing, dedup revisioning, worker restart, abandoned-job recovery, two-replica scheduling, and rollback on the Strix Halo deployment.
-- Update deployment documentation from the stale RunPod-only description to the actual homelab Compose/ROCm setup, while retaining a clearly marked generic deployment section if still supported.
+- Keep deployment documentation aligned with the homelab Compose/ROCm setup
+  and its clearly marked generic CPU path.
 
 ### Gate
 

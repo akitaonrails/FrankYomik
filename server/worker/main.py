@@ -7,6 +7,7 @@ import socket
 
 from kindle.config import _load_yaml_config
 from .consumer import Consumer
+from .preflight import ALL_PIPELINES, PreflightError, preflight_worker
 
 log = logging.getLogger(__name__)
 
@@ -15,9 +16,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Frank Manga worker — Redis stream consumer")
     parser.add_argument(
-        "--pipeline", choices=["manga", "webtoon", "both"],
-        default="both",
-        help="Which pipeline(s) this worker handles (default: both)")
+        "--pipeline", choices=["both"], default="both",
+        help="Current workers must handle all pipelines (default: both)")
     parser.add_argument(
         "--redis-url", default=None,
         help="Redis URL (default: from config.yaml or redis://localhost:6379)")
@@ -47,8 +47,10 @@ def main() -> None:
 
     log.info("Starting worker (pipeline=%s, redis=%s)", args.pipeline, redis_url)
 
-    # Pre-load heavy models so first job doesn't pay startup cost
-    _preload_models(args.pipeline)
+    try:
+        report = preflight_worker(ALL_PIPELINES)
+    except PreflightError as error:
+        parser.error(f"worker preflight failed: {error}")
 
     cache_dir = worker_cfg.get("cache_dir", "./cache")
 
@@ -72,30 +74,10 @@ def main() -> None:
         heartbeat_ttl=heartbeat_ttl,
         progress_ttl=progress_ttl,
         high_burst_before_low=high_burst_before_low,
+        capabilities=report,
     )
     consumer.connect()
     consumer.run()
-
-
-def _preload_models(pipeline: str) -> None:
-    """Preload OCR and other heavy models to avoid first-job latency."""
-    if pipeline in ("manga", "both"):
-        log.info("Preloading manga-ocr model...")
-        try:
-            from kindle.ocr import _get_ocr  # noqa: F401
-            _get_ocr()
-            log.info("manga-ocr model loaded")
-        except Exception:
-            log.warning("Failed to preload manga-ocr (will load on first job)")
-
-    if pipeline in ("webtoon", "both"):
-        log.info("Preloading EasyOCR model...")
-        try:
-            from webtoon.ocr import _get_reader  # noqa: F401
-            _get_reader()
-            log.info("EasyOCR model loaded")
-        except Exception:
-            log.warning("Failed to preload EasyOCR (will load on first job)")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 # Stage 1: Build static Go binary
-FROM golang:1.25-bookworm AS builder
+FROM golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS builder
 
 ARG APP_UID=1026
 ARG APP_GID=1026
@@ -22,7 +22,15 @@ COPY server/fonts/genei_antique/*.ttf ./fonts/genei_antique/
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /frank-api .
 
 # Stage 2: Minimal runtime
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+
+ARG SOURCE_REVISION
+ARG PIPELINE_REVISION
+ARG RELEASE_VERSION
+LABEL org.opencontainers.image.source="https://github.com/akitaonrails/FrankYomik" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      io.frank-yomik.pipeline-revision="${PIPELINE_REVISION}"
 
 COPY --from=builder /frank-api /frank-api
 

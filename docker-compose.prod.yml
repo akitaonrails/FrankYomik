@@ -8,7 +8,7 @@ x-logging: &default-logging
     max-size: 10m
     max-file: "3"
 
-# Images pinned by tag are pulled/rebuilt by hand; watchtower must not touch
+# Images are supplied as exact registry digest references; watchtower must not touch
 # the infra containers (redis holds delivery state, the init jobs are one-shot).
 x-no-watchtower: &no-watchtower
   - com.centurylinklabs.watchtower.enable=false
@@ -43,7 +43,7 @@ services:
     labels: *no-watchtower
 
   api:
-    image: localhost:3007/akitaonrails/frank-yomik-api:latest
+    image: ${API_IMAGE:?Set API_IMAGE to the API registry digest reference}
     container_name: yomik-api
     user: "${APP_UID:-1026}:${APP_GID:-1026}"
     security_opt:
@@ -69,7 +69,7 @@ services:
     logging: *default-logging
 
   worker:
-    image: localhost:3007/akitaonrails/frank-yomik-worker-rocm:latest
+    image: ${WORKER_IMAGE:?Set WORKER_IMAGE to the worker registry digest reference}
     # container_name omitted so docker compose can spin multiple replicas.
     # Each replica gets a unique hostname which the worker uses as its
     # Redis Streams consumer name.
@@ -98,7 +98,6 @@ services:
       - /var/opt/docker/frank/yomik/data/mangaocr-cache:/home/worker/.cache/manga_ocr
       - /var/opt/docker/frank/yomik/data/huggingface-cache:/home/worker/.cache/huggingface
       - /var/opt/docker/frank/yomik/data/easyocr-cache:/home/worker/.EasyOCR
-      - /var/opt/docker/frank/yomik/config.prod.yaml:/app/server/config.yaml:ro
     depends_on:
       redis:
         condition: service_healthy

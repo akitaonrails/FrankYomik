@@ -626,8 +626,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	resp := HealthResponse{
-		Status: "healthy",
-		Redis:  "connected",
+		Status:           "healthy",
+		Redis:            "connected",
+		PipelineRevision: s.pipelineRevision,
 	}
 
 	// Check Redis
@@ -647,14 +648,25 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp.QueueLow, _ = s.rdb.XLen(ctx, streamLow).Result()
 
 	// Active workers
-	workers, err := s.results.GetActiveWorkers(ctx)
+	workers, err := s.results.GetActiveWorkers(ctx, s.pipelineRevision)
 	if err != nil {
 		log.Printf("WARN: GetActiveWorkers: %v", err)
 	}
 	resp.Workers = workers
 	resp.ActiveWorkers = len(workers)
+	for _, worker := range workers {
+		if worker.Ready {
+			resp.ReadyWorkers++
+		}
+	}
+	if resp.ReadyWorkers == 0 {
+		resp.Status = "unhealthy"
+	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if resp.Status != "healthy" {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("WARN: response encode: %v", err)
 	}

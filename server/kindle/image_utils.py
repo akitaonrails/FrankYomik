@@ -2,10 +2,15 @@
 
 import base64
 import io
+import warnings
 
 import cv2
 import numpy as np
 from PIL import Image
+
+MAX_INPUT_IMAGE_PIXELS = 40_000_000
+MAX_INPUT_IMAGE_DIMENSION = 32_768
+SUPPORTED_INPUT_FORMATS = frozenset({"JPEG", "PNG", "WEBP"})
 
 
 def load_image(path: str) -> np.ndarray:
@@ -231,12 +236,30 @@ def cv2_to_pil(img: np.ndarray) -> Image.Image:
 
 
 def decode_image_bytes(data: bytes) -> tuple[np.ndarray, Image.Image]:
-    """Decode image bytes to OpenCV BGR + Pillow RGB."""
-    nparr = np.frombuffer(data, np.uint8)
-    img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img_cv is None:
-        raise ValueError("Could not decode image from bytes")
-    img_pil = Image.open(io.BytesIO(data)).convert("RGB")
+    """Bound dimensions before allocating decoded pixels, then decode once."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as source:
+                width, height = source.size
+                if source.format not in SUPPORTED_INPUT_FORMATS:
+                    raise ValueError(
+                        f"Unsupported input image format: {source.format}"
+                    )
+                if width <= 0 or height <= 0:
+                    raise ValueError("Input image dimensions must be positive")
+                if (width > MAX_INPUT_IMAGE_DIMENSION
+                        or height > MAX_INPUT_IMAGE_DIMENSION):
+                    raise ValueError("Input image dimensions exceed safety limit")
+                if width * height > MAX_INPUT_IMAGE_PIXELS:
+                    raise ValueError("Input image pixel count exceeds safety limit")
+                source.load()
+                img_pil = source.convert("RGB")
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+        raise ValueError("Input image dimensions exceed safety limit") from error
+    except (OSError, SyntaxError) as error:
+        raise ValueError("Could not decode image from bytes") from error
+    img_cv = np.asarray(img_pil)[:, :, ::-1].copy()
     return img_cv, img_pil
 
 

@@ -9,6 +9,38 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+type workerCapabilities struct {
+	SchemaVersion    int      `json:"schema_version"`
+	Pipelines        []string `json:"pipelines"`
+	PipelineRevision string   `json:"pipeline_revision"`
+	Models           []string `json:"models"`
+	Preflight        string   `json:"preflight"`
+}
+
+func supportsAllPipelines(pipelines []string) bool {
+	required := map[string]bool{
+		"book_furigana":   false,
+		"manga_furigana":  false,
+		"manga_translate": false,
+		"webtoon":         false,
+	}
+	if len(pipelines) != len(required) {
+		return false
+	}
+	for _, pipeline := range pipelines {
+		if _, ok := required[pipeline]; !ok || required[pipeline] {
+			return false
+		}
+		required[pipeline] = true
+	}
+	for _, present := range required {
+		if !present {
+			return false
+		}
+	}
+	return true
+}
+
 const (
 	resultKeyPrefix    = "frank:results:"
 	resultImgKeyPrefix = "frank:results:img:"
@@ -81,7 +113,7 @@ func (r *Results) DeleteJob(ctx context.Context, jobID string) error {
 }
 
 // GetActiveWorkers returns a list of workers with recent heartbeats.
-func (r *Results) GetActiveWorkers(ctx context.Context) ([]WorkerInfo, error) {
+func (r *Results) GetActiveWorkers(ctx context.Context, pipelineRevision string) ([]WorkerInfo, error) {
 	keys, err := r.rdb.Keys(ctx, heartbeatPrefix+"*:heartbeat").Result()
 	if err != nil {
 		return nil, err
@@ -98,10 +130,24 @@ func (r *Results) GetActiveWorkers(ctx context.Context) ([]WorkerInfo, error) {
 		if now.Sub(time.Unix(ts, 0)) < activeWorkerWindow {
 			// Extract name: frank:worker:<name>:heartbeat
 			name := key[len(heartbeatPrefix) : len(key)-len(":heartbeat")]
-			workers = append(workers, WorkerInfo{
+			worker := WorkerInfo{
 				Name:          name,
 				LastHeartbeat: ts,
-			})
+			}
+			data, err := r.rdb.Get(ctx, heartbeatPrefix+name+":capabilities").Bytes()
+			if err == nil {
+				var capabilities workerCapabilities
+				if json.Unmarshal(data, &capabilities) == nil && capabilities.SchemaVersion == 1 {
+					worker.Pipelines = capabilities.Pipelines
+					worker.PipelineRevision = capabilities.PipelineRevision
+					worker.Models = capabilities.Models
+					worker.Preflight = capabilities.Preflight
+					worker.Ready = capabilities.Preflight == "passed" &&
+						capabilities.PipelineRevision == pipelineRevision &&
+						supportsAllPipelines(capabilities.Pipelines)
+				}
+			}
+			workers = append(workers, worker)
 		}
 	}
 

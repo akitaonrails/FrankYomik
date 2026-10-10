@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -33,10 +36,34 @@ var upgrader = websocket.Upgrader{
 }
 
 const (
-	writeWait  = 10 * time.Second
-	pongWait   = 60 * time.Second
-	pingPeriod = 50 * time.Second // Must be less than pongWait
+	writeWait             = 10 * time.Second
+	pongWait              = 60 * time.Second
+	pingPeriod            = 50 * time.Second // Must be less than pongWait
+	maxWSMessageBytes     = 64 << 10
+	maxWSJobSubscriptions = 256
+	maxWSJobIDLength      = 200
 )
+
+var websocketJobIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+func validateWSSubscriptions(current map[string]struct{}, jobIDs []string) error {
+	if len(jobIDs) > maxWSJobSubscriptions {
+		return fmt.Errorf("too many job subscriptions")
+	}
+	next := len(current)
+	for _, jobID := range jobIDs {
+		if len(jobID) == 0 || len(jobID) > maxWSJobIDLength || !websocketJobIDRe.MatchString(jobID) {
+			return fmt.Errorf("invalid job id")
+		}
+		if _, exists := current[jobID]; !exists {
+			next++
+		}
+	}
+	if next > maxWSJobSubscriptions {
+		return fmt.Errorf("too many job subscriptions")
+	}
+	return nil
+}
 
 // handleWebSocket upgrades to WebSocket and manages subscriptions.
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -46,9 +73,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxWSMessageBytes)
 
 	notifCh := make(chan WSNotification, 64)
 	defer s.unsubscribe(notifCh)
+	subscriptions := make(map[string]struct{})
+	stopWriter := make(chan struct{})
+	var stopWriterOnce sync.Once
+	stopWritePump := func() { stopWriterOnce.Do(func() { close(stopWriter) }) }
+	defer stopWritePump()
 
 	// Write pump: sends notifications and pings
 	done := make(chan struct{})
@@ -59,6 +92,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		for {
 			select {
+			case <-stopWriter:
+				return
 			case notif, ok := <-notifCh:
 				if !ok {
 					return
@@ -107,13 +142,23 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		switch msg.Type {
 		case "subscribe":
+			if err := validateWSSubscriptions(subscriptions, msg.JobIDs); err != nil {
+				_ = conn.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, err.Error()),
+					time.Now().Add(writeWait),
+				)
+				return
+			}
 			for _, jobID := range msg.JobIDs {
 				s.subscribe(jobID, notifCh)
+				subscriptions[jobID] = struct{}{}
 			}
 		case "unsubscribe":
 			// Unsubscribe specific jobs
 			s.mu.Lock()
 			for _, jobID := range msg.JobIDs {
+				delete(subscriptions, jobID)
 				if subs, ok := s.subscribers[jobID]; ok {
 					delete(subs, notifCh)
 					if len(subs) == 0 {
@@ -125,6 +170,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Wait for write pump to finish
+	// Stop the write pump immediately after a normal read-side disconnect.
+	// Otherwise it can retain the connection and its subscription channel until
+	// the next 50-second ping discovers the closed peer.
+	stopWritePump()
 	<-done
 }

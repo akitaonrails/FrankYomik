@@ -20,6 +20,7 @@ from webtoon.bubble_detector import WebtoonBubble
 from webtoon.inpainter import build_effective_cleanup_mask, cleanup_bubble
 from webtoon.ocr import TextDetection
 from worker.consumer import STREAM_HIGH, Consumer
+from worker.preflight import ALL_PIPELINES, PreflightReport
 from worker.job import (
     PipelineDependencies,
     ProcessingJob,
@@ -436,6 +437,9 @@ def _process_through_consumer(
         cache_dir=str(tmp_path / "cache"),
         pipeline_revision="gate0-test",
         job_dependencies=dependencies,
+        capabilities=PreflightReport(
+            ALL_PIPELINES, "gate0-test", ("injected-test-models",),
+        ),
     )
     consumer._rdb = MagicMock()
     consumer._rdb.get.side_effect = lambda key: (
@@ -771,6 +775,9 @@ def test_degraded_manga_ocr_result_is_returned_but_not_cached(tmp_path):
         cache_dir=str(tmp_path / "cache"),
         pipeline_revision="gate0-test",
         job_dependencies=deps,
+        capabilities=PreflightReport(
+            ALL_PIPELINES, "gate0-test", ("injected-test-models",),
+        ),
     )
     consumer._rdb = MagicMock()
     consumer._rdb.get.side_effect = lambda key: (

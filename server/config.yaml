@@ -14,7 +14,7 @@ fonts:
   sfx: "fonts/ComicNeue-Bold.otf"
 
 ocr:
-  device: "cuda"   # "cuda" for GPU (~350MB); "cpu" if VRAM is tight
+  device: "cuda"   # ROCm exposes the CUDA API; generic Compose overrides by env
   hayai:
     # Distribution is blocked pending auditable Hayai training-data provenance.
     enabled: false

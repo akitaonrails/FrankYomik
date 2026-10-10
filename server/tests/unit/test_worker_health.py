@@ -1,7 +1,7 @@
 """Tests for worker health check utilities."""
 
 import time
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 from worker.health import check_health
 
@@ -93,7 +93,14 @@ class TestCheckHealthHealthy:
             "frank:worker:w-1:heartbeat",
             "frank:worker:w-2:heartbeat",
         ]
-        mock_rdb.get.side_effect = [str(now - 10), str(now - 200)]
+        def get_value(key):
+            if key == "frank:worker:w-1:heartbeat":
+                return str(now - 10)
+            if key == "frank:worker:w-2:heartbeat":
+                return str(now - 200)
+            return None
+
+        mock_rdb.get.side_effect = get_value
 
         result = check_health("redis://localhost:6379")
         assert len(result["active_workers"]) == 1

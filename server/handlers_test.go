@@ -872,14 +872,14 @@ func TestHealthEndpoint(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("got %d, want 200", w.Code)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("got %d, want 503", w.Code)
 	}
 
 	var resp HealthResponse
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp.Status != "healthy" {
-		t.Errorf("got %q, want 'healthy'", resp.Status)
+	if resp.Status != "unhealthy" {
+		t.Errorf("got %q, want 'unhealthy'", resp.Status)
 	}
 	if resp.Redis != "connected" {
 		t.Errorf("got redis %q, want 'connected'", resp.Redis)
@@ -929,6 +929,13 @@ func TestHealthReportsWorkers(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Unix()
 	rdb.Set(ctx, "frank:worker:test-worker-1:heartbeat", fmt.Sprintf("%d", now), time.Minute)
+	rdb.Set(ctx, "frank:worker:test-worker-1:capabilities", `{
+		"schema_version":1,
+		"pipelines":["book_furigana","manga_furigana","manga_translate","webtoon"],
+		"pipeline_revision":"`+srv.pipelineRevision+`",
+		"models":["manga-ocr","easyocr-ko"],
+		"preflight":"passed"
+	}`, time.Minute)
 
 	req := httptest.NewRequest("GET", "/api/v1/health", nil)
 	w := httptest.NewRecorder()
@@ -941,6 +948,58 @@ func TestHealthReportsWorkers(t *testing.T) {
 	}
 	if len(resp.Workers) != 1 || resp.Workers[0].Name != "test-worker-1" {
 		t.Errorf("unexpected workers: %+v", resp.Workers)
+	}
+	if !resp.Workers[0].Ready || resp.Workers[0].PipelineRevision != srv.pipelineRevision {
+		t.Errorf("worker capabilities not exposed: %+v", resp.Workers[0])
+	}
+	if w.Code != http.StatusOK || resp.ReadyWorkers != 1 || resp.Status != "healthy" {
+		t.Errorf("ready health response: code=%d response=%+v", w.Code, resp)
+	}
+	if resp.PipelineRevision != srv.pipelineRevision {
+		t.Errorf("health revision: got %q want %q", resp.PipelineRevision, srv.pipelineRevision)
+	}
+}
+
+func TestHealthMarksMismatchedWorkerNotReady(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ctx := context.Background()
+	rdb.Set(ctx, "frank:worker:old:heartbeat", fmt.Sprintf("%d", time.Now().Unix()), time.Minute)
+	rdb.Set(ctx, "frank:worker:old:capabilities", `{
+		"schema_version":1,"pipelines":["webtoon"],
+		"pipeline_revision":"old-revision","models":[],"preflight":"passed"
+	}`, time.Minute)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/health", nil))
+	var resp HealthResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if len(resp.Workers) != 1 || resp.Workers[0].Ready {
+		t.Fatalf("mismatched worker must not be ready: %+v", resp.Workers)
+	}
+	if w.Code != http.StatusServiceUnavailable || resp.Status != "unhealthy" {
+		t.Fatalf("mismatched worker health must fail closed: code=%d response=%+v", w.Code, resp)
+	}
+}
+
+func TestHealthRejectsPartialCapabilityHeartbeat(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ctx := context.Background()
+	rdb.Set(ctx, "frank:worker:partial:heartbeat", fmt.Sprintf("%d", time.Now().Unix()), time.Minute)
+	rdb.Set(ctx, "frank:worker:partial:capabilities", `{
+		"schema_version":1,"pipelines":["webtoon"],
+		"pipeline_revision":"`+srv.pipelineRevision+`","models":[],"preflight":"passed"
+	}`, time.Minute)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/health", nil))
+	var resp HealthResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if w.Code != http.StatusServiceUnavailable || resp.Workers[0].Ready {
+		t.Fatalf("partial worker must not satisfy health: code=%d response=%+v", w.Code, resp)
 	}
 }
 

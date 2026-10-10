@@ -42,10 +42,10 @@ When output can change:
 4. If deployment sets `PIPELINE_REVISION`, update it to the new derived value
    before bringing up the API and workers.
 
-The model executor packages are exact requirements and are recorded in their
-stage identities. Other support dependencies remain bounded ranges, so the
-manifest identifies the checked-in requirements policy rather than claiming a
-complete transitive environment lock. The current Hugging Face revisions are
+The model executor and support packages are exact requirements and are recorded
+in their stage identities. `requirements.worker.lock` freezes the transitive
+resolution used by CPU and ROCm images; the two Dockerfiles also pin their base
+image digests and PyTorch variants. The current Hugging Face revisions are
 immutable repository commits passed to `from_pretrained` or
 `snapshot_download`. The LaMa identity records the release asset URL, package
 version, and the downloaded `big-lama.pt` SHA-256. The Qwen identity is the
@@ -67,6 +67,13 @@ translation adapters perform this `/api/tags` check before their first request
 and fail closed if the configured tag is absent or resolves to other bytes.
 This check applies to Ollama's native API; a llama-swap OpenAI endpoint does not
 provide the required digest contract and is not accepted as verification.
+
+Worker startup loads the pinned RT-DETR, manga-ocr, Japanese and Korean
+EasyOCR, UniDic, configured fonts, translation model, and enabled LaMa backend.
+A missing artifact, digest mismatch, incompatible accelerator, or provider
+failure stops startup before Redis consumption begins. All four pipelines are
+required because the shared priority streams cannot filter by pipeline before
+consumer-group delivery.
 
 Before constructing LaMa, the worker downloads or locates `big-lama.pt` and
 checks its bytes against the manifest SHA-256. It does not load mismatched
