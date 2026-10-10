@@ -538,10 +538,11 @@ class Consumer:
             self._rdb.set(img_key, result.image_bytes, ex=self.result_ttl)
 
         # Store metadata payload in Redis keyed by pipeline:source_hash so the
-        # server can serve it even when the v2 disk cache path doesn't match.
+        # server can serve every completed result during its result TTL. A
+        # degraded result remains excluded from the durable disk cache, but
+        # its advertised metadata URL must still resolve.
         if (
-            result.cacheable
-            and result.metadata_payload
+            result.metadata_payload
             and result.source_hash
             and result.pipeline
         ):

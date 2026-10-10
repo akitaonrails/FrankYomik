@@ -580,6 +580,19 @@ class TestStoreResult:
         assert meta_json["pipeline"] == "manga_translate"
         assert meta_json["cache_pipeline"] == "manga_translate_pt-br"
 
+    def test_noncacheable_result_keeps_transient_metadata(self):
+        c = _make_consumer()
+        result = ProcessingResult(
+            job_id="degraded-1", status="completed", pipeline="webtoon",
+            source_hash="a" * 64, cacheable=False,
+            metadata_payload={"schema_version": 2},
+        )
+
+        c._store_result(result, cache_pipeline="webtoon")
+
+        keys = [call_args[0][0] for call_args in c._rdb.set.call_args_list]
+        assert f"frank:meta:webtoon:{'a' * 64}" in keys
+
     def test_skips_image_when_none(self):
         c = _make_consumer()
         result = ProcessingResult(
