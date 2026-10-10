@@ -78,8 +78,8 @@ For a manual restart, copy the `deployed` references from that release manifest:
 
 ```bash
 cd /var/opt/docker/frank/yomik
-export API_IMAGE='localhost:3007/akitaonrails/frank-yomik-api@sha256:<digest>'
-export WORKER_IMAGE='localhost:3007/akitaonrails/frank-yomik-worker-rocm@sha256:<digest>'
+export API_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-api@sha256:<digest>'
+export WORKER_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-worker-rocm@sha256:<digest>'
 docker compose -f docker-compose.prod.yml pull api worker
 docker compose -f docker-compose.prod.yml up -d --no-deps \
   --force-recreate --scale worker=2 api worker
@@ -147,10 +147,10 @@ Set immutable v1 image references for both API and worker so queue revisions
 agree, then layer the rollback override:
 
 ```bash
-export API_IMAGE='localhost:3007/akitaonrails/frank-yomik-api@sha256:<v2-digest>'
-export WORKER_IMAGE='localhost:3007/akitaonrails/frank-yomik-worker-rocm@sha256:<v2-digest>'
-export V1_API_IMAGE='localhost:3007/akitaonrails/frank-yomik-api@sha256:b6a9c755aca637ea6cbd45f744058ac93d1acc3bc6138e57366de001769eb25f'
-export V1_WORKER_IMAGE='localhost:3007/akitaonrails/frank-yomik-worker-rocm@sha256:0812dd7271818bcf827c927a4e724dab9d6c07f64e08f3d4942fbf0deb06abb1'
+export API_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-api@sha256:<v2-digest>'
+export WORKER_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-worker-rocm@sha256:<v2-digest>'
+export V1_API_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-api@sha256:b6a9c755aca637ea6cbd45f744058ac93d1acc3bc6138e57366de001769eb25f'
+export V1_WORKER_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-worker-rocm@sha256:0812dd7271818bcf827c927a4e724dab9d6c07f64e08f3d4942fbf0deb06abb1'
 export V1_CACHE_DIR=/var/opt/docker/frank/yomik/data/cache-v1-rehearsal
 docker compose -f docker-compose.prod.yml \
   -f docker-compose.v1-rollback.yml up -d api worker

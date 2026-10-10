@@ -133,6 +133,7 @@ cat >/dev/null || true
     )
     if use_forward:
         env.pop("REGISTRY", None)
+        env.pop("REMOTE_REGISTRY", None)
         source_config = tmp_path / "source-docker-config"
         source_config.mkdir()
         (source_config / "config.json").write_text(
@@ -255,6 +256,10 @@ def test_deploy_uses_and_cleans_up_temporary_registry_forward(tmp_path: Path) ->
     assert result.returncode == 0, result.stderr
     calls = log.read_text()
     assert f"localhost:{port}/akitaonrails/frank-yomik-api" in calls
+    assert (
+        f"API_IMAGE='192.168.0.90:3007/akitaonrails/frank-yomik-api@{API_DIGEST}'"
+        in calls
+    )
     assert "Opening temporary SSH forward" in result.stdout
     assert json.loads((tmp_path / "forwarded-config.json").read_text()) == {
         "auths": {f"localhost:{port}": {"auth": "test"}}

@@ -184,14 +184,14 @@ backup="/var/opt/docker/frank/yomik-backups/${stamp}"
 mkdir -p "$backup"
 cp -a docker-compose.yml config.prod.yaml .env "$backup/"
 
-docker pull localhost:3007/akitaonrails/frank-yomik-api:v1.0.1-rollback-20261010
-docker pull localhost:3007/akitaonrails/frank-yomik-worker-rocm:v1.0.1-rollback-20261010
+docker pull 192.168.0.90:3007/akitaonrails/frank-yomik-api:v1.0.1-rollback-20261010
+docker pull 192.168.0.90:3007/akitaonrails/frank-yomik-worker-rocm:v1.0.1-rollback-20261010
 test "$(docker image inspect \
-  localhost:3007/akitaonrails/frank-yomik-api:v1.0.1-rollback-20261010 \
+  192.168.0.90:3007/akitaonrails/frank-yomik-api:v1.0.1-rollback-20261010 \
   --format '{{.Id}}')" = \
   'sha256:e329d82103b7d34beaa1641c74e08348673308fde3e445704705a34439b9ba6c'
 test "$(docker image inspect \
-  localhost:3007/akitaonrails/frank-yomik-worker-rocm:v1.0.1-rollback-20261010 \
+  192.168.0.90:3007/akitaonrails/frank-yomik-worker-rocm:v1.0.1-rollback-20261010 \
   --format '{{.Id}}')" = \
   'sha256:effcffc418cb5ad06924ff802f58704f3384f62016d9a9d8d5ac1b2cda1f9a19'
 
