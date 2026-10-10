@@ -127,8 +127,10 @@ Gesture rules that keep the reader usable:
 - A tap under 200ms is left alone, so Kindle page turns still work.
 - More than 12px of travel before the hold elapses reclassifies the press as a
   scroll or swipe, so webtoon scrolling still works.
-- A peek swallows the `click`/`mouseup` it would otherwise spawn, so releasing
-  the lens does not also turn the page.
+- A peek swallows the `touchend`, `pointerup`, compatibility mouse events, and
+  `click` it would otherwise spawn, so releasing the lens does not also turn
+  the page. Android WebView emits `touchend` separately and may deliver it
+  before `pointerup`.
 - While a peek is held, pointer/mouse/touch moves are stopped from reaching the
   page at all (`stopPropagation` + `stopImmediatePropagation`, registered on
   `window` in capture phase). `preventDefault` alone is not enough: it stops

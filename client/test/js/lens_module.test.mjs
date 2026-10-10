@@ -272,6 +272,38 @@ test('releasing a peek closes the lens and swallows the click', async () => {
   assert.equal(click.propagationStopped, true);
 });
 
+test('a touch release from a peek never reaches the reader', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  fire('pointerdown', pointer('pointerdown', 200, 300, { pointerType: 'touch' }));
+  await wait(260);
+
+  // Android WebView dispatches touchend separately from pointerup. Kindle can
+  // use that first release event to turn the page unless the lens owns it too.
+  const touchEnd = pointer('touchend', 200, 300, { pointerType: 'touch' });
+  fire('touchend', touchEnd);
+
+  assert.equal(touchEnd.defaultPrevented, true);
+  assert.equal(touchEnd.propagationStopped, true);
+  fire('pointerup', pointer('pointerup', 200, 300, { pointerType: 'touch' }));
+});
+
+test('a quick touch release remains available for page navigation', async () => {
+  const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
+  const { lens, fire, pointer } = buildSandbox([img]);
+  lens.register(PNG_B64, { pageId: 'kindle-1', expectedBlobSrc: 'blob:page' });
+
+  fire('pointerdown', pointer('pointerdown', 200, 300, { pointerType: 'touch' }));
+  await wait(60);
+  const touchEnd = pointer('touchend', 200, 300, { pointerType: 'touch' });
+  fire('touchend', touchEnd);
+  fire('pointerup', pointer('pointerup', 200, 300, { pointerType: 'touch' }));
+
+  assert.equal(touchEnd.defaultPrevented, false);
+});
+
 test('travel before the hold elapses is a scroll, not a peek', async () => {
   const img = makeImage({ left: 0, top: 0, width: 400, height: 600 });
   const { lens, fire, pointer } = buildSandbox([img]);

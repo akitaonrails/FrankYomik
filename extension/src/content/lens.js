@@ -863,6 +863,13 @@
     if (state.holding) swallow(event);
   }
 
+  // Android WebView emits touchend as a separate release event, often before
+  // pointerup. A reader listening to touchend can otherwise turn the page even
+  // though the pointer release and compatibility click are both swallowed.
+  function onTouchEnd(event) {
+    if (state.holding || state.suppressClick) swallow(event);
+  }
+
   // Dragging an <img> is a native gesture of its own; without this the page
   // image gets picked up while peeking.
   function onDragOrSelect(event) {
@@ -896,6 +903,8 @@
   listen(window, 'click', onSyntheticMouse, { capture: true });
   listen(window, 'mousemove', onMouseMove, { capture: true, passive: false });
   listen(window, 'touchmove', onTouchMove, { capture: true, passive: false });
+  listen(window, 'touchend', onTouchEnd, { capture: true, passive: false });
+  listen(window, 'touchcancel', onTouchEnd, { capture: true, passive: false });
   listen(window, 'dragstart', onDragOrSelect, { capture: true });
   listen(window, 'selectstart', onDragOrSelect, { capture: true });
   listen(window, 'contextmenu', onContextMenu, { capture: true });
