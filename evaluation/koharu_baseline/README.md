@@ -15,6 +15,10 @@ The homelab Strix Halo host is a validated runner. The detector, Manga OCR, Babe
 
 The completed comparative results and adoption decisions are in [`docs/koharu_benchmark_results.md`](../../docs/koharu_benchmark_results.md). The tracked metadata now includes 37 verified OCR crops, 8 controlled reference-based inpainting cases, and the full detection disagreement audit. Private images and generated outputs remain ignored.
 
+The follow-up evaluation of ogkalu's compact v4 ONNX detector is recorded in
+[`phase1_detector_evaluation.md`](phase1_detector_evaluation.md). It remains an
+evaluation candidate and is not a production model.
+
 ## What should be compared
 
 ### 1. Detection and segmentation

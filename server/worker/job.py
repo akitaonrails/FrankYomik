@@ -43,14 +43,17 @@ from pipeline.adapters.current import (
     translate,
 )
 from pipeline.current_backend import cleanup_for, language_for, provenance_for
+from pipeline.detection import SemanticDetection, validate_detection_collection
 from pipeline.document import (
     PAGE_DOCUMENT_SCHEMA_VERSION,
     VALID_PIPELINES,
     BoundingBox,
     CleanupMetadata,
+    MaskReference,
     OcrResult,
     PageDocument,
     PageRegion,
+    Polygon,
     Provenance,
     RenderMetadata,
     TransformResult,
@@ -336,6 +339,11 @@ def _build_region(
     confidence: float | None = None,
     cleanup_method: str | None = None,
     vertical: bool = False,
+    region_id: str | None = None,
+    parent_id: str | None = None,
+    detector_label: str | None = None,
+    polygon: Polygon | None = None,
+    mask: MaskReference | None = None,
 ) -> PageRegion:
     """Map current pipeline output into the normalized stage contract."""
     box = BoundingBox.from_value(bbox)
@@ -366,11 +374,17 @@ def _build_region(
         )
 
     return PageRegion(
-        id=_next_region_id(page_id, kind, box, collisions),
+        id=(region_id
+            if region_id is not None
+            else _next_region_id(page_id, kind, box, collisions)),
         kind=kind,
         bbox=box,
         reading_order=reading_order,
         confidence=confidence,
+        polygon=polygon,
+        mask=mask,
+        parent_id=parent_id,
+        detector_label=detector_label,
         detection_provenance=detection_provenance,
         ocr=OcrResult(
             text=ocr_text,
@@ -390,6 +404,98 @@ def _build_region(
         source_font_size=source_font_size,
         user=UserEdit(),
     )
+
+
+def _semantic_region_ids(
+    page_id: str, detections: list[SemanticDetection],
+) -> dict[str, str]:
+    """Map detector-local identities to stable PageDocument identities."""
+    validate_detection_collection(detections)
+    return {
+        item.id: make_region_id(
+            page_id, item.kind, item.bbox, item.id,
+        )
+        for item in detections
+    }
+
+
+def _semantic_mask_reference(
+    region_id: str, detection: SemanticDetection, width: int, height: int,
+    encoding: str = "connected-component-v1",
+) -> MaskReference | None:
+    if detection.mask is None:
+        return None
+    return MaskReference(
+        reference=f"derived://source/{region_id}",
+        encoding=encoding,
+        width=width,
+        height=height,
+    )
+
+
+def _append_unprocessed_semantic_regions(
+    regions: list[PageRegion],
+    detections: list[SemanticDetection],
+    represented_ids: set[str],
+    ids: dict[str, str],
+    width: int,
+    height: int,
+    provenance: Provenance,
+    mask_encoding: str = "connected-component-v1",
+) -> None:
+    """Persist geometry which current OCR/render stages do not yet consume."""
+    used_orders = {region.reading_order for region in regions}
+    for detection in detections:
+        if detection.id in represented_ids:
+            continue
+        reading_order = detection.reading_order
+        if reading_order in used_orders:
+            raise ValueError(
+                f"semantic reading order {reading_order} was already assigned"
+            )
+        regions.append(PageRegion(
+            id=ids[detection.id],
+            kind=detection.kind,
+            bbox=detection.bbox,
+            reading_order=reading_order,
+            confidence=detection.confidence,
+            polygon=detection.polygon,
+            mask=_semantic_mask_reference(
+                ids[detection.id], detection, width, height,
+                mask_encoding,
+            ),
+            parent_id=(None if detection.parent_id is None
+                       else ids[detection.parent_id]),
+            detector_label=detection.raw_label,
+            detection_provenance=provenance,
+        ))
+        used_orders.add(reading_order)
+
+
+class _ReadingOrderAllocator:
+    """Reserve detector order and place compatibility-only records after it."""
+
+    def __init__(self, detections: list[SemanticDetection]) -> None:
+        validate_detection_collection(detections)
+        self._used: set[int] = set()
+        self._next_extra = max(
+            (item.reading_order for item in detections), default=-1,
+        ) + 1
+
+    def semantic(self, detection: SemanticDetection) -> int:
+        order = detection.reading_order
+        if order in self._used:
+            raise ValueError(f"semantic reading order {order} was already assigned")
+        self._used.add(order)
+        return order
+
+    def extra(self) -> int:
+        while self._next_extra in self._used:
+            self._next_extra += 1
+        order = self._next_extra
+        self._used.add(order)
+        self._next_extra += 1
+        return order
 
 
 def _build_metadata_payload(
@@ -658,6 +764,13 @@ def _process_manga(job: ProcessingJob,
     render_provenance = _provenance(deps, job.pipeline, "render", revision)
     source_language = _language(deps, job.pipeline)
     regions: list[PageRegion] = []
+    semantic_detections: list[SemanticDetection] = list(
+        getattr(page, "semantic_detections", []),
+    )
+    semantic_by_id = {item.id: item for item in semantic_detections}
+    semantic_ids = _semantic_region_ids(page_id, semantic_detections)
+    represented_semantic_ids: set[str] = set()
+    reading_orders = _ReadingOrderAllocator(semantic_detections)
     for idx, br in enumerate(page.bubble_results):
         transformed_obj: dict[str, Any] | None = None
         if isinstance(br.transformed, list):
@@ -670,8 +783,15 @@ def _process_manga(job: ProcessingJob,
                 "kind": "text",
                 "value": br.transformed,
             }
-        kind = "artwork_text" if br.is_artwork_text else "bubble"
         raw = page.bubbles_raw[idx] if idx < len(page.bubbles_raw) else {}
+        semantic_id = raw.get("semantic_id") if isinstance(raw, dict) else None
+        semantic = semantic_by_id.get(semantic_id)
+        if semantic is not None:
+            represented_semantic_ids.add(semantic.id)
+        kind = (
+            semantic.kind if semantic is not None
+            else "artwork_text" if br.is_artwork_text else "bubble"
+        )
         confidence = raw.get("score") if isinstance(raw, dict) else None
         if not isinstance(confidence, (int, float)):
             confidence = None
@@ -680,7 +800,8 @@ def _process_manga(job: ProcessingJob,
             collisions=collisions,
             kind=kind,
             bbox=br.bbox,
-            reading_order=idx,
+            reading_order=(reading_orders.semantic(semantic)
+                           if semantic is not None else reading_orders.extra()),
             ocr_text=br.ocr_text,
             is_valid=bool(br.is_valid),
             detection_provenance=detection_provenance,
@@ -697,7 +818,25 @@ def _process_manga(job: ProcessingJob,
             confidence=None if confidence is None else float(confidence),
             cleanup_method=_cleanup_method(deps, job.pipeline, kind),
             vertical=mode_name == "furigana",
+            region_id=(None if semantic is None else semantic_ids[semantic.id]),
+            parent_id=(None if semantic is None or semantic.parent_id is None
+                       else semantic_ids[semantic.parent_id]),
+            detector_label=(None if semantic is None else semantic.raw_label),
+            polygon=(None if semantic is None else semantic.polygon),
+            mask=(None if semantic is None else _semantic_mask_reference(
+                semantic_ids[semantic.id], semantic, img_w, img_h,
+            )),
         ))
+
+    _append_unprocessed_semantic_regions(
+        regions,
+        semantic_detections,
+        represented_semantic_ids,
+        semantic_ids,
+        img_w,
+        img_h,
+        detection_provenance,
+    )
 
     return ProcessingResult(
         job_id=job.job_id,
@@ -872,18 +1011,30 @@ def _process_webtoon(job: ProcessingJob,
     render_provenance = _provenance(deps, job.pipeline, "render", revision)
     source_language = _language(deps, job.pipeline)
     regions: list[PageRegion] = []
+    semantic_detections = list(getattr(page, "semantic_detections", []))
+    semantic_by_id = {item.id: item for item in semantic_detections}
+    semantic_ids = _semantic_region_ids(page_id, semantic_detections)
+    represented_semantic_ids: set[str] = set()
+    reading_orders = _ReadingOrderAllocator(semantic_detections)
 
     for idx, region in enumerate(page.regions):
         bubble = region.bubble
+        semantic = semantic_by_id.get(getattr(bubble, "semantic_id", None))
+        is_first_semantic_region = (
+            semantic is not None and semantic.id not in represented_semantic_ids
+        )
+        if is_first_semantic_region:
+            represented_semantic_ids.add(semantic.id)
         transformed_obj = None
         if region.english:
             transformed_obj = {"kind": "text", "value": region.english}
         regions.append(_build_region(
             page_id=page_id,
             collisions=collisions,
-            kind="bubble",
+            kind=(semantic.kind if is_first_semantic_region else "bubble"),
             bbox=bubble.bbox,
-            reading_order=idx,
+            reading_order=(reading_orders.semantic(semantic)
+                           if is_first_semantic_region else reading_orders.extra()),
             ocr_text=bubble.combined_text,
             is_valid=bool(region.is_valid),
             detection_provenance=detection_provenance,
@@ -896,16 +1047,35 @@ def _process_webtoon(job: ProcessingJob,
             transformed=transformed_obj,
             target_language=job.target_lang,
             cleanup_method=_cleanup_method(deps, job.pipeline, "bubble"),
+            region_id=(semantic_ids[semantic.id]
+                       if is_first_semantic_region else None),
+            detector_label=(semantic.raw_label
+                            if is_first_semantic_region else None),
+            polygon=(semantic.polygon if is_first_semantic_region else None),
+            mask=(_semantic_mask_reference(
+                semantic_ids[semantic.id], semantic, img_w, img_h,
+                "webtoon-boundary-v1",
+            ) if is_first_semantic_region else None),
         ))
 
     # Persist SFX as editable regions too.
     for idx, det in enumerate(page.sfx_detections):
+        semantic = next((
+            item for item in semantic_detections
+            if item.kind == "sfx"
+            and item.id not in represented_semantic_ids
+            and item.bbox.x1 <= (det.bbox_rect[0] + det.bbox_rect[2]) / 2 < item.bbox.x2
+            and item.bbox.y1 <= (det.bbox_rect[1] + det.bbox_rect[3]) / 2 < item.bbox.y2
+        ), None)
+        if semantic is not None:
+            represented_semantic_ids.add(semantic.id)
         regions.append(_build_region(
             page_id=page_id,
             collisions=collisions,
             kind="sfx",
             bbox=det.bbox_rect,
-            reading_order=len(page.regions) + idx,
+            reading_order=(reading_orders.semantic(semantic)
+                           if semantic is not None else reading_orders.extra()),
             ocr_text=det.text,
             is_valid=True,
             detection_provenance=detection_provenance,
@@ -918,7 +1088,23 @@ def _process_webtoon(job: ProcessingJob,
             transformed={"kind": "text", "value": ""},
             target_language=job.target_lang,
             cleanup_method=_cleanup_method(deps, job.pipeline, "sfx"),
+            region_id=(None if semantic is None else semantic_ids[semantic.id]),
+            parent_id=(None if semantic is None or semantic.parent_id is None
+                       else semantic_ids[semantic.parent_id]),
+            detector_label=(None if semantic is None else semantic.raw_label),
+            polygon=(None if semantic is None else semantic.polygon),
         ))
+
+    _append_unprocessed_semantic_regions(
+        regions,
+        semantic_detections,
+        represented_semantic_ids,
+        semantic_ids,
+        img_w,
+        img_h,
+        detection_provenance,
+        "webtoon-boundary-v1",
+    )
 
     return ProcessingResult(
         job_id=job.job_id,

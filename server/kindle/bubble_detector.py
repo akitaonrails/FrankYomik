@@ -14,6 +14,14 @@ import threading
 import numpy as np
 from PIL import Image
 
+from pipeline.detection import (
+    DetectionThresholds,
+    SemanticDetection,
+    adapt_rtdetr_detections,
+    legacy_processing_regions,
+)
+from pipeline.document import Provenance
+
 log = logging.getLogger(__name__)
 
 MODEL_ID = "ogkalu/comic-text-and-bubble-detector"
@@ -54,15 +62,16 @@ def _get_model():
     return _model, _processor, _device
 
 
-def detect_bubbles(img_cv: np.ndarray,
-                   confidence: float = DEFAULT_CONFIDENCE) -> list[dict]:
-    """Detect speech bubbles and text regions in a manga page.
+def detect_semantic_regions(
+    img_cv: np.ndarray,
+    confidence: float = DEFAULT_CONFIDENCE,
+    *,
+    reading_direction: str = "manga",
+) -> list[SemanticDetection]:
+    """Run the current RT-DETR weights and return semantic page regions.
 
-    Returns list of dicts with keys:
-      - bbox: (x1, y1, x2, y2) pixel coordinates
-      - type: "speech_bubble" or "artwork_text"
-      - score: detection confidence
-      - is_artwork: True if text_free detection (narration/SFX outside bubbles)
+    The compatibility ``detect_bubbles`` function below projects these values
+    to the dictionary shape expected by the current OCR and renderer stages.
     """
     import torch
 
@@ -83,49 +92,46 @@ def detect_bubbles(img_cv: np.ndarray,
         outputs, target_sizes=target_sizes, threshold=confidence
     )
 
-    detections = []
+    detections: list[dict[str, object]] = []
     for score, label_id, box in zip(
         results[0]["scores"], results[0]["labels"], results[0]["boxes"]
     ):
         x1, y1, x2, y2 = box.tolist()
         label = model.config.id2label[label_id.item()]
 
-        # Map RT-DETR classes to pipeline types:
-        #   bubble / text_bubble → speech_bubble (text inside a bubble)
-        #   text_free → artwork_text (narration, SFX, signs)
-        if label in ("bubble", "text_bubble"):
-            det_type = "speech_bubble"
-            is_artwork = False
-        else:
-            det_type = "artwork_text"
-            is_artwork = True
-
-        # Artwork text needs higher confidence to avoid false positives
-        # that draw rectangles over artwork.
-        conf = score.item()
-        if is_artwork and conf < ARTWORK_TEXT_MIN_CONFIDENCE:
-            continue
-
         detections.append({
             "bbox": (int(x1), int(y1), int(x2), int(y2)),
-            "type": det_type,
-            "score": conf,
-            "is_artwork": is_artwork,
+            "label": label,
+            "score": score.item(),
         })
 
-    # Deduplicate overlapping detections: when both "bubble" and "text_bubble"
-    # fire on the same region, keep the one with higher confidence.
-    detections = _deduplicate(detections)
-
-    # Sort by reading order (right-to-left, top-to-bottom for manga)
-    detections.sort(key=lambda d: (d["bbox"][1], d["bbox"][0]))
+    semantic = adapt_rtdetr_detections(
+        detections,
+        Provenance(
+            backend="rtdetr-v2",
+            revision=MODEL_REVISION,
+            model=f"{MODEL_ID}@{MODEL_REVISION}",
+        ),
+        thresholds=DetectionThresholds(
+            text=confidence,
+            balloon=confidence,
+            sfx=max(confidence, ARTWORK_TEXT_MIN_CONFIDENCE),
+        ),
+        reading_direction="vertical" if reading_direction == "vertical" else "manga",
+    )
 
     log.info("Detected %d regions (%d bubbles, %d artwork text)",
-             len(detections),
-             sum(1 for d in detections if not d["is_artwork"]),
-             sum(1 for d in detections if d["is_artwork"]))
+             len(semantic),
+             sum(1 for item in semantic if item.kind == "balloon"),
+             sum(1 for item in semantic if item.kind == "sfx"))
 
-    return detections
+    return semantic
+
+
+def detect_bubbles(img_cv: np.ndarray,
+                   confidence: float = DEFAULT_CONFIDENCE) -> list[dict]:
+    """Compatibility projection for the current OCR and renderer stages."""
+    return legacy_processing_regions(detect_semantic_regions(img_cv, confidence))
 
 
 def _bbox_fallback_mask(h: int, w: int,
@@ -229,39 +235,3 @@ def extract_bubble_mask_manga(img_cv: np.ndarray,
     cv2.drawContours(mask, [best_cnt], -1, 255, -1)
 
     return mask
-
-
-def _overlap_ratio(a: tuple, b: tuple) -> float:
-    """Fraction of bbox 'a' that overlaps with bbox 'b'."""
-    x1 = max(a[0], b[0])
-    y1 = max(a[1], b[1])
-    x2 = min(a[2], b[2])
-    y2 = min(a[3], b[3])
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-    inter = (x2 - x1) * (y2 - y1)
-    area_a = (a[2] - a[0]) * (a[3] - a[1])
-    return inter / area_a if area_a > 0 else 0.0
-
-
-def _deduplicate(detections: list[dict], iou_threshold: float = 0.5) -> list[dict]:
-    """Remove overlapping detections, keeping higher confidence ones."""
-    if len(detections) <= 1:
-        return detections
-
-    # Sort by confidence descending
-    sorted_dets = sorted(detections, key=lambda d: d["score"], reverse=True)
-    kept = []
-
-    for det in sorted_dets:
-        is_dup = False
-        for existing in kept:
-            overlap_ab = _overlap_ratio(det["bbox"], existing["bbox"])
-            overlap_ba = _overlap_ratio(existing["bbox"], det["bbox"])
-            if overlap_ab > iou_threshold or overlap_ba > iou_threshold:
-                is_dup = True
-                break
-        if not is_dup:
-            kept.append(det)
-
-    return kept

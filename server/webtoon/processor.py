@@ -3,18 +3,24 @@
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from kindle.bubble_detector import detect_bubbles as rtdetr_detect
+from kindle.bubble_detector import detect_semantic_regions as rtdetr_detect
 from kindle.image_utils import (
     clear_text_in_region,
     encode_image_pil,
     load_image,
     load_image_pil,
 )
+from pipeline.detection import (
+    SemanticDetection,
+    finalize_detections,
+    legacy_processing_regions,
+)
+from pipeline.document import BoundingBox, Polygon
 
 from .bubble_detector import WebtoonBubble, detect_bubbles, extract_bubble_mask
 from .config import FONT_KO, FONT_KO_BOLD, INPAINT_ENABLED
@@ -65,6 +71,7 @@ class WebtoonPageResult:
     img_pil: Image.Image | None = None
     detections: list[TextDetection] = field(default_factory=list)
     raw_detections: list[dict] = field(default_factory=list)
+    semantic_detections: list[SemanticDetection] = field(default_factory=list)
     bubbles: list[WebtoonBubble] = field(default_factory=list)
     sfx_detections: list[TextDetection] = field(default_factory=list)
     sfx_translations: list[str] = field(default_factory=list)
@@ -138,26 +145,97 @@ def detect_bubbles_rtdetr(page: WebtoonPageResult) -> None:
 
     h = page.img_cv.shape[0]
     if h <= max_strip_height:
-        raw_detections = rtdetr_detect(page.img_cv)
+        detected = rtdetr_detect(page.img_cv, reading_direction="vertical")
     else:
         strips = split_tall_image(page.img_cv, max_height=max_strip_height)
-        strip_results = []
+        detected = []
         for strip_img, y_offset in strips:
-            dets = rtdetr_detect(strip_img)
-            strip_results.append((dets, y_offset))
-        raw_detections = stitch_rtdetr_detections(strip_results)
+            strip_detections = rtdetr_detect(
+                strip_img, reading_direction="vertical",
+            )
+            if strip_detections and isinstance(strip_detections[0], dict):
+                # Compatibility for injected legacy detectors used by callers.
+                strip_results = [(strip_detections, y_offset)]
+                detected.extend(stitch_rtdetr_detections(strip_results))
+            else:
+                detected.extend(_offset_semantic(strip_detections, y_offset))
+
+    if detected and isinstance(detected[0], dict):
+        raw_detections = detected
+        page.semantic_detections = []
+    else:
+        semantic = finalize_detections(detected, reading_direction="vertical")
+        with_masks: list[SemanticDetection] = []
+        bubble_metadata: dict[str, tuple[tuple[int, int, int], bool]] = {}
+        for detection in semantic:
+            if detection.kind != "balloon":
+                with_masks.append(detection)
+                continue
+            mask, bg_color, has_boundary = extract_bubble_mask(
+                page.img_cv, tuple(detection.bbox.as_list()))
+            bubble_metadata[detection.id] = (bg_color, has_boundary)
+            with_masks.append(replace(
+                detection,
+                mask=mask,
+                polygon=_mask_polygon(mask),
+            ))
+        page.semantic_detections = with_masks
+        raw_detections = legacy_processing_regions(with_masks)
 
     log.info("RT-DETR-v2 detected %d regions in %s", len(raw_detections), page.name)
 
     for det in raw_detections:
         if det["type"] == "speech_bubble":
-            mask, bg_color, has_boundary = extract_bubble_mask(
-                page.img_cv, det["bbox"])
+            match = next((
+                item for item in page.semantic_detections
+                if item.id == det.get("semantic_id")
+            ), None)
+            if match is not None and match.mask is not None:
+                mask = match.mask
+                bg_color, has_boundary = bubble_metadata[match.id]
+            else:
+                mask, bg_color, has_boundary = extract_bubble_mask(
+                    page.img_cv, det["bbox"])
             det["bubble_mask"] = mask
             det["bg_color"] = bg_color
             det["has_bubble_boundary"] = has_boundary
 
     page.raw_detections = raw_detections
+
+
+def _offset_semantic(
+    detections: list[SemanticDetection], y_offset: int,
+) -> list[SemanticDetection]:
+    """Map strip-local semantic geometry and relationships to page space."""
+    id_map = {item.id: f"{item.id}-y{y_offset}" for item in detections}
+    result: list[SemanticDetection] = []
+    for item in detections:
+        box = item.bbox
+        polygon = None
+        if item.polygon is not None:
+            polygon = Polygon(tuple((x, y + y_offset) for x, y in item.polygon.points))
+        result.append(replace(
+            item,
+            id=id_map[item.id],
+            bbox=BoundingBox(box.x1, box.y1 + y_offset, box.x2, box.y2 + y_offset),
+            polygon=polygon,
+            parent_id=(None if item.parent_id is None else id_map[item.parent_id]),
+        ))
+    return result
+
+
+def _mask_polygon(mask: np.ndarray) -> Polygon | None:
+    import cv2
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    compact = cv2.approxPolyDP(
+        contour, max(1.0, cv2.arcLength(contour, True) * 0.005), True,
+    )
+    points = tuple((int(point[0][0]), int(point[0][1])) for point in compact)
+    return Polygon(points) if len(points) >= 3 else None
 
 
 def ocr_detected_regions(page: WebtoonPageResult) -> None:
@@ -175,6 +253,7 @@ def ocr_detected_regions(page: WebtoonPageResult) -> None:
                 has_bubble_boundary=bool(det["has_bubble_boundary"]),
                 bg_color=det["bg_color"],
                 bubble_mask=det["bubble_mask"],
+                semantic_id=det.get("semantic_id"),
             )
             log.info("  Bubble: %d texts, boundary=%s, bbox=%s",
                      len(text_regions), bubble.has_bubble_boundary, bbox)

@@ -19,6 +19,8 @@ import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
+from pipeline.detection import SemanticDetection
+from pipeline.document import BoundingBox, Provenance
 from webtoon.bubble_detector import WebtoonBubble
 from webtoon.ocr import TextDetection
 from webtoon.processor import (
@@ -150,6 +152,43 @@ def test_rtdetr_detection_and_ocr_are_separate_production_stages():
 
     ocr.assert_called_once_with(page.img_cv, detection["bbox"])
     assert page.bubbles[0].combined_text == "안녕하세요"
+
+
+def test_semantic_webtoon_detection_retains_linked_text_and_reuses_mask():
+    page = WebtoonPageResult(
+        image_path="",
+        name="semantic",
+        img_cv=np.zeros((100, 120, 3), dtype=np.uint8),
+        img_pil=Image.new("RGB", (120, 100), "white"),
+    )
+    provenance = Provenance("rtdetr-v2", "weights")
+    balloon = SemanticDetection(
+        "balloon", "balloon", BoundingBox(10, 10, 90, 70),
+        0.9, "bubble", provenance, reading_order=0,
+    )
+    text = SemanticDetection(
+        "text", "text", BoundingBox(20, 20, 70, 40),
+        0.8, "text_bubble", provenance,
+        parent_id="balloon", reading_order=1,
+    )
+    mask = np.ones((100, 120), dtype=np.uint8)
+
+    with (
+        patch("webtoon.processor.rtdetr_detect", return_value=[balloon, text]),
+        patch(
+            "webtoon.processor.extract_bubble_mask",
+            return_value=(mask, (240, 241, 242), False),
+        ) as extract,
+    ):
+        detect_bubbles_rtdetr(page)
+
+    extract.assert_called_once_with(page.img_cv, (10, 10, 90, 70))
+    assert [item.kind for item in page.semantic_detections] == ["balloon", "text"]
+    assert page.semantic_detections[1].parent_id == page.semantic_detections[0].id
+    assert len(page.raw_detections) == 1
+    assert page.raw_detections[0]["bubble_mask"] is mask
+    assert page.raw_detections[0]["bg_color"] == (240, 241, 242)
+    assert page.raw_detections[0]["has_bubble_boundary"] is False
 
 
 def test_cleaned_webtoon_renderer_performs_no_model_or_translation_calls():

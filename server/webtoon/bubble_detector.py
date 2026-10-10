@@ -35,6 +35,7 @@ class WebtoonBubble:
     has_bubble_boundary: bool = False          # True if visual boundary was found
     bg_color: tuple[int, int, int] = (255, 255, 255)  # Sampled background color
     bubble_mask: np.ndarray | None = None      # Optional mask for contour-based clearing
+    semantic_id: str | None = None             # Detector-contract identity, when present
 
 
 def cluster_detections(detections: list[TextDetection],
@@ -85,10 +86,7 @@ def _should_merge(cluster: list[TextDetection], det: TextDetection,
     # Horizontal overlap check — at least some overlap
     horiz_overlap = min(cx2, dx2) - max(cx1, dx1)
     min_width = min(cx2 - cx1, dx2 - dx1)
-    if min_width > 0 and horiz_overlap / min_width < -0.5:
-        return False
-
-    return True
+    return not (min_width > 0 and horiz_overlap / min_width < -0.5)
 
 
 def _cluster_bbox(cluster: list[TextDetection]) -> tuple[int, int, int, int]:
@@ -390,9 +388,7 @@ def _is_sfx_detection(det: TextDetection) -> bool:
     chars = len(det.text.strip())
     if chars == 1 and h > 100:
         return True
-    if chars <= 2 and h > 200:
-        return True
-    return False
+    return bool(chars <= 2 and h > 200)
 
 
 def detect_bubbles(img_cv: np.ndarray,

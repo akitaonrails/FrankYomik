@@ -7,7 +7,7 @@
     },
     "manga_detector": {
       "path": "kindle/bubble_detector.py",
-      "sha256": "fa366e131a1a460ee53991d3a02234ddb66c48d53eed9516941976be8899342d"
+      "sha256": "1030e9a9b27e263db87a717db97a19bae57f3bb54dc29266bb523a1b8ace793a"
     },
     "manga_ocr": {
       "path": "kindle/ocr.py",
@@ -23,7 +23,7 @@
     },
     "manga_pipeline": {
       "path": "kindle/processor.py",
-      "sha256": "66cc0a2caf14fbb8cd4e595c534e490a0ac2eb09a4b36317913e71a7fbd28ac7"
+      "sha256": "f6708ae5adbc8c8395e4549dce28aec23ae5324652c773f6655dd288102c94b7"
     },
     "manga_renderer": {
       "path": "kindle/text_renderer.py",
@@ -43,7 +43,7 @@
     },
     "webtoon_pipeline": {
       "path": "webtoon/processor.py",
-      "sha256": "09a80313d43721e66f04891a450923807621444122f7f43fb657d73bb01c9742"
+      "sha256": "6e8416ec1531278fb9e2ae2329dd7e57aba706421c47e0fe01fe3f740bf836e7"
     },
     "webtoon_ocr": {
       "path": "webtoon/ocr.py",
@@ -71,7 +71,7 @@
     },
     "python_pipelinedunder__initdunder_": {
       "path": "pipeline/__init__.py",
-      "sha256": "f5eabcb985d3369047045b87766f53669bceafc9ab6415c2ea759e679c2ba303"
+      "sha256": "9ff93d5ec778af378aeee085fcc54bd253fe1c30fbd56e9f8671aabbe2dfda3e"
     },
     "python_pipeline_current_backend": {
       "path": "pipeline/current_backend.py",
@@ -87,7 +87,7 @@
     },
     "python_pipeline_revision": {
       "path": "pipeline/revision.py",
-      "sha256": "c7ff2cf5b6aad7e8a8891962a9a6e515280bae4cdfbfcf1a87714a3c97d97ea3"
+      "sha256": "5fc364d0c332b8698edb4c24ca11ec74485c0f55037b400cdd45b8efe609cf2e"
     },
     "python_workerdunder__initdunder_": {
       "path": "worker/__init__.py",
@@ -107,7 +107,7 @@
     },
     "python_worker_job": {
       "path": "worker/job.py",
-      "sha256": "bea54efd895d91919f6158977571cefbb3c60f5cc24b2bc4d3cc3d492af62767"
+      "sha256": "e63bf66e1f0a22596374afb7c42018bc517550f8230d1480e2d224eaeb8c15ee"
     },
     "python_worker_main": {
       "path": "worker/main.py",
@@ -143,7 +143,7 @@
     },
     "python_webtoon_bubble_detector": {
       "path": "webtoon/bubble_detector.py",
-      "sha256": "27bb839243b12b9e72d760569b9851043a49be66516d57eb7bdfcfa11ddf157e"
+      "sha256": "b2356615b320d0e7c7df1ed1aa103d7b90ab8827ce34567ecba99ccf8801ea86"
     },
     "python_webtoon_config": {
       "path": "webtoon/config.py",
@@ -176,6 +176,10 @@
     "python_pipeline_adapters_current": {
       "path": "pipeline/adapters/current.py",
       "sha256": "b777da10efc74b31063e76d5dfb03bd7f2fc2839f433537dda99e3e4ffe12dda"
+    },
+    "python_pipeline_detection": {
+      "path": "pipeline/detection.py",
+      "sha256": "d4c92fd7c3bbf4fa511937aa1488253b1464110886b114e77ac71c71bb1fdd82"
     }
   },
   "stages": {
@@ -183,7 +187,13 @@
       "backend": "rtdetr-v2",
       "implementation": {
         "id": "kindle.bubble_detector",
-        "revision": "sha256:fa366e131a1a460ee53991d3a02234ddb66c48d53eed9516941976be8899342d"
+        "revision": "sha256:5e3a98bf9b684d62543e8dc9fd1bd683bb06a880c4da9c0433bf1c2f70180d26",
+        "component_artifacts": [
+          "manga_detector",
+          "manga_pipeline",
+          "python_pipeline_detection",
+          "python_pipeline_document"
+        ]
       },
       "model": {
         "id": "ogkalu/comic-text-and-bubble-detector",
@@ -194,7 +204,9 @@
       "output_config": {
         "confidence": 0.35,
         "artwork_text_min_confidence": 0.6,
-        "bubble_padding": 5
+        "bubble_padding": 5,
+        "reading_order": "panel_visual_rows_rtl_v1",
+        "row_stagger_tolerance": "25_percent_min_height_min_4px"
       }
     },
     "manga.ocr": {
@@ -248,7 +260,7 @@
       "backend": "manga-cleanup-policy",
       "implementation": {
         "id": "kindle.processor",
-        "revision": "sha256:66cc0a2caf14fbb8cd4e595c534e490a0ac2eb09a4b36317913e71a7fbd28ac7"
+        "revision": "sha256:f6708ae5adbc8c8395e4549dce28aec23ae5324652c773f6655dd288102c94b7"
       },
       "model": null,
       "prompt": null,
@@ -335,7 +347,15 @@
       "backend": "rtdetr-v2",
       "implementation": {
         "id": "webtoon.processor",
-        "revision": "sha256:09a80313d43721e66f04891a450923807621444122f7f43fb657d73bb01c9742"
+        "revision": "sha256:6d528f8e6d44a9ab04e45222e35a2d3f56c2d0390c1f5d896c591a3cc9c93e39",
+        "component_artifacts": [
+          "manga_detector",
+          "webtoon_pipeline",
+          "python_webtoon_bubble_detector",
+          "python_webtoon_image_utils",
+          "python_pipeline_detection",
+          "python_pipeline_document"
+        ]
       },
       "model": {
         "id": "ogkalu/comic-text-and-bubble-detector",
@@ -346,7 +366,8 @@
       "output_config": {
         "max_strip_height": 2000,
         "confidence": 0.35,
-        "artwork_text_min_confidence": 0.6
+        "artwork_text_min_confidence": 0.6,
+        "reading_order": "top_to_bottom_left_to_right"
       }
     },
     "webtoon.ocr": {
@@ -419,7 +440,7 @@
       "backend": "webtoon-renderer",
       "implementation": {
         "id": "webtoon.processor",
-        "revision": "sha256:09a80313d43721e66f04891a450923807621444122f7f43fb657d73bb01c9742"
+        "revision": "sha256:6e8416ec1531278fb9e2ae2329dd7e57aba706421c47e0fe01fe3f740bf836e7"
       },
       "model": null,
       "prompt": null,

@@ -33,7 +33,9 @@ When output can change:
    manifest. Do not use a moving model tag or a dependency range as a weights
    identity.
 2. Recompute the SHA-256 of every changed artifact and update both its
-   `artifacts` entry and the affected stage implementation revision.
+   `artifacts` entry and the affected stage implementation revision. A stage
+   with `component_artifacts` uses the canonical composite hash of every named
+   artifact; changing any component requires a new composite revision.
 3. Run the Python revision tests and Go tests. They verify artifact drift,
    cross-language fingerprint parity, and fingerprint changes for
    implementation, model, weights, prompt, and configuration changes.
@@ -92,6 +94,11 @@ implementation revision, exact model and weights identity, and a configuration
 hash derived from that stage's prompt and output settings. This lets a saved
 document show which component produced each result without mislabeling every
 stage with the deployment-wide fingerprint.
+
+Detection is composite because its output is jointly determined by the model
+adapter, shared semantic postprocessing, page processor, mask/polygon logic,
+and tall-strip utilities where applicable. Python validates each checked-in
+composite against the current artifact digests before exposing provenance.
 
 The normalized worker currently asks for all six provenance slots for every
 pipeline. A pipeline may share an implementation in a slot it does not expose

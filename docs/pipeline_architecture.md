@@ -1,6 +1,6 @@
 # Pipeline architecture
 
-## Current Phase 0 architecture
+## Current pipeline architecture
 
 Frank Yomik exposes four image pipelines through one Go API and Python worker
 queue:
@@ -13,8 +13,10 @@ queue:
 | `webtoon` | Korean webtoon image to translated rendered image. |
 
 Phase 0 added typed production stage boundaries and the version 2
-[PageDocument](page_document_v2.md). It did not change the selected detector,
-OCR, translation, cleanup, or renderer. The active implementations still live
+[PageDocument](page_document_v2.md). Phase 1 added the
+[semantic detection contract](semantic_detection.md) while retaining the
+selected RT-DETR weights and Frank's monochrome balloon mask extractor. The
+active implementations still live
 in `server/kindle/` and `server/webtoon/`. Lazy compatibility adapters under
 `server/pipeline/adapters/` implement the protocols used by
 `server/worker/job.py`, which adapts their results into a validated document.
@@ -42,7 +44,9 @@ queue and delivery state. The filesystem cache is the persistent result store.
 ### Manga translation
 
 1. Decode the page and classify it as artwork or prose.
-2. Detect balloons and artwork text with the current RT-DETR path.
+2. Normalize current RT-DETR output into balloon, text, and SFX geometry,
+   link contained text to balloons, and project renderable regions into the
+   current OCR path.
 3. OCR each region with Manga OCR.
 4. Verify the configured Ollama model digest, then translate valid regions.
 5. Run cleanup to remove source text.
@@ -63,7 +67,8 @@ does not use manga balloon detection or manga inpainting.
 
 ### Webtoon
 
-The webtoon path detects bubbles and SFX geometry, performs Korean OCR in a
+The webtoon path applies the same semantic contract with vertical reading order
+and page-space stitching for tall strips. It then performs Korean OCR in a
 separate stage, translates dialogue and SFX, cleans dialogue regions, and then
 renders without model or network calls. Dialogue and SFX both require the pinned
 Ollama digest. Enabled LaMa cleanup verifies its local weight bytes and fails
@@ -90,10 +95,9 @@ forwards its configured runtime. This keeps concrete ML packages out of
 CPU-only test collection.
 
 Current adapters carry the existing mutable manga and webtoon page objects
-between stages to preserve behavior during migration. `PageDocument` is the
-typed, validated persistence boundary produced after those stages. A later
-backend can add a normalized in-memory stage value when it becomes an actual
-production path; Phase 0 does not advertise unused backend protocols.
+between stages to preserve behavior during migration. Detection additionally
+carries backend-neutral `SemanticDetection` values. `PageDocument` is the
+typed, validated persistence boundary produced after those stages.
 
 `server/pipeline/stage_manifest.json` is the authoritative identity manifest.
 `server/pipeline/current_backend.py` reads it to supply stage provenance,

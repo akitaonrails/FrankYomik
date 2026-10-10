@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "candidate": {
+    "repository": "ogkalu/comic-text-and-bubble-detector",
+    "revision": "16e8a622f91fabc6b5b65c96d32d1183f8843546",
+    "artifact": "detector-v4-s_int8.onnx",
+    "sha256": "5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79"
+  },
+  "policy": {
+    "bubble_threshold": 0.3,
+    "free_text_threshold": 0.3,
+    "dedup_containment_threshold": 0.5
+  },
+  "matching": "Greedy one-to-one assignment when either box center lies inside the other box; nearest centers break multiple matches.",
+  "candidate_only": [
+    {
+      "key": "manga__adult:text_free:2239,0,2493,39",
+      "page": "manga__adult",
+      "label": "text_free",
+      "score": 0.5557254552841187,
+      "bbox": [2239.2099609375, 0.3208315968513489, 2493.416259765625, 38.69924545288086],
+      "classification": "false_positive",
+      "notes": "Browser toolbar controls."
+    },
+    {
+      "key": "manga__adult:text_free:1847,883,1898,1066",
+      "page": "manga__adult",
+      "label": "text_free",
+      "score": 0.3656100630760193,
+      "bbox": [1847.3209228515625, 882.5850219726562, 1897.8072509765625, 1065.591552734375],
+      "classification": "false_positive",
+      "notes": "Character face and clothing, with no text."
+    },
+    {
+      "key": "manga__adult:text_free:634,3,1218,36",
+      "page": "manga__adult",
+      "label": "text_free",
+      "score": 0.3362419903278351,
+      "bbox": [633.8195190429688, 2.724919319152832, 1218.0147705078125, 35.85924530029297],
+      "classification": "false_positive",
+      "notes": "Browser address strip."
+    },
+    {
+      "key": "manga__shounen:text_free:2237,0,2489,40",
+      "page": "manga__shounen",
+      "label": "text_free",
+      "score": 0.4638204872608185,
+      "bbox": [2237.097900390625, 0.42598578333854675, 2489.413330078125, 40.413658142089844],
+      "classification": "false_positive",
+      "notes": "Browser toolbar controls."
+    },
+    {
+      "key": "manga__shounen:text_free:624,2,1210,36",
+      "page": "manga__shounen",
+      "label": "text_free",
+      "score": 0.42065665125846863,
+      "bbox": [624.4989013671875, 2.267526388168335, 1210.212890625, 36.356224060058594],
+      "classification": "false_positive",
+      "notes": "Browser address strip."
+    },
+    {
+      "key": "manga__shounen11:text_free:1176,120,1434,334",
+      "page": "manga__shounen11",
+      "label": "text_free",
+      "score": 0.3678942918777466,
+      "bbox": [1176.4835205078125, 119.70492553710938, 1434.4130859375, 334.29022216796875],
+      "classification": "false_positive",
+      "notes": "Cat face illustration, with no text."
+    },
+    {
+      "key": "manga__shounen2:text_free:1615,952,1869,1246",
+      "page": "manga__shounen2",
+      "label": "text_free",
+      "score": 0.41119706630706787,
+      "bbox": [1614.94482421875, 951.7422485351562, 1869.4832763671875, 1245.93701171875],
+      "classification": "useful",
+      "notes": "Genuine numeric and Japanese tournament sign text."
+    },
+    {
+      "key": "manga__shounen5:text_free:1044,138,1100,258",
+      "page": "manga__shounen5",
+      "label": "text_free",
+      "score": 0.3227866291999817,
+      "bbox": [1043.927001953125, 137.52438354492188, 1100.478515625, 258.23687744140625],
+      "classification": "useful",
+      "notes": "Genuine stylized sound effect."
+    },
+    {
+      "key": "manga__shounen7:text_bubble:805,136,868,242",
+      "page": "manga__shounen7",
+      "label": "text_bubble",
+      "score": 0.7080899477005005,
+      "bbox": [805.1396484375, 136.0808868408203, 867.7783813476562, 241.92782592773438],
+      "classification": "useful",
+      "notes": "Genuine Japanese dialogue."
+    },
+    {
+      "key": "manga__tiny:text_free:982,385,1038,440",
+      "page": "manga__tiny",
+      "label": "text_free",
+      "score": 0.3453788161277771,
+      "bbox": [981.8790283203125, 384.7690734863281, 1037.8604736328125, 440.11541748046875],
+      "classification": "false_positive",
+      "notes": "Vending-machine or robot illustration, with no legible text."
+    }
+  ],
+  "dropped_current": [
+    {
+      "key": "manga__adult:frank-bubble-0005",
+      "page": "manga__adult",
+      "id": "frank-bubble-0005",
+      "classification": "false_positive",
+      "notes": "Hanging lamp."
+    },
+    {
+      "key": "manga__shounen2:frank-bubble-0007",
+      "page": "manga__shounen2",
+      "id": "frank-bubble-0007",
+      "classification": "false_positive",
+      "notes": "Reader navigation arrow."
+    },
+    {
+      "key": "manga__shounen4:frank-bubble-0013",
+      "page": "manga__shounen4",
+      "id": "frank-bubble-0013",
+      "classification": "false_positive",
+      "notes": "Reader navigation arrow."
+    },
+    {
+      "key": "manga__shounen5:frank-bubble-0014",
+      "page": "manga__shounen5",
+      "id": "frank-bubble-0014",
+      "classification": "useful",
+      "notes": "Genuine Japanese dialogue balloon."
+    },
+    {
+      "key": "manga__shounen7:frank-bubble-0013",
+      "page": "manga__shounen7",
+      "id": "frank-bubble-0013",
+      "classification": "false_positive",
+      "notes": "Reader navigation arrow."
+    }
+  ],
+  "counts": {
+    "candidate_only": 10,
+    "candidate_only_useful": 3,
+    "candidate_only_false_positive": 7,
+    "dropped_current": 5,
+    "dropped_current_useful": 1,
+    "dropped_current_false_positive": 4
+  }
+}

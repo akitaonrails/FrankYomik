@@ -7,6 +7,7 @@ import yaml
 from pipeline.revision import (
     DEFAULT_PIPELINE_REVISION,
     LEGACY_PIPELINE_REVISION,
+    composite_implementation_revision,
     derived_pipeline_revision,
     fingerprint_stage_manifest,
     get_pipeline_revision,
@@ -79,6 +80,20 @@ def test_stage_provenance_identity_is_not_global_revision():
     assert identity["implementation"]["revision"] != DEFAULT_PIPELINE_REVISION
     assert identity["model"]["weights_revision"].startswith("sha256:")
     assert stage_config_hash(identity).startswith("sha256:")
+
+
+def test_shared_semantic_source_changes_both_detection_stage_revisions():
+    manifest = load_stage_manifest()
+    changed = copy.deepcopy(manifest)
+    changed["artifacts"]["python_pipeline_detection"]["sha256"] = "0" * 64
+
+    for stage_name in ("manga.detection", "webtoon.detection"):
+        implementation = manifest["stages"][stage_name]["implementation"]
+        changed_implementation = changed["stages"][stage_name]["implementation"]
+        assert "python_pipeline_detection" in implementation["component_artifacts"]
+        assert composite_implementation_revision(
+            changed, changed_implementation["component_artifacts"],
+        ) != implementation["revision"]
 
 
 def test_artifact_drift_is_rejected():

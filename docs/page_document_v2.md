@@ -98,7 +98,7 @@ Every region has these fields:
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | non-empty string | Opaque geometry identity derived from page, kind, box, and an optional discriminator. |
-| `kind` | non-empty string | Current pipelines emit `bubble`, `artwork_text`, `sfx`, and `text_column`. |
+| `kind` | non-empty string | Current pipelines emit `balloon`, `text`, `sfx`, `bubble` for legacy/injected adapters, `artwork_text`, and `text_column`. `panel` is supported by the semantic detector contract. |
 | `bbox` | four integers | Half-open pixel bounds `[x1, y1, x2, y2]`. |
 | `reading_order` | non-negative integer | Unique order within the page. |
 | `user` | object | Reader-owned edits; currently `manual_translation`. |
@@ -146,7 +146,8 @@ The revision is the revision of that stage result; the top-level
 
 ### Mask reference
 
-Large masks stay outside the JSON document:
+Large masks stay outside the JSON document. A reference may identify a stored
+mask object or a deterministic derivation from the source image:
 
 ```json
 {
@@ -160,6 +161,12 @@ Large masks stay outside the JSON document:
 
 The reference, encoding, width, and height are required. A supplied digest
 must be a 64-character hexadecimal SHA-256 value.
+
+Phase 1 balloon detections use `derived://source/<region-id>` and
+`connected-component-v1`. Rerendering regenerates those pixels from the source
+image and retained geometry; the compact contour is also stored in `polygon`.
+Webtoon balloon masks use `webtoon-boundary-v1` for their existing boundary
+extractor.
 
 ### OCR
 
@@ -186,18 +193,21 @@ family, positive font size, vertical layout, and text color.
 
 ## Minimal example
 
+The deployment revision below is an intentionally nonvolatile placeholder,
+not the fingerprint of the current checkout.
+
 ```json
 {
   "schema_version": 2,
   "page_id": "page-a1b2",
   "pipeline": "manga_translate",
-  "pipeline_revision": "sha256:46ef6e1c7de8e1d65830f35cdfbddb6f33616d626d4415b1361381d02babf2d0",
+  "pipeline_revision": "sha256:example-deployment-manifest-fingerprint",
   "source_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "image": {"width": 1200, "height": 1800},
   "regions": [
     {
       "id": "r_8d30c83d668ef24a",
-      "kind": "bubble",
+      "kind": "balloon",
       "bbox": [700, 100, 1050, 430],
       "reading_order": 0,
       "ocr": {

@@ -19,6 +19,57 @@ _MANIFEST_PATH = Path(__file__).with_name("stage_manifest.json")
 _SERVER_ROOT = _MANIFEST_PATH.parent.parent
 
 
+def composite_implementation_revision(
+    manifest: dict[str, Any], component_names: list[str],
+) -> str:
+    """Hash the pinned artifacts which jointly implement one stage."""
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise TypeError("pipeline stage manifest artifacts must be an object")
+    if not component_names or len(set(component_names)) != len(component_names):
+        raise ValueError("implementation component artifacts must be unique")
+    components = []
+    for name in sorted(component_names):
+        artifact = artifacts.get(name)
+        if artifact is None:
+            raise ValueError(f"unknown implementation component artifact: {name}")
+        if not isinstance(artifact, dict):
+            raise TypeError(f"invalid implementation component artifact: {name}")
+        path = artifact.get("path")
+        digest = artifact.get("sha256")
+        if not isinstance(path, str) or not isinstance(digest, str):
+            raise TypeError(f"invalid implementation component artifact: {name}")
+        components.append({"name": name, "path": path, "sha256": digest})
+    canonical = json.dumps(
+        components, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _validate_composite_implementation_revisions(manifest: dict[str, Any]) -> None:
+    stages = manifest.get("stages")
+    if not isinstance(stages, dict):
+        raise TypeError("pipeline stage manifest stages must be an object")
+    for stage_name, stage in stages.items():
+        if not isinstance(stage, dict):
+            raise TypeError(f"invalid pipeline stage {stage_name}")
+        implementation = stage.get("implementation")
+        if not isinstance(implementation, dict):
+            raise TypeError(f"invalid pipeline stage implementation: {stage_name}")
+        components = implementation.get("component_artifacts")
+        if components is None:
+            continue
+        if not isinstance(components, list) or not all(
+            isinstance(item, str) for item in components
+        ):
+            raise TypeError(f"invalid implementation components: {stage_name}")
+        expected = composite_implementation_revision(manifest, components)
+        if implementation.get("revision") != expected:
+            raise ValueError(
+                f"composite implementation revision mismatch: {stage_name}"
+            )
+
+
 def validate_pipeline_revision(value: object) -> str:
     """Return a valid revision string or reject the wire/config value."""
     if not isinstance(value, str) or not PIPELINE_REVISION_RE.fullmatch(value):
@@ -36,6 +87,7 @@ def load_stage_manifest() -> dict[str, Any]:
         )
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
         raise ValueError("unsupported pipeline stage manifest")
+    _validate_composite_implementation_revisions(manifest)
     return manifest
 
 

@@ -8,7 +8,10 @@ from enum import Enum
 import numpy as np
 from PIL import Image
 
-from .bubble_detector import detect_bubbles, extract_bubble_mask_manga
+from pipeline.detection import SemanticDetection, legacy_processing_regions
+from pipeline.document import Polygon
+
+from .bubble_detector import detect_semantic_regions, extract_bubble_mask_manga
 from .config import EN_PAGE_FONT_DIVISOR, MANGA_INPAINT_ENABLED, MIN_FONT_SIZE
 from .furigana import annotate as furigana_annotate
 from .image_utils import (
@@ -67,6 +70,7 @@ class PageResult:
     img_cv: np.ndarray | None = None
     img_pil: Image.Image | None = None
     bubbles_raw: list[dict] = field(default_factory=list)
+    semantic_detections: list[SemanticDetection] = field(default_factory=list)
     bubble_results: list[BubbleResult] = field(default_factory=list)
     output_img: Image.Image | None = None
     render_plan: MangaRenderPlan | None = None
@@ -100,15 +104,48 @@ def detect_page_bubbles(page: PageResult) -> None:
     solid fill instead.
     """
     log.info("Detecting bubbles: %s", page.name)
-    page.bubbles_raw = detect_bubbles(page.img_cv)
+    from dataclasses import replace
+
+    semantic: list[SemanticDetection] = []
+    for detection in detect_semantic_regions(page.img_cv):
+        if detection.kind != "balloon":
+            semantic.append(detection)
+            continue
+        mask = extract_bubble_mask_manga(page.img_cv, tuple(detection.bbox.as_list()))
+        semantic.append(replace(
+            detection,
+            mask=mask,
+            polygon=_mask_polygon(mask),
+        ))
+    page.semantic_detections = semantic
+    page.bubbles_raw = legacy_processing_regions(semantic)
 
     for det in page.bubbles_raw:
-        if not det.get("is_artwork", False):
+        semantic_match = next(
+            (item for item in semantic if item.id == det.get("semantic_id")), None,
+        )
+        if semantic_match is not None and semantic_match.mask is not None:
+            det["mask"] = semantic_match.mask
+        elif not det.get("is_artwork", False):
             det["mask"] = extract_bubble_mask_manga(page.img_cv, det["bbox"])
         else:
             det["mask"] = None
 
     log.info("Found %d bubbles in %s", len(page.bubbles_raw), page.name)
+
+
+def _mask_polygon(mask: np.ndarray) -> Polygon | None:
+    """Return a compact contour so mask geometry survives JSON persistence."""
+    import cv2
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    perimeter = cv2.arcLength(contour, True)
+    compact = cv2.approxPolyDP(contour, max(1.0, perimeter * 0.005), True)
+    points = tuple((int(point[0][0]), int(point[0][1])) for point in compact)
+    return Polygon(points) if len(points) >= 3 else None
 
 
 def _ocr_char_overlap(text1: str, text2: str) -> float:

@@ -133,6 +133,18 @@ Create the v2 page document specification and v3 cache-manifest specification, t
 
 ## Phase 1: semantic detection and retained masks
 
+**Status: complete; Gate 1 passed.** The backend-neutral contract, current RT-DETR adapter, class-aware
+postprocessing, relationships, reading order, mask geometry persistence, and
+compatibility projection are implemented. The current checkpoint remains in
+production. The compact v4 candidate was evaluated and blocked because it
+failed the coverage, interface false-positive, semantic-output, mask, and
+training-data provenance gates. See the
+[Phase 1 detector evaluation](../evaluation/koharu_baseline/phase1_detector_evaluation.md).
+The final gate verified visual-row and panel-scoped manga order, a 4,100-pixel
+three-strip webtoon path, complete detection implementation identity, and the
+machine-readable review of every v4 disagreement. The derived pipeline revision
+is `sha256:ddc3e2917c6242968f783cc5fa25ad7f42bc06e354392d084929686d4667d2ac`.
+
 ### Implementation
 
 - Add a detector result contract for `text`, `sfx`, `balloon`, and `panel`, with confidence, bounding box, optional polygon/RLE mask, model class, and provenance.

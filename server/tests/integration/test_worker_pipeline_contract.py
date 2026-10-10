@@ -6,14 +6,23 @@ import hashlib
 from dataclasses import dataclass, replace
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 from PIL import Image
 
+from pipeline.detection import SemanticDetection
+from pipeline.document import BoundingBox, Polygon, Provenance
+from webtoon.processor import WebtoonPageResult, detect_bubbles_rtdetr
 from worker.consumer import STREAM_HIGH, Consumer
-from worker.job import PipelineDependencies, ProcessingResult, production_dependencies
+from worker.job import (
+    PipelineDependencies,
+    ProcessingJob,
+    ProcessingResult,
+    process_job,
+    production_dependencies,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -61,10 +70,25 @@ def _fake_dependencies(
 
     def detect_manga(page) -> None:
         count("detection")
+        provenance = Provenance("fake-detector", "test-revision")
+        page.semantic_detections = [
+            SemanticDetection(
+                "balloon-1", "balloon", BoundingBox(15, 20, 90, 110),
+                0.9, "bubble", provenance,
+                polygon=Polygon(((15, 20), (90, 20), (90, 110), (15, 110))),
+                mask=object(), reading_order=0,
+            ),
+            SemanticDetection(
+                "text-1", "text", BoundingBox(25, 30, 80, 90),
+                0.85, "text_bubble", provenance,
+                parent_id="balloon-1", reading_order=1,
+            ),
+        ]
         page.bubbles_raw = [{
             "bbox": (15, 20, 90, 110),
             "is_artwork": False,
             "score": 0.9,
+            "semantic_id": "balloon-1",
         }]
 
     def ocr_manga(_image, bubble) -> BubbleResult:
@@ -87,28 +111,67 @@ def _fake_dependencies(
     def create_webtoon(img_cv, img_pil, name):
         return SimpleNamespace(
             name=name, img_cv=img_cv, img_pil=img_pil,
-            regions=[], sfx_detections=[],
+            regions=[], sfx_detections=[], semantic_detections=[],
         )
 
     def detect_webtoon(page) -> None:
         count("detection")
         page.detected = True
+        provenance = Provenance("fake-detector", "test-revision")
+        page.semantic_detections = [
+            SemanticDetection(
+                "webtoon-panel", "panel", BoundingBox(0, 0, 120, 155),
+                0.95, "panel", provenance, reading_order=0,
+            ),
+            SemanticDetection(
+                "webtoon-balloon", "balloon", BoundingBox(10, 20, 100, 100),
+                0.92, "bubble", provenance, mask=object(), reading_order=1,
+            ),
+            SemanticDetection(
+                "webtoon-text", "text", BoundingBox(20, 30, 90, 80),
+                0.88, "text_bubble", provenance,
+                parent_id="webtoon-balloon", reading_order=2,
+            ),
+            SemanticDetection(
+                "webtoon-balloon-2", "balloon", BoundingBox(15, 102, 105, 150),
+                0.91, "bubble", provenance, mask=object(), reading_order=3,
+            ),
+            SemanticDetection(
+                "webtoon-text-2", "text", BoundingBox(30, 108, 90, 132),
+                0.86, "text_bubble", provenance,
+                parent_id="webtoon-balloon-2", reading_order=4,
+            ),
+            SemanticDetection(
+                "webtoon-sfx", "sfx", BoundingBox(80, 5, 115, 18),
+                0.81, "text_free", provenance, reading_order=5,
+            ),
+        ]
 
     def ocr_webtoon(page) -> None:
         assert page.detected is True
         count("ocr")
-        bubble = SimpleNamespace(
-            bbox=(10, 20, 100, 100), combined_text="안녕하세요")
-        page.regions = [SimpleNamespace(
-            bubble=bubble, is_valid=True, english="")]
+        first_bubble = SimpleNamespace(
+            bbox=(10, 20, 100, 100), combined_text="안녕하세요",
+            semantic_id="webtoon-balloon")
+        second_bubble = SimpleNamespace(
+            bbox=(15, 102, 105, 150), combined_text="두 번째",
+            semantic_id="webtoon-balloon-2")
+        page.regions = [
+            SimpleNamespace(bubble=first_bubble, is_valid=True, english=""),
+            # A second render subgroup in the first balloon has no separate
+            # semantic identity and must be ordered after all detector regions.
+            SimpleNamespace(bubble=first_bubble, is_valid=True, english=""),
+            SimpleNamespace(bubble=second_bubble, is_valid=True, english=""),
+        ]
         page.sfx_detections = [SimpleNamespace(
-            bbox_rect=(20, 115, 70, 145), text="쾅")]
+            bbox_rect=(80, 5, 115, 18), text="쾅")]
 
     def translate_webtoon(page, *, parallel, target_lang) -> None:
         assert parallel is True
         assert target_lang == "pt-br"
         count("translation")
-        page.regions[0].english = "Ola"
+        for index, region in enumerate(page.regions, start=1):
+            region.english = f"Ola {index}"
 
     def analyze(_image):
         count("layout")
@@ -259,10 +322,10 @@ def _process_through_consumer(
 @pytest.mark.parametrize(
     ("pipeline", "expected_regions"),
     [
-        ("manga_translate", 1),
-        ("manga_furigana", 1),
+        ("manga_translate", 2),
+        ("manga_furigana", 2),
         ("book_furigana", 1),
-        ("webtoon", 2),
+        ("webtoon", 7),
     ],
 )
 def test_worker_message_cache_and_rerender_contract(
@@ -288,3 +351,131 @@ def test_worker_message_cache_and_rerender_contract(
         assert rerendered is first
     else:
         assert rerendered.image_bytes.startswith(b"\x89PNG")
+    if pipeline.startswith("manga_"):
+        balloon, text = first.metadata_payload["regions"]
+        assert balloon["kind"] == "balloon"
+        assert balloon["detector_label"] == "bubble"
+        assert balloon["polygon"] == [[15, 20], [90, 20], [90, 110], [15, 110]]
+        assert balloon["mask"]["encoding"] == "connected-component-v1"
+        assert text["kind"] == "text"
+        assert text["parent_id"] == balloon["id"]
+    if pipeline == "webtoon":
+        semantic_regions = {
+            region["detector_label"] + ":" + ",".join(map(str, region["bbox"])):
+            region
+            for region in first.metadata_payload["regions"]
+            if "detector_label" in region
+        }
+        panel = semantic_regions["panel:0,0,120,155"]
+        balloon_1 = semantic_regions["bubble:10,20,100,100"]
+        text_1 = semantic_regions["text_bubble:20,30,90,80"]
+        balloon_2 = semantic_regions["bubble:15,102,105,150"]
+        text_2 = semantic_regions["text_bubble:30,108,90,132"]
+        sfx = semantic_regions["text_free:80,5,115,18"]
+        assert [
+            panel["reading_order"], balloon_1["reading_order"],
+            text_1["reading_order"], balloon_2["reading_order"],
+            text_2["reading_order"], sfx["reading_order"],
+        ] == [0, 1, 2, 3, 4, 5]
+        assert text_1["parent_id"] == balloon_1["id"]
+        assert text_2["parent_id"] == balloon_2["id"]
+        assert balloon_1["mask"]["encoding"] == "webtoon-boundary-v1"
+        assert balloon_2["mask"]["encoding"] == "webtoon-boundary-v1"
+        compatibility_regions = [
+            region for region in first.metadata_payload["regions"]
+            if "detector_label" not in region and region["kind"] == "bubble"
+        ]
+        assert [region["reading_order"] for region in compatibility_regions] == [6]
+
+
+def test_tall_webtoon_stitches_semantics_before_page_document_mapping():
+    source = _png_bytes(width=120, height=4100)
+    calls: dict[str, int] = {}
+    deps = _fake_dependencies("webtoon", calls)
+
+    def create_page(img_cv, img_pil, name):
+        return WebtoonPageResult(
+            image_path="", name=name, img_cv=img_cv, img_pil=img_pil,
+        )
+
+    def recognize(page):
+        raw = page.raw_detections[0]
+        bubble = SimpleNamespace(
+            bbox=raw["bbox"], combined_text="안녕하세요",
+            semantic_id=raw["semantic_id"],
+        )
+        page.regions = [SimpleNamespace(
+            bubble=bubble, is_valid=True, english="Hello",
+        )]
+        page.sfx_detections = []
+
+    deps = replace(
+        deps,
+        create_webtoon_page=create_page,
+        detect_webtoon=detect_bubbles_rtdetr,
+        ocr_webtoon=recognize,
+    )
+    provenance = Provenance("rtdetr-v2", "weights")
+    strip_results = [
+        [
+            SemanticDetection(
+                "balloon-low", "balloon", BoundingBox(10, 1950, 100, 1995),
+                0.85, "bubble", provenance, reading_order=0,
+            ),
+            SemanticDetection(
+                "text-low", "text", BoundingBox(20, 1960, 80, 1980),
+                0.86, "text_bubble", provenance,
+                polygon=Polygon(((20, 1960), (80, 1960), (80, 1980))),
+                parent_id="balloon-low", reading_order=1,
+            ),
+        ],
+        [
+            SemanticDetection(
+                "balloon-high", "balloon", BoundingBox(10, 50, 100, 95),
+                0.95, "bubble", provenance, reading_order=0,
+            ),
+            SemanticDetection(
+                "text-high", "text", BoundingBox(20, 60, 80, 80),
+                0.96, "text_bubble", provenance,
+                polygon=Polygon(((20, 60), (80, 60), (80, 80))),
+                parent_id="balloon-high", reading_order=1,
+            ),
+        ],
+        [],
+    ]
+
+    def mask_for_page(image, bbox):
+        mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        x1, y1, x2, y2 = bbox
+        mask[y1:y2, x1:x2] = 255
+        return mask, (255, 255, 255), True
+
+    with (
+        patch("webtoon.processor.rtdetr_detect", side_effect=strip_results) as detector,
+        patch("webtoon.processor.extract_bubble_mask", side_effect=mask_for_page),
+    ):
+            result = process_job(ProcessingJob(
+                job_id="tall-webtoon", pipeline="webtoon", image_bytes=source,
+                target_lang="pt-br", pipeline_revision="tall-test",
+            ), dependencies=deps)
+
+    assert result.status == "completed", result.error
+    assert detector.call_count == 3
+    assert [call.args[0].shape[0] for call in detector.call_args_list] == [2000, 2000, 300]
+    regions = {
+        region["kind"]: region for region in result.metadata_payload["regions"]
+    }
+    assert set(regions) == {"balloon", "text"}
+    assert regions["balloon"]["bbox"] == [10, 1950, 100, 1995]
+    assert regions["balloon"]["mask"] == {
+        "reference": f"derived://source/{regions['balloon']['id']}",
+        "encoding": "webtoon-boundary-v1",
+        "width": 120,
+        "height": 4100,
+    }
+    assert regions["text"]["polygon"] == [
+        [20, 1960], [80, 1960], [80, 1980],
+    ]
+    assert regions["text"]["parent_id"] == regions["balloon"]["id"]
+    assert [regions["balloon"]["reading_order"],
+            regions["text"]["reading_order"]] == [0, 1]
