@@ -24,7 +24,7 @@ LABEL org.opencontainers.image.source="https://github.com/akitaonrails/FrankYomi
 # header packages the base carries — runtime never needs them. Upstream
 # base refreshes lag Ubuntu security fixes, so plain rebuilds don't clear these.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgl1 libglib2.0-0 gosu \
+        libgl1 libglib2.0-0 gosu util-linux \
     && apt-get install -y --only-upgrade linux-libc-dev \
     && { apt-get purge -y linux-headers-6.8.0-106 linux-headers-6.8.0-106-generic || true; } \
     && rm -rf /var/lib/apt/lists/*
