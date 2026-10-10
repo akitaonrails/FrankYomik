@@ -2,7 +2,6 @@
 
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -60,6 +59,7 @@ class WebtoonTextRegion:
     is_valid: bool = False
     english: str = ""
     group_detections: list[TextDetection] | None = None
+    source_text: str = ""
 
 
 @dataclass
@@ -75,6 +75,7 @@ class WebtoonPageResult:
     bubbles: list[WebtoonBubble] = field(default_factory=list)
     sfx_detections: list[TextDetection] = field(default_factory=list)
     sfx_translations: list[str] = field(default_factory=list)
+    sfx_translation_eligible: list[bool] = field(default_factory=list)
     regions: list[WebtoonTextRegion] = field(default_factory=list)
     output_img: Image.Image | None = None
     inpainted_bubbles: set[int] = field(default_factory=set)
@@ -361,10 +362,32 @@ def validate_and_translate(page: WebtoonPageResult,
     significant vertical gap), each group is translated independently and
     gets its own WebtoonTextRegion for separate rendering.
 
-    When parallel=True, translation HTTP calls are batched via
-    ThreadPoolExecutor instead of running sequentially.
+    The compatibility entry point retains the current single-region calls.
+    Worker jobs use the typed page translation boundary instead.
     """
-    # Phase 1: validate and create regions, collect pending translations
+    # Compatibility entry point for the CLI. Worker orchestration uses
+    # prepare_translation_regions plus the typed page translation boundary.
+    prepare_translation_regions(page)
+    pending = [region for region in page.regions if region.is_valid]
+    for region in pending:
+        translated = translate(region.source_text, target_lang)
+        if not isinstance(translated, str) or not translated.strip():
+            raise RuntimeError("eligible webtoon region returned no translation")
+        region.english = translated
+    page.sfx_translations = [
+        translate_sfx(detection.text, target_lang)
+        if _is_hangul_text(detection.text) else ""
+        for detection in page.sfx_detections
+    ]
+
+
+def prepare_translation_regions(page: WebtoonPageResult) -> None:
+    """Validate OCR and create render regions without provider calls."""
+    page.regions = []
+    page.sfx_translations = ["" for _ in page.sfx_detections]
+    page.sfx_translation_eligible = [
+        _is_hangul_text(item.text) for item in page.sfx_detections
+    ]
     pending: list[tuple[WebtoonTextRegion, str]] = []
 
     for bubble in page.bubbles:
@@ -384,41 +407,12 @@ def validate_and_translate(page: WebtoonPageResult,
 
         if len(groups) == 1:
             _validate_group(page, bubble, bubble.text_regions, None, pending,
-                            defer=parallel, target_lang=target_lang)
+                            defer=True)
         else:
             log.info("  Split bubble into %d sub-groups", len(groups))
             for group_dets in groups:
                 _validate_group(page, bubble, group_dets, group_dets, pending,
-                                defer=parallel, target_lang=target_lang)
-
-    # Phase 2: translate (parallel or already done inline)
-    if parallel and pending:
-        with ThreadPoolExecutor(
-            max_workers=min(8, len(pending))
-        ) as pool:
-            futures = {
-                pool.submit(translate, text, target_lang): (region, text)
-                for region, text in pending
-            }
-            for future in as_completed(futures):
-                region, _ = futures[future]
-                translated = future.result()
-                if not isinstance(translated, str) or not translated.strip():
-                    raise RuntimeError(
-                        "eligible webtoon region returned no translation"
-                    )
-                region.english = translated
-                log.info("  Translated: %s", translated)
-
-    page.sfx_translations = []
-    for detection in page.sfx_detections:
-        if not _is_hangul_text(detection.text):
-            page.sfx_translations.append("")
-            continue
-        translated = translate_sfx(detection.text, target_lang)
-        if not isinstance(translated, str) or not translated.strip():
-            raise RuntimeError("eligible webtoon SFX returned no translation")
-        page.sfx_translations.append(translated)
+                                defer=True)
 
 
 def _validate_group(
@@ -445,7 +439,9 @@ def _validate_group(
         return
 
     region = WebtoonTextRegion(
-        bubble=bubble, is_valid=True, group_detections=group_dets)
+        bubble=bubble, is_valid=True, group_detections=group_dets,
+        source_text=group_text,
+    )
     log.info("  KO: %s", group_text)
     page.regions.append(region)
 

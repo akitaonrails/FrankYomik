@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "page_id": "fixture-ja-continuity-001",
+  "source_language": "ja",
+  "target_language": "en",
+  "context": [
+    "Haruka and her younger sister are looking for the front-door key."
+  ],
+  "terms": [
+    ["ハルカ", "Haruka"],
+    ["お姉ちゃん", "Onee-chan"]
+  ],
+  "style": [
+    "Use concise natural manga dialogue.",
+    "Preserve speaker continuity and omitted subjects across adjacent regions.",
+    "Render SFX as a short uppercase English sound."
+  ],
+  "private_metadata": {
+    "account_id": "PRIVATE_ACCOUNT_SENTINEL",
+    "source_hash": "PRIVATE_HASH_SENTINEL",
+    "provider_token": "PRIVATE_TOKEN_SENTINEL",
+    "source_image": "PRIVATE_IMAGE_SENTINEL"
+  },
+  "items": [
+    {
+      "id": "r-dialogue-01",
+      "reading_order": 0,
+      "kind": "text",
+      "source_text": "ハルカ、鍵は持ってる？",
+      "eligible_for_translation": true,
+      "expected": "Haruka, do you have the key?",
+      "checks": ["name:Haruka", "continuity:key"]
+    },
+    {
+      "id": "r-dialogue-02",
+      "reading_order": 1,
+      "kind": "text",
+      "source_text": "ううん、玄関に置いてきた。",
+      "eligible_for_translation": true,
+      "expected": "No, I left it by the front door.",
+      "checks": ["pronoun:I", "continuity:key"]
+    },
+    {
+      "id": "r-dialogue-03",
+      "reading_order": 2,
+      "kind": "text",
+      "source_text": "じゃあ私が取りに戻る。",
+      "eligible_for_translation": true,
+      "expected": "Then I'll go back for it.",
+      "checks": ["pronoun:I", "continuity:key"]
+    },
+    {
+      "id": "r-dialogue-04",
+      "reading_order": 3,
+      "kind": "text",
+      "source_text": "お姉ちゃん、待って！",
+      "eligible_for_translation": true,
+      "expected": "Onee-chan, wait!",
+      "checks": ["honorific:Onee-chan"]
+    },
+    {
+      "id": "r-sfx-01",
+      "reading_order": 4,
+      "kind": "sfx",
+      "source_text": "ドン",
+      "eligible_for_translation": true,
+      "expected": "BOOM",
+      "checks": ["sfx:uppercase", "sfx:concise"]
+    },
+    {
+      "id": "r-sign-01",
+      "reading_order": 5,
+      "kind": "artwork_text",
+      "source_text": "ラーメン",
+      "eligible_for_translation": true,
+      "expected": "RAMEN",
+      "checks": ["sign:concise"]
+    },
+    {
+      "id": "r-preserve-01",
+      "reading_order": 6,
+      "kind": "text",
+      "source_text": "Kacchan",
+      "eligible_for_translation": false,
+      "expected": "Kacchan",
+      "checks": ["untranslated:explicit"]
+    },
+    {
+      "id": "r-preserve-02",
+      "reading_order": 7,
+      "kind": "text",
+      "source_text": "…",
+      "eligible_for_translation": false,
+      "expected": "…",
+      "checks": ["untranslated:ellipsis"]
+    }
+  ]
+}

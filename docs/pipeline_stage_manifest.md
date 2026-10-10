@@ -74,10 +74,14 @@ weights. When configured inpainting is enabled, model load, mask construction,
 and inference failures fail the page rather than silently applying solid
 cleanup while recording LaMa provenance.
 
-Translation is also fail closed. Ollama errors and empty dialogue or SFX
-responses fail the job. The pipeline does not substitute Google Translate or
-source text under Ollama provenance, so saved region provenance always names
-the backend and model that actually executed.
+Translation verifies the configured Ollama model before a page request. Its
+strict page schema, prompt, bounded recovery policy, and both language adapters
+are part of the composite translation identity. Contract errors, timeouts, and
+context limits may use bounded smaller batches or the existing single-region
+call. Other Ollama errors and empty dialogue or SFX responses fail the job. The
+pipeline does not substitute Google Translate or source text under Ollama
+provenance, so saved region provenance always names the backend and model that
+actually executed. See [Page-batched translation](page_batched_translation.md).
 
 The manifest accepts only its restricted normal form: numeric literals cannot
 use exponent notation, redundant trailing fractional zeros, or negative zero,

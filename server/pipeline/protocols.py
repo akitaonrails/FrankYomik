@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, Protocol, runtime_checkable
 
 from .document import Provenance
+from .translation import PageTranslationRequest, PageTranslationResult
 
 
 class PageDetectionStage(Protocol):
@@ -36,6 +37,12 @@ class MangaRenderStage(Protocol):
 class WebtoonTranslationStage(Protocol):
     def __call__(self, page: object, *, parallel: bool,
                  target_lang: str) -> None: ...
+
+
+class PageTranslationStage(Protocol):
+    def __call__(
+        self, request: PageTranslationRequest,
+    ) -> PageTranslationResult: ...
 
 
 class PageCleanupStage(Protocol):
@@ -71,6 +78,7 @@ class PipelineRuntime(Protocol):
     render_manga: MangaRenderStage
     transform_furigana: Callable[..., Any]
     translate_text: Callable[..., str]
+    translate_page: PageTranslationStage
     furigana_font_limits: Callable[..., Any]
     estimate_source_font: Callable[..., Any]
     render_translation: Callable[..., Any]
@@ -81,6 +89,7 @@ class PipelineRuntime(Protocol):
     detect_webtoon: PageDetectionStage
     ocr_webtoon: PageOcrStage
     translate_webtoon: WebtoonTranslationStage
+    prepare_webtoon_translation: Callable[[object], None]
     cleanup_webtoon: PageCleanupStage
     render_webtoon: PageRenderStage
     provenance_for: Callable[[str, str, str], Provenance] | None

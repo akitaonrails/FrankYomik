@@ -1,3 +1,4 @@
+import json
 import hashlib
 from unittest.mock import MagicMock, patch
 
@@ -65,8 +66,10 @@ def test_model_file_rejects_byte_drift(tmp_path):
 
 
 def test_translator_checks_ollama_tags_endpoint():
-    response = MagicMock()
-    response.json.return_value = [{"unexpected": "shape"}]
+    response = MagicMock(status_code=200)
+    response.iter_content.return_value = [
+        json.dumps({"models": "unexpected"}).encode(),
+    ]
 
     with (
         patch("kindle.translator.requests.get", return_value=response) as get,
@@ -75,4 +78,6 @@ def test_translator_checks_ollama_tags_endpoint():
         verify_ollama_model("manga_translate")
 
     response.raise_for_status.assert_called_once_with()
+    response.close.assert_called_once_with()
     assert get.call_args.args[0].endswith("/api/tags")
+    assert get.call_args.kwargs["stream"] is True

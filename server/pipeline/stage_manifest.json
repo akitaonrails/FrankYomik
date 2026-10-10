@@ -15,7 +15,7 @@
     },
     "manga_translator": {
       "path": "kindle/translator.py",
-      "sha256": "f082a60c17e91b7334ad1fd25c5f7a1cf17f302691325fbe1fabb5c26944840d"
+      "sha256": "e48764cb147148601f8df8e57bd9884cafd4437734768114646e45b373f534bd"
     },
     "furigana": {
       "path": "kindle/furigana.py",
@@ -43,7 +43,7 @@
     },
     "webtoon_pipeline": {
       "path": "webtoon/processor.py",
-      "sha256": "6e8416ec1531278fb9e2ae2329dd7e57aba706421c47e0fe01fe3f740bf836e7"
+      "sha256": "874f1c80005d344428162a8f84ce2fdc31dc0eec9922abb65b2d86551aef21f9"
     },
     "webtoon_ocr": {
       "path": "webtoon/ocr.py",
@@ -51,7 +51,7 @@
     },
     "webtoon_translator": {
       "path": "webtoon/translator.py",
-      "sha256": "055e123774a5d6789cb657de488c14325e4fb76800e4070416012a77c40f5562"
+      "sha256": "b3954b3018cd74b8df8aef697f6020242b75f471a3da869ede79012c654714d1"
     },
     "webtoon_inpainter": {
       "path": "webtoon/inpainter.py",
@@ -83,7 +83,7 @@
     },
     "python_pipeline_protocols": {
       "path": "pipeline/protocols.py",
-      "sha256": "4c0971b5fc734c73eadaabb0b9793039d1ea7978900a4b1642596d8d2132b6d5"
+      "sha256": "934fd70491ccd11bc4697d531430a461eaaebdbf92a51e7e9eda1cad0a3f0929"
     },
     "python_pipeline_revision": {
       "path": "pipeline/revision.py",
@@ -107,7 +107,7 @@
     },
     "python_worker_job": {
       "path": "worker/job.py",
-      "sha256": "4633061f0a6e430ad1d3d0f7e0dd332af5cb16549be74f2fa63292cf0782bee5"
+      "sha256": "3ea34009f68ee6887c6c46299fec402da65b1aec7bc5c3a77a64c2e67b509312"
     },
     "python_worker_main": {
       "path": "worker/main.py",
@@ -175,7 +175,7 @@
     },
     "python_pipeline_adapters_current": {
       "path": "pipeline/adapters/current.py",
-      "sha256": "b777da10efc74b31063e76d5dfb03bd7f2fc2839f433537dda99e3e4ffe12dda"
+      "sha256": "853ae3d12304525b4cc46859e5e8ddbdb1f1c7afd47f19339c48501b8cf6c062"
     },
     "python_pipeline_detection": {
       "path": "pipeline/detection.py",
@@ -196,6 +196,10 @@
     "hayai_configuration": {
       "path": "kindle/hayai_configuration.py",
       "sha256": "f832195d6836fdd20ac5ed048c9df81ba720b425a39d2f3d9e75201a7e8aca58"
+    },
+    "python_pipeline_translation": {
+      "path": "pipeline/translation.py",
+      "sha256": "97c8a721c7e567798b52b64bbcfb3949ad36ed3bb3db3381464994e4346f9c28"
     }
   },
   "stages": {
@@ -229,7 +233,7 @@
       "backend": "manga-ocr",
       "implementation": {
         "id": "pipeline.japanese-ocr-router",
-        "revision": "sha256:5dc1610858eaceaddce39bf9f30874ba3bcb62f039e4ebf3660f2b2636c6e8c8",
+        "revision": "sha256:dc494fedd89e3471b953965131d024a655afb41cc9c32aa3687e6ddf929bec67",
         "component_artifacts": [
           "config",
           "manga_ocr",
@@ -310,21 +314,38 @@
     "manga.translation": {
       "backend": "ollama-chat",
       "implementation": {
-        "id": "kindle.translator",
-        "revision": "sha256:f082a60c17e91b7334ad1fd25c5f7a1cf17f302691325fbe1fabb5c26944840d"
+        "id": "page-translation-v1",
+        "revision": "sha256:d5c15c8856e39205e3160b664360bafe3957bc7d7b0e3d483be141904d4e680f",
+        "component_artifacts": [
+          "manga_translator",
+          "python_pipeline_translation",
+          "python_pipeline_model_verification",
+          "python_worker_job",
+          "python_pipeline_adapters_current",
+          "python_pipeline_protocols",
+          "config",
+          "python_kindle_config"
+        ]
       },
       "model": {
         "id": "qwen3:14b",
         "weights_revision": "sha256:bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8"
       },
       "prompt": {
-        "id": "manga-dialogue-v1",
-        "sha256": "f082a60c17e91b7334ad1fd25c5f7a1cf17f302691325fbe1fabb5c26944840d"
+        "id": "page-translation-v1",
+        "sha256": "97c8a721c7e567798b52b64bbcfb3949ad36ed3bb3db3381464994e4346f9c28"
       },
       "output_config": {
         "temperature": 0.3,
         "num_predict": 1024,
-        "think": false
+        "think": false,
+        "schema_version": 1,
+        "max_batch_attempts": 8,
+        "max_response_chars": 256000,
+        "max_page_items": 512,
+        "max_request_items": 64,
+        "max_http_response_bytes": 512000,
+        "max_http_response_chars": 256000
       }
     },
     "manga.transform": {
@@ -428,7 +449,7 @@
       "backend": "rtdetr-v2",
       "implementation": {
         "id": "webtoon.processor",
-        "revision": "sha256:6d528f8e6d44a9ab04e45222e35a2d3f56c2d0390c1f5d896c591a3cc9c93e39",
+        "revision": "sha256:bd3e4d13a4eb678ca5233a1d21a1cf6cd0216315545dfc54d686faa2dc48e4e1",
         "component_artifacts": [
           "manga_detector",
           "webtoon_pipeline",
@@ -474,21 +495,41 @@
     "webtoon.translation": {
       "backend": "ollama-chat",
       "implementation": {
-        "id": "webtoon.translator",
-        "revision": "sha256:055e123774a5d6789cb657de488c14325e4fb76800e4070416012a77c40f5562"
+        "id": "page-translation-v1",
+        "revision": "sha256:7a940a54f04cc7319a23a8c9e9366fd250341b4693ca316a962af911bd29c559",
+        "component_artifacts": [
+          "manga_translator",
+          "webtoon_translator",
+          "webtoon_pipeline",
+          "python_pipeline_translation",
+          "python_pipeline_model_verification",
+          "python_worker_job",
+          "python_pipeline_adapters_current",
+          "python_pipeline_protocols",
+          "config",
+          "python_kindle_config",
+          "python_webtoon_config"
+        ]
       },
       "model": {
         "id": "qwen3:14b",
         "weights_revision": "sha256:bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8"
       },
       "prompt": {
-        "id": "webtoon-dialogue-and-sfx-v1",
-        "sha256": "055e123774a5d6789cb657de488c14325e4fb76800e4070416012a77c40f5562"
+        "id": "page-translation-v1",
+        "sha256": "97c8a721c7e567798b52b64bbcfb3949ad36ed3bb3db3381464994e4346f9c28"
       },
       "output_config": {
         "temperature": 0.3,
         "num_predict": 1024,
-        "think": false
+        "think": false,
+        "schema_version": 1,
+        "max_batch_attempts": 8,
+        "max_response_chars": 256000,
+        "max_page_items": 512,
+        "max_request_items": 64,
+        "max_http_response_bytes": 512000,
+        "max_http_response_chars": 256000
       }
     },
     "webtoon.cleanup": {

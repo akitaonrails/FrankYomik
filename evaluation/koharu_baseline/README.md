@@ -23,6 +23,10 @@ Hayai OCR's pinned identity, security and provenance audit, oracle quality
 bound, candidate routing signals, and promotion gates are recorded in
 [`phase2_hayai_evaluation.md`](phase2_hayai_evaluation.md).
 
+The current translation baseline, deterministic page-batch contract fixture,
+failure behavior, privacy boundary, and Phase 3 promotion gates are recorded in
+[`phase3_translation_evaluation.md`](phase3_translation_evaluation.md).
+
 ## What should be compared
 
 ### 1. Detection and segmentation
@@ -72,14 +76,15 @@ Real manga artwork usually has no known clean image behind the lettering. No-ref
 These findings already have a direct technical justification and are outside this benchmark:
 
 - Fix Frank's left-to-right manga detection sort.
-- Batch page translation with stable region IDs and page context.
+- Page translation with stable region IDs and bounded context (implemented in
+  Phase 3).
 - Add per-book terminology and translation instructions.
 - Preserve masks, reading order, typography, and provenance in cache metadata.
 - Fill nearly uniform balloon interiors before invoking an inpainting model.
 - Tile large cleanup masks with surrounding context.
 - Add an optional review interface after the page document exists.
 
-Translation model quality is not a Koharu-versus-Frank property. Koharu exposes more providers, while Frank currently uses one local model and a fallback. The useful Koharu improvement is page-level translation orchestration, which can be implemented directly and then covered by product-specific translation evaluation.
+Translation model quality is not a Koharu-versus-Frank property. Koharu exposes more providers, while Frank currently uses one local model and a fallback. Frank's page-level orchestration is covered by the Phase 3 product-specific translation evaluation.
 
 Koharu's studio UI, project management, general canvas, PSD workflow, and broad provider catalog are outside Frank's goals.
 
@@ -90,6 +95,7 @@ evaluation/koharu_baseline/
   config.json                 pinned repositories, binaries, and thresholds
   config.local.json           optional ignored machine overrides
   dataset.json                case index without copyrighted content
+  fixtures/                   small synthetic deterministic contract inputs
   assets/                     ignored private inputs
     pages/                    full pages for detection
     ocr/                      exact recognition crops

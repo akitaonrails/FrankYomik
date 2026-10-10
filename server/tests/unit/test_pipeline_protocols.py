@@ -11,6 +11,7 @@ from pipeline.protocols import (
     PageDetectionStage,
     PageOcrStage,
     PageRenderStage,
+    PageTranslationStage,
     WebtoonTranslationStage,
 )
 from worker.job import PipelineDependencies, production_dependencies
@@ -27,6 +28,7 @@ def test_production_stage_callables_are_explicit_and_callable():
         "ocr_manga": MangaOcrStage,
         "cleanup_manga": MangaCleanupStage,
         "render_manga": MangaRenderStage,
+        "translate_page": PageTranslationStage,
         "detect_webtoon": PageDetectionStage,
         "ocr_webtoon": PageOcrStage,
         "translate_webtoon": WebtoonTranslationStage,

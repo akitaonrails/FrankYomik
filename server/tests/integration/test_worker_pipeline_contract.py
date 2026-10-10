@@ -14,6 +14,7 @@ from PIL import Image
 
 from pipeline.detection import SemanticDetection
 from pipeline.document import BoundingBox, OcrAlternative, Polygon, Provenance
+from pipeline.translation import PageTranslationResult, TranslationValue
 from webtoon.processor import WebtoonPageResult, detect_bubbles_rtdetr
 from worker.consumer import STREAM_HIGH, Consumer
 from worker.job import (
@@ -117,6 +118,17 @@ def _fake_dependencies(
         count("translation")
         return "Isto e kanji"
 
+    def translate_page(request) -> PageTranslationResult:
+        count("translation")
+        calls["translation_request"] = request
+        values = []
+        for index, item in enumerate(request.items, start=1):
+            text = "ESTRONDO" if item.kind == "sfx" else f"Ola {index}"
+            if request.source_language == "ja":
+                text = "Isto e kanji"
+            values.append(TranslationValue(item.id, text))
+        return PageTranslationResult(tuple(values), batch_attempts=1)
+
     def add_furigana(result: BubbleResult) -> None:
         count("transform")
         result.transformed = [{
@@ -188,6 +200,12 @@ def _fake_dependencies(
         for index, region in enumerate(page.regions, start=1):
             region.english = f"Ola {index}"
 
+    def prepare_webtoon_translation(page) -> None:
+        for region in page.regions:
+            region.source_text = region.bubble.combined_text
+        page.sfx_translations = ["" for _ in page.sfx_detections]
+        page.sfx_translation_eligible = [True for _ in page.sfx_detections]
+
     def analyze(_image):
         count("layout")
         column = SimpleNamespace(x0=80, y0=10, x1=110, y1=145)
@@ -231,6 +249,7 @@ def _fake_dependencies(
         ),
         transform_furigana=add_furigana,
         translate_text=translate_text,
+        translate_page=translate_page,
         furigana_font_limits=lambda _values: (None, None, None),
         estimate_source_font=lambda *_args, **_kwargs: 18,
         render_translation=lambda *_args, **_kwargs: count("render"),
@@ -241,6 +260,7 @@ def _fake_dependencies(
         detect_webtoon=detect_webtoon,
         ocr_webtoon=ocr_webtoon,
         translate_webtoon=translate_webtoon,
+        prepare_webtoon_translation=prepare_webtoon_translation,
         cleanup_webtoon=lambda _page: count("cleanup"),
         render_webtoon=lambda page: count("render") or encode(page.img_pil),
     )
@@ -381,6 +401,16 @@ def test_worker_message_cache_and_rerender_contract(
         assert text["kind"] == "text"
         assert text["parent_id"] == balloon["id"]
     if pipeline == "webtoon":
+        request = calls["translation_request"]
+        submitted_ids = {item.id for item in request.items}
+        translated_regions = [
+            region for region in first.metadata_payload["regions"]
+            if region.get("translation") is not None
+        ]
+        assert submitted_ids == {region["id"] for region in translated_regions}
+        assert [item.kind for item in request.items].count("sfx") == 1
+        assert next(region for region in translated_regions
+                    if region["kind"] == "sfx")["translation"]["text"] == "ESTRONDO"
         semantic_regions = {
             region["detector_label"] + ":" + ",".join(map(str, region["bbox"])):
             region
@@ -407,6 +437,113 @@ def test_worker_message_cache_and_rerender_contract(
             if "detector_label" not in region and region["kind"] == "bubble"
         ]
         assert [region["reading_order"] for region in compatibility_regions] == [6]
+
+
+def test_manga_batch_uses_final_ids_and_excludes_invalid_preserved_text():
+    calls: dict[str, object] = {}
+    deps = _fake_dependencies("manga_translate", calls)  # type: ignore[arg-type]
+
+    def detect(page) -> None:
+        provenance = Provenance("fake-detector", "test-revision")
+        detections = []
+        raw = []
+        sources = (("一番", True), ("二番", True), ("Kacchan", False), ("…", False))
+        for index, (_source, _valid) in enumerate(sources):
+            y1 = 10 + index * 30
+            balloon_id = f"balloon-{index}"
+            detections.extend((
+                SemanticDetection(
+                    balloon_id, "balloon", BoundingBox(10, y1, 100, y1 + 25),
+                    0.9, "bubble", provenance, reading_order=index * 2,
+                ),
+                SemanticDetection(
+                    f"text-{index}", "text", BoundingBox(20, y1 + 3, 90, y1 + 20),
+                    0.8, "text_bubble", provenance, parent_id=balloon_id,
+                    reading_order=index * 2 + 1,
+                ),
+            ))
+            raw.append({
+                "bbox": (10, y1, 100, y1 + 25), "semantic_id": balloon_id,
+                "source": _source, "valid": _valid,
+            })
+        page.semantic_detections = detections
+        page.bubbles_raw = raw
+
+    def ocr(_image, raw) -> BubbleResult:
+        return BubbleResult(
+            bbox=raw["bbox"], ocr_text=raw["source"], is_valid=raw["valid"],
+        )
+
+    def page_translate(request) -> PageTranslationResult:
+        calls["request"] = request
+        return PageTranslationResult(tuple(
+            TranslationValue(item.id, f"translated:{item.source_text}")
+            for item in reversed(request.items)
+        ), batch_attempts=1)
+
+    result = process_job(ProcessingJob(
+        job_id="stable-translation-ids", pipeline="manga_translate",
+        image_bytes=_png_bytes(), source_hash="b" * 64, target_lang="en",
+    ), dependencies=replace(
+        deps, detect_manga=detect, ocr_manga=ocr, translate_page=page_translate,
+    ))
+
+    assert result.status == "completed", result.error
+    request = calls["request"]
+    assert [item.source_text for item in request.items] == ["一番", "二番"]
+    regions = result.metadata_payload["regions"]
+    translated = [region for region in regions if region.get("translation")]
+    assert [item.id for item in request.items] == [region["id"] for region in translated]
+    preserved = {region["ocr"]["text"]: region.get("translation")
+                 for region in regions if region.get("ocr")}
+    assert preserved["Kacchan"] is None
+    assert preserved["…"] is None
+
+
+def test_incomplete_page_result_fails_before_cleanup_or_render():
+    calls: dict[str, int] = {}
+    deps = _fake_dependencies("manga_translate", calls)
+    result = process_job(ProcessingJob(
+        job_id="incomplete-translation", pipeline="manga_translate",
+        image_bytes=_png_bytes(), source_hash="c" * 64,
+    ), dependencies=replace(
+        deps,
+        translate_page=lambda _request: PageTranslationResult((), 1),
+    ))
+
+    assert result.status == "failed"
+    assert "incomplete IDs" in result.error
+    assert calls.get("cleanup", 0) == 0
+    assert calls.get("render", 0) == 0
+
+
+def test_ineligible_webtoon_sfx_has_no_translation_or_provenance():
+    calls: dict[str, object] = {}
+    deps = _fake_dependencies("webtoon", calls)  # type: ignore[arg-type]
+    original_ocr = deps.ocr_webtoon
+    original_prepare = deps.prepare_webtoon_translation
+
+    def ocr(page) -> None:
+        original_ocr(page)
+        page.sfx_detections[0].text = "..."
+
+    def prepare(page) -> None:
+        original_prepare(page)
+        page.sfx_translation_eligible = [False]
+
+    result = process_job(ProcessingJob(
+        job_id="ineligible-sfx", pipeline="webtoon",
+        image_bytes=_png_bytes(), source_hash="d" * 64, target_lang="pt-br",
+    ), dependencies=replace(
+        deps, ocr_webtoon=ocr, prepare_webtoon_translation=prepare,
+    ))
+
+    assert result.status == "completed", result.error
+    request = calls["translation_request"]
+    assert all(item.kind != "sfx" for item in request.items)
+    sfx = next(region for region in result.metadata_payload["regions"]
+               if region["kind"] == "sfx")
+    assert sfx.get("translation") is None
 
 
 def test_degraded_manga_ocr_result_is_returned_but_not_cached(tmp_path):

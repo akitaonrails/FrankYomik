@@ -14,6 +14,7 @@ from pipeline.protocols import (
     PageDetectionStage,
     PageOcrStage,
     PageRenderStage,
+    PageTranslationStage,
     WebtoonTranslationStage,
 )
 
@@ -111,6 +112,11 @@ def translate(*args, **kwargs):
     return implementation(*args, **kwargs)
 
 
+def translate_page(*args, **kwargs):
+    from kindle.translator import translate_page as implementation
+    return implementation(*args, **kwargs)
+
+
 def compute_furigana_page_font_limits(values):
     from kindle.text_renderer import compute_furigana_page_font_limits as implementation
     return implementation(values)
@@ -163,6 +169,11 @@ def _webtoon_translate(*args, **kwargs):
     return implementation(*args, **kwargs)
 
 
+def _webtoon_prepare_translation(page):
+    from webtoon.processor import prepare_translation_regions as implementation
+    return implementation(page)
+
+
 def _webtoon_render(*args, **kwargs):
     from webtoon.processor import render_cleaned_page_to_bytes as implementation
     return implementation(*args, **kwargs)
@@ -194,6 +205,7 @@ class PipelineDependencies:
     render_manga: MangaRenderStage = render_cleaned_manga_page
     transform_furigana: Callable = transform_furigana
     translate_text: Callable = translate
+    translate_page: PageTranslationStage = translate_page
     furigana_font_limits: Callable = compute_furigana_page_font_limits
     estimate_source_font: Callable = estimate_source_vertical_font_size
     render_translation: Callable = render_english
@@ -204,9 +216,9 @@ class PipelineDependencies:
     detect_webtoon: PageDetectionStage = _webtoon_detect
     ocr_webtoon: PageOcrStage = _webtoon_ocr
     translate_webtoon: WebtoonTranslationStage = _webtoon_translate
+    prepare_webtoon_translation: Callable = _webtoon_prepare_translation
     cleanup_webtoon: PageCleanupStage = _webtoon_cleanup
     render_webtoon: PageRenderStage = _webtoon_render
     provenance_for: Callable[[str, str, str], Provenance] | None = None
     language_for: Callable[[str], str] | None = None
     cleanup_for: Callable[[str, str], str | None] | None = None
-

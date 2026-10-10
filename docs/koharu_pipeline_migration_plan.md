@@ -10,7 +10,7 @@ This is a sequential migration. A stage may start only after the previous stage 
 
 ## Status
 
-Phases 0 through 2 are complete. The foundation provides typed stage protocols,
+Phases 0 through 3 are complete. The foundation provides typed stage protocols,
 a validated [PageDocument v2](page_document_v2.md), cache manifest v3 revision
 identity, compatibility reads for legacy metadata and manifests, verified model
 and font identity, fail-closed translation and configured inpainting, and an
@@ -20,8 +20,10 @@ Phase 1 retained the current detector after the candidate failed its provenance
 and quality gates. Phase 2 confirmed Hayai's recognition quality and added a
 disabled, pinned adapter, while retaining Manga OCR as the production default
 because a safe router from Frank's current signals was not established. Every
-completed phase passed its independent review and was committed as a working
-delivery boundary.
+completed phase passed its independent review. Phase 3 replaces per-region
+translation calls with validated stable-ID page batches while preserving target
+languages and furigana behavior. Each phase is committed as a working delivery
+boundary.
 
 ## Product boundary
 
@@ -204,6 +206,18 @@ derived pipeline revision
 Document supported scripts/languages, routing rules, confidence limitations, cache paths, model sizes/checksums/licenses, resource use, configuration, and failure behavior.
 
 ## Phase 3: page-batched translation
+
+**Status: complete; Gate 3 passed.** Manga and webtoon translation now use a
+stable-ID structured page request with strict response validation, atomic
+application, and bounded recovery. Normal pages use one provider call; pages
+over 64 eligible regions split deterministically while retaining one model
+verification and an all-or-fail result. Furigana paths are unchanged. The exact
+pinned `qwen3:14b` endpoint on the Strix Halo accepted the production schema for
+Japanese dialogue and a mixed Korean dialogue/SFX request. See
+[Page-batched translation](page_batched_translation.md) and the
+[Phase 3 evaluation](../evaluation/koharu_baseline/phase3_translation_evaluation.md).
+The final derived pipeline revision is
+`sha256:8ff06138e3e318985a8fa5dab38c40af496b4d4c13d6bc0ef686cd2eba45ad8f`.
 
 ### Implementation
 

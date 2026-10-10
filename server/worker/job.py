@@ -6,7 +6,6 @@ import hashlib
 import logging
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +17,7 @@ from pipeline.adapters.current import (
     _webtoon_detect,
     _webtoon_load_page,
     _webtoon_ocr,
+    _webtoon_prepare_translation,
     _webtoon_render,
     _webtoon_translate,
     analyze_book_layout,
@@ -41,6 +41,7 @@ from pipeline.adapters.current import (
     render_furigana_vertical,
     transform_furigana,
     translate,
+    translate_page,
 )
 from pipeline.current_backend import cleanup_for, language_for, provenance_for
 from pipeline.detection import SemanticDetection, validate_detection_collection
@@ -64,6 +65,12 @@ from pipeline.document import (
 )
 from pipeline.protocols import PipelineRuntime
 from pipeline.revision import DEFAULT_PIPELINE_REVISION
+from pipeline.translation import (
+    MANGA_PAGE_STYLE,
+    WEBTOON_PAGE_STYLE,
+    PageTranslationRequest,
+    TranslationItem,
+)
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +98,7 @@ def production_dependencies() -> PipelineDependencies:
         render_manga=render_cleaned_manga_page,
         transform_furigana=transform_furigana,
         translate_text=translate,
+        translate_page=translate_page,
         furigana_font_limits=compute_furigana_page_font_limits,
         estimate_source_font=estimate_source_vertical_font_size,
         render_translation=render_english,
@@ -101,6 +109,7 @@ def production_dependencies() -> PipelineDependencies:
         detect_webtoon=_webtoon_detect,
         ocr_webtoon=_webtoon_ocr,
         translate_webtoon=_webtoon_translate,
+        prepare_webtoon_translation=_webtoon_prepare_translation,
         cleanup_webtoon=_webtoon_cleanup,
         render_webtoon=_webtoon_render,
         provenance_for=provenance_for,
@@ -712,6 +721,32 @@ def _process_manga(job: ProcessingJob,
         br = deps.ocr_manga(page.img_pil, bubble_dict)
         page.bubble_results.append(br)
 
+    # Assign the exact PageDocument identities before translation. Provider
+    # responses are always joined by these IDs, never by list position.
+    page_id = _page_id(job)
+    semantic_detections: list[SemanticDetection] = list(
+        getattr(page, "semantic_detections", []),
+    )
+    semantic_by_id = {item.id: item for item in semantic_detections}
+    semantic_ids = _semantic_region_ids(page_id, semantic_detections)
+    planned_collisions: dict[str, int] = {}
+    planned_orders = _ReadingOrderAllocator(semantic_detections)
+    region_plans: list[tuple[str, int, str]] = []
+    for idx, br in enumerate(page.bubble_results):
+        raw = page.bubbles_raw[idx] if idx < len(page.bubbles_raw) else {}
+        semantic_id = raw.get("semantic_id") if isinstance(raw, dict) else None
+        semantic = semantic_by_id.get(semantic_id)
+        kind = (semantic.kind if semantic is not None else
+                "artwork_text" if br.is_artwork_text else "bubble")
+        region_id = (semantic_ids[semantic.id] if semantic is not None else
+                     _next_region_id(
+                         page_id, kind, BoundingBox.from_value(br.bbox),
+                         planned_collisions,
+                     ))
+        order = (planned_orders.semantic(semantic) if semantic is not None
+                 else planned_orders.extra())
+        region_plans.append((region_id, order, kind))
+
     # Transform
     total_br = len(page.bubble_results)
     if mode_name == "furigana":
@@ -721,31 +756,31 @@ def _process_manga(job: ProcessingJob,
                     65 + int(25 * (i+1) / max(total_br, 1)))
             deps.transform_furigana(br)
     else:
-        # Translation calls are independent HTTP POSTs — run in parallel
         translatable = [(i, br) for i, br in enumerate(page.bubble_results)
                         if br.is_valid]
         _report(progress_cb, "translating", f"{len(translatable)} bubbles", 65)
         if translatable:
-            with ThreadPoolExecutor(
-                max_workers=min(8, len(translatable))
-            ) as pool:
-                futures = {
-                    pool.submit(
-                        deps.translate_text, br.ocr_text, job.target_lang
-                    ): (i, br)
-                    for i, br in translatable
-                }
-                for done, future in enumerate(as_completed(futures), start=1):
-                    _, br = futures[future]
-                    _report(progress_cb, "translating",
-                            f"{done}/{len(translatable)} bubbles",
-                            65 + int(25 * done / len(translatable)))
-                    english = future.result()
-                    if not isinstance(english, str) or not english.strip():
-                        raise RuntimeError(
-                            "eligible manga region returned no translation"
-                        )
-                    br.transformed = english
+            request = PageTranslationRequest(
+                source_language="ja",
+                target_language=job.target_lang,
+                items=tuple(sorted((
+                    TranslationItem(
+                        region_plans[index][0], region_plans[index][1],
+                        region_plans[index][2], br.ocr_text,
+                    )
+                    for index, br in translatable
+                ), key=lambda item: item.reading_order)),
+                style=MANGA_PAGE_STYLE,
+            )
+            translated = deps.translate_page(request).by_id()
+            expected_ids = {item.id for item in request.items}
+            if set(translated) != expected_ids:
+                raise RuntimeError("page translator returned incomplete IDs")
+            for done, (index, br) in enumerate(translatable, start=1):
+                br.transformed = translated[region_plans[index][0]]
+                _report(progress_cb, "translating",
+                        f"{done}/{len(translatable)} bubbles",
+                        65 + int(25 * done / len(translatable)))
 
     _report(progress_cb, "cleanup", "", 92)
     deps.cleanup_manga(page, mode)
@@ -756,7 +791,6 @@ def _process_manga(job: ProcessingJob,
                        if br.transformed is not None)
 
     img_w, img_h = page.img_pil.width, page.img_pil.height
-    page_id = _page_id(job)
     collisions: dict[str, int] = {}
     revision = job.pipeline_revision
     detection_provenance = _provenance(
@@ -771,13 +805,7 @@ def _process_manga(job: ProcessingJob,
     render_provenance = _provenance(deps, job.pipeline, "render", revision)
     source_language = _language(deps, job.pipeline)
     regions: list[PageRegion] = []
-    semantic_detections: list[SemanticDetection] = list(
-        getattr(page, "semantic_detections", []),
-    )
-    semantic_by_id = {item.id: item for item in semantic_detections}
-    semantic_ids = _semantic_region_ids(page_id, semantic_detections)
     represented_semantic_ids: set[str] = set()
-    reading_orders = _ReadingOrderAllocator(semantic_detections)
     for idx, br in enumerate(page.bubble_results):
         transformed_obj: dict[str, Any] | None = None
         if isinstance(br.transformed, list):
@@ -795,10 +823,7 @@ def _process_manga(job: ProcessingJob,
         semantic = semantic_by_id.get(semantic_id)
         if semantic is not None:
             represented_semantic_ids.add(semantic.id)
-        kind = (
-            semantic.kind if semantic is not None
-            else "artwork_text" if br.is_artwork_text else "bubble"
-        )
+        region_id, reading_order, kind = region_plans[idx]
         confidence = raw.get("score") if isinstance(raw, dict) else None
         if not isinstance(confidence, (int, float)):
             confidence = None
@@ -807,8 +832,7 @@ def _process_manga(job: ProcessingJob,
             collisions=collisions,
             kind=kind,
             bbox=br.bbox,
-            reading_order=(reading_orders.semantic(semantic)
-                           if semantic is not None else reading_orders.extra()),
+            reading_order=reading_order,
             ocr_text=br.ocr_text,
             is_valid=bool(br.is_valid),
             detection_provenance=detection_provenance,
@@ -826,7 +850,7 @@ def _process_manga(job: ProcessingJob,
             confidence=None if confidence is None else float(confidence),
             cleanup_method=_cleanup_method(deps, job.pipeline, kind),
             vertical=mode_name == "furigana",
-            region_id=(None if semantic is None else semantic_ids[semantic.id]),
+            region_id=region_id,
             parent_id=(None if semantic is None or semantic.parent_id is None
                        else semantic_ids[semantic.parent_id]),
             detector_label=(None if semantic is None else semantic.raw_label),
@@ -1001,7 +1025,87 @@ def _process_webtoon(job: ProcessingJob,
     deps.ocr_webtoon(page)
 
     _report(progress_cb, "translating", "", 50)
-    deps.translate_webtoon(page, parallel=True, target_lang=job.target_lang)
+    deps.prepare_webtoon_translation(page)
+
+    page_id = _page_id(job)
+    semantic_detections = list(getattr(page, "semantic_detections", []))
+    semantic_by_id = {item.id: item for item in semantic_detections}
+    semantic_ids = _semantic_region_ids(page_id, semantic_detections)
+    planned_collisions: dict[str, int] = {}
+    planned_orders = _ReadingOrderAllocator(semantic_detections)
+    planned_represented: set[str] = set()
+    webtoon_region_plans: list[tuple[str, int, str, SemanticDetection | None]] = []
+    for region in page.regions:
+        bubble = region.bubble
+        semantic = semantic_by_id.get(getattr(bubble, "semantic_id", None))
+        is_first = semantic is not None and semantic.id not in planned_represented
+        if is_first:
+            planned_represented.add(semantic.id)
+        kind = semantic.kind if is_first else "bubble"
+        region_id = (semantic_ids[semantic.id] if is_first else
+                     _next_region_id(
+                         page_id, kind, BoundingBox.from_value(bubble.bbox),
+                         planned_collisions,
+                     ))
+        order = (planned_orders.semantic(semantic) if is_first else
+                 planned_orders.extra())
+        webtoon_region_plans.append((region_id, order, kind,
+                                     semantic if is_first else None))
+
+    sfx_plans: list[tuple[str, int, SemanticDetection | None]] = []
+    for detection in page.sfx_detections:
+        semantic = next((
+            item for item in semantic_detections
+            if item.kind == "sfx" and item.id not in planned_represented
+            and item.bbox.x1 <= (detection.bbox_rect[0] + detection.bbox_rect[2]) / 2 < item.bbox.x2
+            and item.bbox.y1 <= (detection.bbox_rect[1] + detection.bbox_rect[3]) / 2 < item.bbox.y2
+        ), None)
+        if semantic is not None:
+            planned_represented.add(semantic.id)
+        region_id = (semantic_ids[semantic.id] if semantic is not None else
+                     _next_region_id(
+                         page_id, "sfx", BoundingBox.from_value(detection.bbox_rect),
+                         planned_collisions,
+                     ))
+        order = (planned_orders.semantic(semantic) if semantic is not None else
+                 planned_orders.extra())
+        sfx_plans.append((region_id, order, semantic))
+
+    items = [
+        TranslationItem(plan[0], plan[1], plan[2], region.source_text)
+        for region, plan in zip(page.regions, webtoon_region_plans, strict=True)
+        if region.is_valid
+    ]
+    eligible_sfx = getattr(
+        page, "sfx_translation_eligible",
+        [True for _ in page.sfx_detections],
+    )
+    items.extend(
+        TranslationItem(plan[0], plan[1], "sfx", detection.text)
+        for detection, plan, eligible in zip(
+            page.sfx_detections, sfx_plans, eligible_sfx, strict=True,
+        )
+        if eligible
+    )
+    if items:
+        request = PageTranslationRequest(
+            source_language="ko",
+            target_language=job.target_lang,
+            items=tuple(sorted(items, key=lambda item: item.reading_order)),
+            style=WEBTOON_PAGE_STYLE,
+        )
+        translated = deps.translate_page(request).by_id()
+        expected_ids = {item.id for item in request.items}
+        if set(translated) != expected_ids:
+            raise RuntimeError("page translator returned incomplete IDs")
+        for region, plan in zip(page.regions, webtoon_region_plans, strict=True):
+            if region.is_valid:
+                region.english = translated[plan[0]]
+        for index, (plan, eligible) in enumerate(zip(
+            sfx_plans, eligible_sfx, strict=True,
+        )):
+            if eligible:
+                page.sfx_translations[index] = translated[plan[0]].upper()
 
     _report(progress_cb, "cleanup", "", 80)
     deps.cleanup_webtoon(page)
@@ -1011,7 +1115,6 @@ def _process_webtoon(job: ProcessingJob,
     bubble_count = sum(1 for r in page.regions if r.english)
 
     img_w, img_h = page.img_pil.width, page.img_pil.height
-    page_id = _page_id(job)
     collisions: dict[str, int] = {}
     revision = job.pipeline_revision
     detection_provenance = _provenance(
@@ -1026,18 +1129,12 @@ def _process_webtoon(job: ProcessingJob,
     render_provenance = _provenance(deps, job.pipeline, "render", revision)
     source_language = _language(deps, job.pipeline)
     regions: list[PageRegion] = []
-    semantic_detections = list(getattr(page, "semantic_detections", []))
-    semantic_by_id = {item.id: item for item in semantic_detections}
-    semantic_ids = _semantic_region_ids(page_id, semantic_detections)
     represented_semantic_ids: set[str] = set()
-    reading_orders = _ReadingOrderAllocator(semantic_detections)
 
     for idx, region in enumerate(page.regions):
         bubble = region.bubble
-        semantic = semantic_by_id.get(getattr(bubble, "semantic_id", None))
-        is_first_semantic_region = (
-            semantic is not None and semantic.id not in represented_semantic_ids
-        )
+        region_id, reading_order, kind, semantic = webtoon_region_plans[idx]
+        is_first_semantic_region = semantic is not None
         if is_first_semantic_region:
             represented_semantic_ids.add(semantic.id)
         transformed_obj = None
@@ -1046,11 +1143,10 @@ def _process_webtoon(job: ProcessingJob,
         regions.append(_build_region(
             page_id=page_id,
             collisions=collisions,
-            kind=(semantic.kind if is_first_semantic_region else "bubble"),
+            kind=kind,
             bbox=bubble.bbox,
-            reading_order=(reading_orders.semantic(semantic)
-                           if is_first_semantic_region else reading_orders.extra()),
-            ocr_text=bubble.combined_text,
+            reading_order=reading_order,
+            ocr_text=(region.source_text or bubble.combined_text),
             is_valid=bool(region.is_valid),
             detection_provenance=detection_provenance,
             ocr_provenance=ocr_provenance,
@@ -1062,8 +1158,7 @@ def _process_webtoon(job: ProcessingJob,
             transformed=transformed_obj,
             target_language=job.target_lang,
             cleanup_method=_cleanup_method(deps, job.pipeline, "bubble"),
-            region_id=(semantic_ids[semantic.id]
-                       if is_first_semantic_region else None),
+            region_id=region_id,
             detector_label=(semantic.raw_label
                             if is_first_semantic_region else None),
             polygon=(semantic.polygon if is_first_semantic_region else None),
@@ -1075,13 +1170,7 @@ def _process_webtoon(job: ProcessingJob,
 
     # Persist SFX as editable regions too.
     for idx, det in enumerate(page.sfx_detections):
-        semantic = next((
-            item for item in semantic_detections
-            if item.kind == "sfx"
-            and item.id not in represented_semantic_ids
-            and item.bbox.x1 <= (det.bbox_rect[0] + det.bbox_rect[2]) / 2 < item.bbox.x2
-            and item.bbox.y1 <= (det.bbox_rect[1] + det.bbox_rect[3]) / 2 < item.bbox.y2
-        ), None)
+        region_id, reading_order, semantic = sfx_plans[idx]
         if semantic is not None:
             represented_semantic_ids.add(semantic.id)
         regions.append(_build_region(
@@ -1089,8 +1178,7 @@ def _process_webtoon(job: ProcessingJob,
             collisions=collisions,
             kind="sfx",
             bbox=det.bbox_rect,
-            reading_order=(reading_orders.semantic(semantic)
-                           if semantic is not None else reading_orders.extra()),
+            reading_order=reading_order,
             ocr_text=det.text,
             is_valid=True,
             detection_provenance=detection_provenance,
@@ -1100,10 +1188,14 @@ def _process_webtoon(job: ProcessingJob,
             translation_provenance=translation_provenance,
             transform_provenance=transform_provenance,
             cleanup_provenance=cleanup_provenance,
-            transformed={"kind": "text", "value": ""},
-            target_language=job.target_lang,
+            transformed=(
+                {"kind": "text", "value": page.sfx_translations[idx]}
+                if page.sfx_translations[idx] else None
+            ),
+            target_language=(job.target_lang
+                             if page.sfx_translations[idx] else None),
             cleanup_method=_cleanup_method(deps, job.pipeline, "sfx"),
-            region_id=(None if semantic is None else semantic_ids[semantic.id]),
+            region_id=region_id,
             parent_id=(None if semantic is None or semantic.parent_id is None
                        else semantic_ids[semantic.parent_id]),
             detector_label=(None if semantic is None else semantic.raw_label),
