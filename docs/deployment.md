@@ -58,9 +58,21 @@ AUTH_TOKEN=... bin/deploy v2.0.0 rocm
 The command requires a clean worktree. It refuses an existing release tag if
 the new image digest differs, verifies both OCI revision labels locally and on
 the host, and writes the resulting JSON record under `release-manifests/`
-locally and beside the remote Compose project. Registry lookup uses
-`docker manifest inspect --insecure` because the homelab registry is HTTP, and
-selects exactly one Linux/amd64 manifest; ambiguous platform results fail.
+locally and beside the remote Compose project. Because the homelab registry is
+HTTP, the command opens a temporary local port for pushes. The host prohibits
+native OpenSSH TCP forwarding, so a bounded local proxy relays each registry
+connection through an authenticated SSH command to the registry address. It
+writes a mode-0600 Docker configuration containing only the forwarded alias and
+the existing `192.168.0.90:3007` credential. The proxy, its SSH children, and
+credential copy are removed by a trap on success, failure, or interruption; a
+port collision fails before building.
+
+Registry lookup uses `docker manifest inspect --insecure` and selects exactly
+one Linux/amd64 manifest; ambiguous platform results fail. Only the registry's
+exact `manifest unknown` response is treated as an unused release tag.
+Authentication, network, server, and malformed response failures stop before
+the release tag is pushed. Set `REGISTRY` explicitly only for a separately
+configured registry that the local Docker daemon can already reach.
 
 For a manual restart, copy the `deployed` references from that release manifest:
 

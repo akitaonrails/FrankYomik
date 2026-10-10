@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import subprocess
 from pathlib import Path
 
@@ -17,7 +18,13 @@ def _write_executable(path: Path, body: str) -> None:
 
 
 def _fake_tools(
-    tmp_path: Path, *, conflict: bool = False, existing_match: bool = False
+    tmp_path: Path,
+    *,
+    conflict: bool = False,
+    existing_match: bool = False,
+    build_failure: bool = False,
+    use_forward: bool = False,
+    lookup_failure: bool = False,
 ) -> tuple[dict[str, str], Path]:
     tools = tmp_path / "tools"
     tools.mkdir()
@@ -42,15 +49,23 @@ esac
         tools / "docker",
         f"""#!/bin/sh
 printf 'docker %s\\n' "$*" >> '{log}'
+if [ -n "${{CAPTURE_DOCKER_CONFIG:-}}" ] && [ -f "${{DOCKER_CONFIG:-}}/config.json" ]; then
+  cp "${{DOCKER_CONFIG}}/config.json" "${{CAPTURE_DOCKER_CONFIG}}"
+fi
 case "$*" in
+  build*)
+    if [ "${{FAKE_BUILD_FAILURE:-0}}" = 1 ]; then exit 42; fi
+    exit 0
+    ;;
   *\"manifest inspect --insecure --verbose\"*)
     ref="$5"
     case "$ref" in *worker*) digest='{WORKER_DIGEST}' ;; *) digest='{API_DIGEST}' ;; esac
     case "$ref" in
       *:v-test)
-        if [ "${{FAKE_CONFLICT:-0}}" = 1 ]; then digest='{CONFLICT_DIGEST}'
+        if [ "${{FAKE_LOOKUP_FAILURE:-0}}" = 1 ]; then echo 'registry unavailable' >&2; exit 1
+        elif [ "${{FAKE_CONFLICT:-0}}" = 1 ]; then digest='{CONFLICT_DIGEST}'
         elif [ "${{FAKE_EXISTING_MATCH:-0}}" = 1 ]; then :
-        elif [ ! -f '{state}.'"$digest" ]; then exit 1
+        elif [ ! -f '{state}.'"$digest" ]; then echo 'manifest unknown' >&2; exit 1
         fi
         ;;
     esac
@@ -72,6 +87,33 @@ esac
         tools / "ssh",
         f"""#!/bin/sh
 printf 'ssh %s\\n' "$*" >> '{log}'
+case "$*" in
+  *\" -O exit \"*)
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = -S ]; then control="$2"; shift 2; continue; fi
+      shift
+    done
+    if [ -f "$control.pid" ]; then kill "$(cat "$control.pid")" 2>/dev/null || true; fi
+    rm -f "$control" "$control.pid"
+    exit 0
+    ;;
+  *\" -f \"*\" -L \"*)
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -S) control="$2"; shift 2 ;;
+        -L) spec="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    port="${{spec#127.0.0.1:}}"; port="${{port%%:*}}"
+    python3 -c 'import socket,sys,time; s=socket.socket(); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(); time.sleep(60)' "$port" &
+    pid=$!
+    sleep 0.05
+    kill -0 "$pid" 2>/dev/null || exit 1
+    touch "$control"; printf '%s\\n' "$pid" > "$control.pid"
+    exit 0
+    ;;
+esac
 cat >/dev/null || true
 """,
     )
@@ -85,8 +127,22 @@ cat >/dev/null || true
             "REMOTE_REGISTRY": "registry.remote/project",
             "FAKE_CONFLICT": "1" if conflict else "0",
             "FAKE_EXISTING_MATCH": "1" if existing_match else "0",
+            "FAKE_BUILD_FAILURE": "1" if build_failure else "0",
+            "FAKE_LOOKUP_FAILURE": "1" if lookup_failure else "0",
         }
     )
+    if use_forward:
+        env.pop("REGISTRY", None)
+        source_config = tmp_path / "source-docker-config"
+        source_config.mkdir()
+        (source_config / "config.json").write_text(
+            json.dumps({"auths": {"192.168.0.90:3007": {"auth": "test"}}})
+        )
+        env["DOCKER_CONFIG"] = str(source_config)
+        env["CAPTURE_DOCKER_CONFIG"] = str(tmp_path / "forwarded-config.json")
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            env["LOCAL_REGISTRY_PORT"] = str(probe.getsockname()[1])
     return env, log
 
 
@@ -163,3 +219,83 @@ def test_deploy_rejects_moving_latest_tag_before_build(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "moving tag 'latest'" in result.stderr
     assert not log.exists()
+
+
+def test_deploy_stops_immediately_when_build_fails(tmp_path: Path) -> None:
+    env, log = _fake_tools(tmp_path, build_failure=True)
+    result = subprocess.run(
+        [str(ROOT / "bin/deploy"), "v-test", "rocm"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    calls = log.read_text()
+    assert "docker build " in calls
+    assert "docker image inspect" not in calls
+    assert "docker push" not in calls
+    assert "ssh " not in calls
+
+
+def test_deploy_uses_and_cleans_up_temporary_registry_forward(tmp_path: Path) -> None:
+    env, log = _fake_tools(tmp_path, use_forward=True)
+    port = int(env["LOCAL_REGISTRY_PORT"])
+    result = subprocess.run(
+        [str(ROOT / "bin/deploy"), "v-test", "rocm"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text()
+    assert f"localhost:{port}/akitaonrails/frank-yomik-api" in calls
+    assert "Opening temporary SSH forward" in result.stdout
+    assert json.loads((tmp_path / "forwarded-config.json").read_text()) == {
+        "auths": {f"localhost:{port}": {"auth": "test"}}
+    }
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", port))
+
+
+def test_deploy_stops_if_registry_forward_port_collides(tmp_path: Path) -> None:
+    env, log = _fake_tools(tmp_path, use_forward=True)
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", int(env["LOCAL_REGISTRY_PORT"])))
+        occupied.listen()
+        result = subprocess.run(
+            [str(ROOT / "bin/deploy"), "v-test", "rocm"],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert result.returncode != 0
+    assert "Registry SSH forward failed" in result.stderr
+    assert "docker build" not in log.read_text()
+
+
+def test_deploy_fails_closed_on_transient_release_tag_lookup(tmp_path: Path) -> None:
+    env, log = _fake_tools(tmp_path, lookup_failure=True)
+    result = subprocess.run(
+        [str(ROOT / "bin/deploy"), "v-test", "rocm"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Registry manifest lookup failed" in result.stderr
+    calls = log.read_text()
+    assert "docker tag" not in calls
+    assert "docker push registry.test/project/frank-yomik-api:v-test" not in calls
+    assert "ssh " not in calls

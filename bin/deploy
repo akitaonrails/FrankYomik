@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+shopt -s inherit_errexit
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SERVER="${SERVER:-192.168.0.90}"
 SSH_USER="${SSH_USER:-akitaonrails}"
 REMOTE_DIR="${REMOTE_DIR:-/var/opt/docker/frank/yomik}"
-REGISTRY="${REGISTRY:-192.168.0.90:3007/akitaonrails}"
 REMOTE_REGISTRY="${REMOTE_REGISTRY:-localhost:3007/akitaonrails}"
+SOURCE_DOCKER_CONFIG="${DOCKER_CONFIG:-${HOME}/.docker}"
 TAG="${1:?Usage: bin/deploy <release-tag> [rocm]}"
 VARIANT="${2:-rocm}"
 
@@ -36,9 +37,189 @@ ssh_cmd() {
   ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SERVER}" "$@"
 }
 
+REGISTRY_FORWARD_DIR=""
+REGISTRY_FORWARD_PID=""
+REGISTRY_FORWARD_LOG=""
+cleanup_registry_forward() {
+  if [[ -n "${REGISTRY_FORWARD_PID}" ]]; then
+    kill "${REGISTRY_FORWARD_PID}" 2>/dev/null || true
+    wait "${REGISTRY_FORWARD_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${REGISTRY_FORWARD_DIR}" ]]; then
+    rm -rf "${REGISTRY_FORWARD_DIR}"
+  fi
+}
+trap cleanup_registry_forward EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+start_registry_forward() {
+  local port relay_code remote_command attempt
+  port="${LOCAL_REGISTRY_PORT:-}"
+  if [[ -z "${port}" ]]; then
+    port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+  fi
+  [[ "${port}" =~ ^[0-9]+$ && "${port}" -ge 1024 && "${port}" -le 65535 ]] || {
+    echo "LOCAL_REGISTRY_PORT must be an unprivileged TCP port." >&2
+    return 1
+  }
+  REGISTRY_FORWARD_DIR="$(mktemp -d)"
+  REGISTRY_FORWARD_LOG="${REGISTRY_FORWARD_DIR}/forward.log"
+  cat >"${REGISTRY_FORWARD_DIR}/forward.py" <<'PY'
+import os
+import select
+import signal
+import socketserver
+import subprocess
+import sys
+import threading
+
+children: set[subprocess.Popen[bytes]] = set()
+children_lock = threading.Lock()
+command = sys.argv[3:]
+
+class Handler(socketserver.BaseRequestHandler):
+    def handle(self) -> None:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        assert process.stdin is not None and process.stdout is not None
+        with children_lock:
+            children.add(process)
+        try:
+            while True:
+                readable, _, _ = select.select((self.request, process.stdout), (), ())
+                if self.request in readable:
+                    data = self.request.recv(65536)
+                    if not data:
+                        return
+                    process.stdin.write(data)
+                if process.stdout in readable:
+                    data = os.read(process.stdout.fileno(), 65536)
+                    if not data:
+                        return
+                    self.request.sendall(data)
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+            with children_lock:
+                children.discard(process)
+
+class Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address = False
+    daemon_threads = True
+
+server = Server(("127.0.0.1", int(sys.argv[1])), Handler)
+with open(sys.argv[2], "x", encoding="utf-8"):
+    pass
+
+def stop(_signum: int, _frame: object) -> None:
+    with children_lock:
+        active = tuple(children)
+    for process in active:
+        process.terminate()
+    server.server_close()
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+server.serve_forever()
+PY
+  relay_code="$(python3 -c '
+import base64
+code = r"""
+import os
+import select
+import socket
+import sys
+
+with socket.create_connection((sys.argv[1], int(sys.argv[2]))) as peer:
+    inputs = [0, peer]
+    while inputs:
+        readable, _, _ = select.select(inputs, (), ())
+        if 0 in readable:
+            data = os.read(0, 65536)
+            if data:
+                peer.sendall(data)
+            else:
+                peer.shutdown(socket.SHUT_WR)
+                inputs.remove(0)
+        if peer in readable:
+            data = peer.recv(65536)
+            if not data:
+                break
+            os.write(1, data)
+"""
+print(base64.b64encode(code.encode()).decode())
+')" || return 1
+  relay_code="${relay_code//$'\n'/}"
+  remote_command="python3 -c 'import base64; exec(base64.b64decode(\"${relay_code}\"))' '${SERVER}' 3007"
+  python3 "${REGISTRY_FORWARD_DIR}/forward.py" "${port}" \
+    "${REGISTRY_FORWARD_DIR}/ready" \
+    ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SERVER}" "${remote_command}" \
+    >"${REGISTRY_FORWARD_LOG}" 2>&1 &
+  REGISTRY_FORWARD_PID=$!
+  for attempt in {1..50}; do
+    if ! kill -0 "${REGISTRY_FORWARD_PID}" 2>/dev/null; then
+      cat "${REGISTRY_FORWARD_LOG}" >&2
+      echo "Registry SSH forward failed to start on port ${port}." >&2
+      return 1
+    fi
+    if [[ -f "${REGISTRY_FORWARD_DIR}/ready" ]]; then
+      REGISTRY="localhost:${port}/akitaonrails"
+      mkdir -m 700 "${REGISTRY_FORWARD_DIR}/docker-config"
+      python3 - "${SOURCE_DOCKER_CONFIG}/config.json" \
+        "${SERVER}:3007" "localhost:${port}" \
+        "${REGISTRY_FORWARD_DIR}/docker-config/config.json" <<'PY'
+import json
+import os
+import sys
+
+source, source_registry, forwarded_registry, destination = sys.argv[1:]
+try:
+    with open(source, encoding="utf-8") as handle:
+        config = json.load(handle)
+    source_auth = config.get("auths", {}).get(source_registry)
+    if source_auth is None:
+        raise KeyError(source_registry)
+    forwarded_config = {"auths": {forwarded_registry: source_auth}}
+    with open(destination, "w", encoding="utf-8") as handle:
+        json.dump(forwarded_config, handle)
+    os.chmod(destination, 0o600)
+except (OSError, ValueError, KeyError) as exc:
+    raise SystemExit(
+        f"Docker credentials for {source_registry} are required: {exc}"
+    ) from exc
+PY
+      DOCKER_CONFIG="${REGISTRY_FORWARD_DIR}/docker-config"
+      export REGISTRY DOCKER_CONFIG
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for registry SSH forward on port ${port}." >&2
+  return 1
+}
+
 resolve_digest() {
-  local manifest
-  manifest="$(docker manifest inspect --insecure --verbose "$1" 2>/dev/null)" || return 1
+  local manifest error_file error_message status
+  error_file="$(mktemp)" || return 1
+  if manifest="$(docker manifest inspect --insecure --verbose "$1" 2>"${error_file}")"; then
+    :
+  else
+    status=$?
+    error_message="$(<"${error_file}")"
+    rm -f "${error_file}"
+    if [[ "${status}" -eq 1 && "${error_message}" == "manifest unknown" ]]; then
+      return 44
+    fi
+    echo "Registry manifest lookup failed for $1: ${error_message:-exit ${status}}" >&2
+    return "${status}"
+  fi
+  rm -f "${error_file}"
   printf '%s' "${manifest}" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
@@ -52,7 +233,10 @@ matches = [
 if len(matches) != 1:
     raise SystemExit("registry reference must resolve to exactly one linux/amd64 manifest")
 print(matches[0])
-'
+' || {
+    echo "Registry returned a malformed or ambiguous manifest for $1." >&2
+    return 1
+  }
 }
 
 inspect_local_label() {
@@ -65,8 +249,8 @@ inspect_local_label() {
 verify_local_labels() {
   local reference="$1"
   local actual_source actual_pipeline
-  actual_source="$(inspect_local_label "${reference}" org.opencontainers.image.revision)"
-  actual_pipeline="$(inspect_local_label "${reference}" io.frank-yomik.pipeline-revision)"
+  actual_source="$(inspect_local_label "${reference}" org.opencontainers.image.revision)" || return 1
+  actual_pipeline="$(inspect_local_label "${reference}" io.frank-yomik.pipeline-revision)" || return 1
   [[ "${actual_source}" == "${SOURCE_REVISION}" ]] || {
     echo "Source revision label mismatch for ${reference}: ${actual_source}" >&2
     return 1
@@ -84,31 +268,40 @@ publish_image() {
   local release_ref="${image}:${TAG}"
   local candidate_tag="candidate-${SOURCE_REVISION:0:12}-${BASHPID}-$RANDOM"
   local candidate_ref="${image}:${candidate_tag}"
-  local candidate_digest existing_digest release_digest
+  local candidate_digest existing_digest release_digest status
 
   docker build -f "${dockerfile}" \
     --build-arg "SOURCE_REVISION=${SOURCE_REVISION}" \
     --build-arg "PIPELINE_REVISION=${PIPELINE_REVISION}" \
     --build-arg "RELEASE_VERSION=${TAG}" \
-    -t "${candidate_ref}" . >&2
-  verify_local_labels "${candidate_ref}"
-  docker push "${candidate_ref}" >&2
-  candidate_digest="$(resolve_digest "${candidate_ref}")"
+    -t "${candidate_ref}" . >&2 || return 1
+  verify_local_labels "${candidate_ref}" || return 1
+  docker push "${candidate_ref}" >&2 || return 1
+  candidate_digest="$(resolve_digest "${candidate_ref}")" || return 1
   [[ "${candidate_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
     echo "Registry returned an invalid digest for ${candidate_ref}" >&2
     return 1
   }
-  existing_digest="$(resolve_digest "${release_ref}" || true)"
+  if existing_digest="$(resolve_digest "${release_ref}")"; then
+    :
+  else
+    status=$?
+    if [[ "${status}" -eq 44 ]]; then
+      existing_digest=""
+    else
+      return "${status}"
+    fi
+  fi
   if [[ -n "${existing_digest}" && "${existing_digest}" != "${candidate_digest}" ]]; then
     echo "Refusing to overwrite ${release_ref}: existing ${existing_digest}, candidate ${candidate_digest}" >&2
     return 1
   fi
   if [[ -z "${existing_digest}" ]]; then
-    docker tag "${candidate_ref}" "${release_ref}"
-    docker push "${release_ref}" >&2
+    docker tag "${candidate_ref}" "${release_ref}" || return 1
+    docker push "${release_ref}" >&2 || return 1
   fi
 
-  release_digest="$(resolve_digest "${release_ref}")"
+  release_digest="$(resolve_digest "${release_ref}")" || return 1
   [[ "${release_digest}" == "${candidate_digest}" ]] || {
     echo "Release tag verification failed for ${release_ref}" >&2
     return 1
@@ -127,16 +320,21 @@ if [[ ! -x "${REVISION_PYTHON}" ]]; then
   REVISION_PYTHON="python3"
 fi
 PIPELINE_REVISION="$(PYTHONPATH="${ROOT}/server" "${REVISION_PYTHON}" -c \
-  'from pipeline.revision import get_pipeline_revision; print(get_pipeline_revision())')"
+  'from pipeline.revision import get_pipeline_revision; print(get_pipeline_revision())')" || exit 1
 [[ "${PIPELINE_REVISION}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
   echo "Could not derive a valid pipeline revision." >&2
   exit 1
 }
 
+if [[ -z "${REGISTRY:-}" ]]; then
+  echo "==> Opening temporary SSH forward to the homelab registry"
+  start_registry_forward
+fi
+
 echo "==> Building and publishing API image"
-API_DIGEST="$(publish_image Dockerfile.api frank-yomik-api)"
+API_DIGEST="$(publish_image Dockerfile.api frank-yomik-api)" || exit 1
 echo "==> Building and publishing ROCm worker image"
-WORKER_DIGEST="$(publish_image Dockerfile.worker-rocm frank-yomik-worker-rocm)"
+WORKER_DIGEST="$(publish_image Dockerfile.worker-rocm frank-yomik-worker-rocm)" || exit 1
 
 API_PUSH_REF="${REGISTRY}/frank-yomik-api@${API_DIGEST}"
 WORKER_PUSH_REF="${REGISTRY}/frank-yomik-worker-rocm@${WORKER_DIGEST}"
