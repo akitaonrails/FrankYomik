@@ -211,7 +211,7 @@
     },
     "webtoon_pipeline": {
       "path": "webtoon/processor.py",
-      "sha256": "19fb16fe832f9c6852d37d5b8c489e155a1207605e7e864f47647aa89b7a65bd"
+      "sha256": "678b98dfd96f40593d1e7868e4bc5a1e03676295b6f987f0ad228f8066275990"
     },
     "webtoon_translator": {
       "path": "webtoon/translator.py",
@@ -507,7 +507,7 @@
       "backend": "rtdetr-v2",
       "implementation": {
         "id": "webtoon.processor",
-        "revision": "sha256:8d9b2f747c0283c0ed5c24c8a648ccb0acd79f9cfd07296d107cc262e03d4ba0",
+        "revision": "sha256:66ffc736c42aacc4578aee584c41520d8c35a8192b82d17b43d3f0dd0a738848",
         "component_artifacts": [
           "manga_detector",
           "webtoon_pipeline",
@@ -554,7 +554,7 @@
       "backend": "ollama-chat",
       "implementation": {
         "id": "page-translation-v1",
-        "revision": "sha256:e54d9b3c50a3e3693fd8a8675338a4118de108145becfc1bab24efe62af236c2",
+        "revision": "sha256:c96710f7c7955da713b7b9f468be8906169ad382764bf5b2c7885b44629cdfa3",
         "component_artifacts": [
           "manga_translator",
           "webtoon_translator",
@@ -594,7 +594,7 @@
       "backend": "webtoon-inpainter",
       "implementation": {
         "id": "pipeline.cleanup+webtoon.inpainter",
-        "revision": "sha256:25d5513c52bb421999736ebbf298c4e7cdb74ff040f7134c354c7ac2cb94eff9",
+        "revision": "sha256:123ce7b1a254757622ebf52e8f5781b9cff34f444a99164473797fd5226d2076",
         "component_artifacts": [
           "config",
           "python_pipeline_artifacts",
@@ -652,7 +652,7 @@
       "backend": "webtoon-renderer",
       "implementation": {
         "id": "webtoon.processor",
-        "revision": "sha256:d5d8c6bf4d7afa003689ae4a03fe8f1b6cf28f42a751e3b82e27436e2e6bf560",
+        "revision": "sha256:a6eefd7b35dd05211bb5a305b6cdc9f0e8ff4e1d9ac142fda29c69883d7eabff",
         "component_artifacts": [
           "config",
           "dialogue_font",

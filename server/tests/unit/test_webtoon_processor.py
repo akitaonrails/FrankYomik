@@ -46,10 +46,30 @@ from webtoon.processor import (
     _wrap_text,
     cleanup_page,
     detect_bubbles_rtdetr,
+    document_render_geometry,
     ocr_detected_regions,
     render_cleaned_page_to_bytes,
     validate_and_translate,
 )
+
+
+def test_document_geometry_drops_ocr_boxes_outside_the_bubble():
+    inside = _make_det(20, 20, 40, 35)
+    outside = _make_det(60, 20, 80, 35)
+    bubble = _make_bubble([inside, outside], bbox=(10, 10, 50, 50))
+    region = WebtoonTextRegion(
+        bubble=bubble, group_detections=[inside, outside],
+    )
+    page = WebtoonPageResult(
+        image_path="", name="geometry",
+        img_pil=Image.new("RGB", (100, 100), "white"),
+    )
+
+    render_bbox, source_boxes = document_render_geometry(page, region)
+
+    assert render_bbox[2] > render_bbox[0]
+    assert render_bbox[3] > render_bbox[1]
+    assert source_boxes == ((20, 20, 40, 35),)
 
 
 def test_enabled_cleanup_degrades_to_safe_solid_fill():

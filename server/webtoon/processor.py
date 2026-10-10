@@ -1347,9 +1347,15 @@ def document_render_geometry(
     bx1, by1, bx2, by2 = region.bubble.bbox
     x1, y1, x2, y2 = render_bbox
     contained = (max(bx1, x1), max(by1, y1), min(bx2, x2), min(by2, y2))
-    source_boxes = tuple(
+    if contained[2] <= contained[0] or contained[3] <= contained[1]:
+        contained = region.bubble.bbox
+    clipped_source_boxes = (
         (max(bx1, sx1), max(by1, sy1), min(bx2, sx2), min(by2, sy2))
         for sx1, sy1, sx2, sy2 in (item.bbox_rect for item in detections)
+    )
+    source_boxes = tuple(
+        box for box in clipped_source_boxes
+        if box[2] > box[0] and box[3] > box[1]
     )
     return contained, source_boxes
 

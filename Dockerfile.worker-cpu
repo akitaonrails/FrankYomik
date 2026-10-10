@@ -17,13 +17,6 @@ FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3
 
 ARG APP_UID=1026
 ARG APP_GID=1026
-ARG SOURCE_REVISION
-ARG PIPELINE_REVISION
-ARG RELEASE_VERSION
-LABEL org.opencontainers.image.source="https://github.com/akitaonrails/FrankYomik" \
-      org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      org.opencontainers.image.version="${RELEASE_VERSION}" \
-      io.frank-yomik.pipeline-revision="${PIPELINE_REVISION}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 gosu util-linux \
@@ -31,6 +24,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Release identity changes on every build. Keep it after the expensive,
+# content-pinned dependency layers so a new source revision can reuse them.
+ARG SOURCE_REVISION
+ARG PIPELINE_REVISION
+ARG RELEASE_VERSION
+LABEL org.opencontainers.image.source="https://github.com/akitaonrails/FrankYomik" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      io.frank-yomik.pipeline-revision="${PIPELINE_REVISION}"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 

@@ -11,13 +11,6 @@ FROM rocm/pytorch:rocm7.2.1_ubuntu24.04_py3.12_pytorch_release_2.9.1@sha256:96a2
 
 ARG APP_UID=1026
 ARG APP_GID=1026
-ARG SOURCE_REVISION
-ARG PIPELINE_REVISION
-ARG RELEASE_VERSION
-LABEL org.opencontainers.image.source="https://github.com/akitaonrails/FrankYomik" \
-      org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      org.opencontainers.image.version="${RELEASE_VERSION}" \
-      io.frank-yomik.pipeline-revision="${PIPELINE_REVISION}"
 
 # Security: upgrade kernel headers baked into the ROCm base (fixes
 # linux-libc-dev CVEs incl. CVE-2026-53215) and purge the stale ABI
@@ -49,6 +42,16 @@ RUN pip install --no-cache-dir pip==25.3 && \
         'simple-lama-inpainting 0.1.0 requires opencv-python, which is not installed.' \
         > /tmp/unexpected-pip-check || true; } && \
     test ! -s /tmp/unexpected-pip-check
+
+# Release identity changes on every build. Keep it after the expensive,
+# content-pinned dependency layers so a new source revision can reuse them.
+ARG SOURCE_REVISION
+ARG PIPELINE_REVISION
+ARG RELEASE_VERSION
+LABEL org.opencontainers.image.source="https://github.com/akitaonrails/FrankYomik" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      io.frank-yomik.pipeline-revision="${PIPELINE_REVISION}"
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
