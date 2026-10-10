@@ -32,10 +32,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 COPY server/requirements.txt server/requirements.worker.lock ./
 
-# Base image has torch pre-installed with ROCm support.
-# Install torchvision from ROCm index, then our deps (skipping torch).
+# The digest-pinned base supplies its matching ROCm builds of torch and
+# torchvision. Verify that ABI pair before installing our remaining deps.
 RUN pip install --no-cache-dir pip==25.3 && \
-    pip install --no-cache-dir torchvision==0.24.1 --index-url https://download.pytorch.org/whl/rocm7.2 && \
+    python -c 'import torch, torchvision; assert torch.__version__ == "2.9.1+rocm7.2.1.gitff65f5bc"; assert torchvision.__version__ == "0.24.0+rocm7.2.1.gitb919bd0c"' && \
     grep -v '^simple-lama' requirements.txt | \
         grep -vi '^torch' | \
         pip install --no-cache-dir -c requirements.worker.lock -r /dev/stdin && \
