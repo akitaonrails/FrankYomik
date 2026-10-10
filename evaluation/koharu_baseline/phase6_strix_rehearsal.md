@@ -5,18 +5,24 @@ workers on the Strix Halo host. Private page inputs, titles, tokens, source
 hashes, and response payloads remain only in the protected homelab evidence
 directory.
 
-## Candidate identity
+## Accepted candidate identity
 
-- Candidate: `v2.0.0-rc.11`
-- Pipeline revision: `sha256:2f4fee363797d26338e69fdba4b1cf2facac7201dbe69e9dd3183b5049d3849a`
-- API image digest: `sha256:c8a57a394c8f98943a2081605247ab6c14b8315d8823f14558a96a75dd4b7161`
-- ROCm worker image digest: `sha256:39ab3339ed1438165cd1dc7415306cd455040e7e4665c57b3777d606d9cd8e0b`
-- Evidence inventory: 38 files, 11,175,001 bytes; name-and-size inventory SHA-256 `432c78c91f3e81f35a55d55aa5269c2774c4d35aed746372adbee49d91c1b82a`
+- Candidate: `v2.0.0-rc.12`, commit `6f799a1b8b48`
+- Pipeline revision: `sha256:ccca09e65f58280fb20db34634af92b43610196242787f8c903347dd787a6e89`
+- API image digest: `sha256:02535d60bd04af7b952333b0e3385708e0ce35a3c8ec25c2bc50a34ffc7cd3a4`
+- ROCm worker image digest: `sha256:6cba4a0a35f14b2dfb737072cbeccf910ad1b2f0b3ae969cb4dae5ba41e2cb3d`
+- Evidence inventory: 40 files, 11,170,926 bytes; name-and-size inventory SHA-256 `fbc8432ef44924bf11256c2c1f43bda3e9430911d0e66a79eaeb6a5b090e27be`
 
 The inventory checksum proves which private evidence set was reviewed without
 publishing page-derived hashes or content.
 
-## Pipeline results
+RC.11 supplied the detailed timings and operational fault injection below. Its
+release scan then found fixed high-severity findings in the Go, Ubuntu, Pillow,
+and Transformers layers. RC.12 contains those updates. The complete local suite
+and all four live pipelines were repeated on RC.12, and both GPU workers became
+ready at its exact revised pipeline fingerprint.
+
+## Detailed RC.11 pipeline results
 
 | Pipeline | Cold result | Regions | Cache check |
 |---|---:|---:|---|
