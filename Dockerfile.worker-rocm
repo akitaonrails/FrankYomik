@@ -33,13 +33,22 @@ WORKDIR /build
 COPY server/requirements.txt server/requirements.worker.lock ./
 
 # The digest-pinned base supplies its matching ROCm builds of torch and
-# torchvision. Verify that ABI pair before installing our remaining deps.
+# torchvision. The universal lock also describes the CUDA packages selected by
+# PyPI's torch wheel, so exclude that stack and constrain the resolver to the
+# ABI pair already supplied by the base.
 RUN pip install --no-cache-dir pip==25.3 && \
     python -c 'import torch, torchvision; assert torch.__version__ == "2.9.1+rocm7.2.1.gitff65f5bc"; assert torchvision.__version__ == "0.24.0+rocm7.2.1.gitb919bd0c"' && \
+    grep -Ev '^(cuda-|nvidia-|triton==)' requirements.worker.lock > /tmp/requirements.worker-rocm.lock && \
+    printf '\ntorch==2.9.1\ntorchvision==0.24.0\n' >> /tmp/requirements.worker-rocm.lock && \
     grep -v '^simple-lama' requirements.txt | \
         grep -vi '^torch' | \
-        pip install --no-cache-dir -c requirements.worker.lock -r /dev/stdin && \
-    pip install --no-cache-dir --no-deps "$(grep '^simple-lama' requirements.txt)"
+        pip install --no-cache-dir -c /tmp/requirements.worker-rocm.lock -r /dev/stdin && \
+    pip install --no-cache-dir --no-deps "$(grep '^simple-lama' requirements.txt)" && \
+    python -c 'import torch, torchvision; assert torch.__version__ == "2.9.1+rocm7.2.1.gitff65f5bc"; assert torchvision.__version__ == "0.24.0+rocm7.2.1.gitb919bd0c"' && \
+    { pip check 2>&1 | grep -Fvx \
+        'simple-lama-inpainting 0.1.0 requires opencv-python, which is not installed.' \
+        > /tmp/unexpected-pip-check || true; } && \
+    test ! -s /tmp/unexpected-pip-check
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
