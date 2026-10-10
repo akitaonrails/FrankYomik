@@ -787,7 +787,12 @@ func completionNotification(jobID string, meta map[string]any) WSNotification {
 	notif.ContentHash = stringField(meta, "content_hash")
 	notif.RenderHash = stringField(meta, "render_hash")
 	notif.PipelineRevision = stringField(meta, "pipeline_revision")
-	if pipeline := stringField(meta, "pipeline"); pipeline != "" && notif.SourceHash != "" {
+	notif.CachePipeline = stringField(meta, "cache_pipeline")
+	pipeline := notif.CachePipeline
+	if pipeline == "" {
+		pipeline = stringField(meta, "pipeline")
+	}
+	if pipeline != "" && notif.SourceHash != "" {
 		notif.MetaURL = fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", pipeline, notif.SourceHash)
 	}
 	return notif

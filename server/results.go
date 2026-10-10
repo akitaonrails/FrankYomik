@@ -82,8 +82,12 @@ func (r *Results) GetJobStatus(ctx context.Context, jobID string) (*JobStatusRes
 
 	if resp.Status == "completed" {
 		resp.ImageURL = fmt.Sprintf("/api/v1/jobs/%s/image", jobID)
-		if resp.MetaURL == "" && resp.Pipeline != "" && resp.SourceHash != "" {
-			resp.MetaURL = fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", resp.Pipeline, resp.SourceHash)
+		cachePipeline := resp.CachePipeline
+		if cachePipeline == "" {
+			cachePipeline = resp.Pipeline
+		}
+		if resp.MetaURL == "" && cachePipeline != "" && resp.SourceHash != "" {
+			resp.MetaURL = fmt.Sprintf("/api/v1/cache/by-hash/%s/%s/meta", cachePipeline, resp.SourceHash)
 		}
 	}
 

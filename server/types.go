@@ -19,6 +19,7 @@ type JobStatusResponse struct {
 	JobID            string `json:"job_id"`
 	Status           string `json:"status"`
 	Pipeline         string `json:"pipeline,omitempty"`
+	CachePipeline    string `json:"cache_pipeline,omitempty"`
 	Error            string `json:"error,omitempty"`
 	ProcessingTimeMs int    `json:"processing_time_ms,omitempty"`
 	BubbleCount      int    `json:"bubble_count,omitempty"`
@@ -80,7 +81,8 @@ type WSNotification struct {
 	PipelineRevision string `json:"pipeline_revision,omitempty"`
 	// PageKind mirrors JobStatusResponse.PageKind: a client that listens
 	// rather than polls needs the same facts.
-	PageKind string `json:"page_kind,omitempty"`
+	PageKind      string `json:"page_kind,omitempty"`
+	CachePipeline string `json:"cache_pipeline,omitempty"`
 }
 
 // Valid pipeline values.

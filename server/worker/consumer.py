@@ -522,6 +522,7 @@ class Consumer:
             "processing_time_ms": result.processing_time_ms,
             "bubble_count": result.bubble_count,
             "pipeline": result.pipeline,
+            "cache_pipeline": cache_pipeline or result.pipeline,
             "source_hash": result.source_hash,
             "content_hash": result.content_hash,
             "render_hash": result.render_hash,

@@ -567,6 +567,19 @@ class TestStoreResult:
         assert img_call[0][1] == b"png-data"
         assert img_call[1]["ex"] == RESULT_TTL
 
+    def test_stores_language_scoped_cache_pipeline(self):
+        c = _make_consumer()
+        result = ProcessingResult(
+            job_id="translated-1", status="completed",
+            pipeline="manga_translate",
+        )
+
+        c._store_result(result, cache_pipeline="manga_translate_pt-br")
+
+        meta_json = json.loads(c._rdb.set.call_args_list[0][0][1])
+        assert meta_json["pipeline"] == "manga_translate"
+        assert meta_json["cache_pipeline"] == "manga_translate_pt-br"
+
     def test_skips_image_when_none(self):
         c = _make_consumer()
         result = ProcessingResult(

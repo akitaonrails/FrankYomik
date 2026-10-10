@@ -13,6 +13,7 @@ func completedMeta() map[string]any {
 		"job_id":             "job-1",
 		"status":             "completed",
 		"pipeline":           "manga_furigana",
+		"cache_pipeline":     "manga_furigana_pt-br",
 		"source_hash":        "abc123",
 		"content_hash":       "def456",
 		"render_hash":        "789xyz",
@@ -49,6 +50,7 @@ func TestBothDeliveryPathsCarryTheSameFacts(t *testing.T) {
 		{"content_hash", notif.ContentHash, polled.ContentHash},
 		{"render_hash", notif.RenderHash, polled.RenderHash},
 		{"status", notif.Status, polled.Status},
+		{"cache_pipeline", notif.CachePipeline, polled.CachePipeline},
 	} {
 		if field.pushed != field.polled {
 			t.Errorf("%s differs between paths: pushed %q, polled %q",
@@ -63,7 +65,7 @@ func TestBothDeliveryPathsCarryTheSameFacts(t *testing.T) {
 // The two responses are separate structs, so a field added to one is silently
 // absent from the other. This names the fields that must exist in both.
 func TestNotificationDeclaresEveryResultField(t *testing.T) {
-	shared := []string{"source_hash", "content_hash", "render_hash", "page_kind", "status"}
+	shared := []string{"source_hash", "content_hash", "render_hash", "page_kind", "status", "cache_pipeline"}
 
 	notif := jsonTags(reflect.TypeOf(WSNotification{}))
 	status := jsonTags(reflect.TypeOf(JobStatusResponse{}))

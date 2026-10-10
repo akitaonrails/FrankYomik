@@ -159,7 +159,7 @@
     },
     "python_worker_consumer": {
       "path": "worker/consumer.py",
-      "sha256": "47ed4e4ea4c1278432a5c29978e12205409c9a0bb03dffb002cfdd91646c4b99"
+      "sha256": "3c4ea0860399da227b7c1c392c7d9770048c6be782b3e443c5216615417dda2d"
     },
     "python_worker_health": {
       "path": "worker/health.py",
@@ -249,7 +249,7 @@
       "backend": "manga-ocr",
       "implementation": {
         "id": "pipeline.japanese-ocr-router",
-        "revision": "sha256:74c40fefdf6504f6b391310a4512604da871f4c5c6c968400b30ecc3693dc32f",
+        "revision": "sha256:1327cb723e8adfd6a75bc9e489d27aec21b08b5e389cff0395c838975e0ebb94",
         "component_artifacts": [
           "config",
           "manga_ocr",

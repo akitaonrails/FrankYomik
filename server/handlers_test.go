@@ -735,6 +735,33 @@ func TestGetJobStatusCompleted(t *testing.T) {
 	}
 }
 
+func TestGetJobStatusUsesLanguageScopedCachePipeline(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	meta := map[string]interface{}{
+		"status":         "completed",
+		"pipeline":       "manga_translate",
+		"cache_pipeline": "manga_translate_pt-br",
+		"source_hash":    strings.Repeat("a", 64),
+	}
+	metaJSON, _ := json.Marshal(meta)
+	rdb.Set(context.Background(), "frank:results:translated-1", metaJSON, time.Hour)
+
+	req := httptest.NewRequest("GET", "/api/v1/jobs/translated-1", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	var resp JobStatusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.MetaURL, "/manga_translate_pt-br/") {
+		t.Fatalf("metadata URL is not language scoped: %q", resp.MetaURL)
+	}
+}
+
 func TestGetJobStatusFailed(t *testing.T) {
 	srv, rdb := newTestServer(t)
 	mux := http.NewServeMux()
