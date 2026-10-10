@@ -1,6 +1,6 @@
 # v2.0.0 security audit
 
-Audit date: 2026-10-10  
+Audit date: 2026-10-10
 Scope: commits after `v1.0.1`, the final v2 tree, production deployment files,
 container build inputs, GitHub workflows, model acquisition, HTTP/WebSocket
 entry points, Redis queueing, cache persistence, and release operations.

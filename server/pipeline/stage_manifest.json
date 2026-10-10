@@ -35,7 +35,7 @@
     },
     "hayai_model": {
       "path": "kindle/hayai_model.py",
-      "sha256": "37ea490b17b57e65ac34960deea3b28d739c9243723384013a1aba497a5a1415"
+      "sha256": "7b7e003780e8d8d3b7457f899ae705d7171a57ba6b87c39277647ac5d9086fbc"
     },
     "hayai_ocr": {
       "path": "kindle/hayai_ocr.py",
@@ -249,7 +249,7 @@
       "backend": "manga-ocr",
       "implementation": {
         "id": "pipeline.japanese-ocr-router",
-        "revision": "sha256:1900b88ca83b64020ec2bd95b821a1ab828683055e01fe2d4d59f157cd34c85a",
+        "revision": "sha256:742f50c89cf0bdb4dd43c6400471184061a1b347607b11bba7a3925c6295b299",
         "component_artifacts": [
           "config",
           "manga_ocr",

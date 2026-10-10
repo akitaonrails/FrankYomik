@@ -24,4 +24,3 @@ Annotations establish the ground truth used to decide whether a model is better.
 - Keep balloon borders and source artwork outside the mask.
 - A clean reference must be the actual underlying image or a controlled synthetic source, never another model's output.
 - Real-page output is judged blind because the hidden original artwork is unknown.
-

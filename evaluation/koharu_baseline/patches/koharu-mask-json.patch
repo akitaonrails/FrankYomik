@@ -9,7 +9,7 @@ index 4e77ef8..f9aa053 100644
 -    #[serde(skip_serializing)]
      pub mask: KoharuLayoutMask,
  }
- 
+
 -#[derive(Debug, Clone)]
 +#[derive(Debug, Clone, Serialize)]
  pub struct KoharuLayoutMask {

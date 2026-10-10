@@ -327,7 +327,7 @@ class HayaiModel(PreTrainedModel):
                  repetition_penalty: float = 1.00, length_penalty: float = 1.0,
                  early_stopping: bool = True) -> list:
         """
-        Autoregressive generation supporting Greedy Search (num_beams=1) 
+        Autoregressive generation supporting Greedy Search (num_beams=1)
         and Beam Search (num_beams > 1).
         """
         device = pixel_values.device

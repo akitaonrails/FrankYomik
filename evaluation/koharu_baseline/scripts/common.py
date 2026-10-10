@@ -103,4 +103,3 @@ def load_config() -> dict[str, Any]:
     config = read_json(BASE_DIR / "config.json")
     local = BASE_DIR / "config.local.json"
     return deep_merge(config, read_json(local)) if local.exists() else config
-

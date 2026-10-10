@@ -36,4 +36,3 @@
     "koharu_backends": ["lama", "aot", "rorem", "flux2_klein"]
   }
 }
-
