@@ -94,7 +94,7 @@ def contour_inner_bbox(contour: np.ndarray, margin: int = 8) -> tuple[int, int, 
 def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
                        margin: int = 1,
                        fill_color: tuple = (255, 255, 255),
-                       mask: np.ndarray | None = None) -> None:
+                       mask: np.ndarray | None = None) -> np.ndarray:
     """Clear the area covered by dark text strokes inside a bbox.
 
     Instead of filling the entire bbox (which overflows curved bubble borders),
@@ -109,8 +109,9 @@ def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
 
     x1, y1, x2, y2 = bbox
     roi = np.array(img.crop(bbox).convert("L"))
+    effective = np.zeros((img.height, img.width), dtype=np.uint8)
     if roi.size == 0:
-        return
+        return effective
 
     # Find dark text strokes (ink on white background)
     dark_mask = (roi < 160).astype(np.uint8) * 255
@@ -121,7 +122,7 @@ def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
 
     coords = cv2.findNonZero(connected)
     if coords is None:
-        return
+        return effective
 
     # Bounding rect of all dark pixels = the text cluster area
     rx, ry, rw, rh = cv2.boundingRect(coords)
@@ -146,10 +147,13 @@ def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
                 if len(bright) > 0:
                     fill_color = tuple(int(v) for v in np.median(bright, axis=0))
             img_array[cy1:cy2, cx1:cx2][roi_mask > 0] = fill_color
+            effective[cy1:cy2, cx1:cx2][roi_mask > 0] = 255
             img.paste(Image.fromarray(img_array))
     else:
         draw = ImageDraw.Draw(img)
         draw.rectangle((cx1, cy1, cx2, cy2), fill=fill_color)
+        effective[cy1:cy2 + 1, cx1:cx2 + 1] = 255
+    return effective
 
 
 def clear_text_in_contour(img: Image.Image, contour: np.ndarray,

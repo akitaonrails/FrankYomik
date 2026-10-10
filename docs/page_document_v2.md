@@ -5,7 +5,7 @@ processed page. It records what each pipeline stage found and produced while
 the rendered image remains the reader-facing result.
 
 This document defines the metadata payload schema. It does not define the
-cache manifest. The cache manifest is schema version 3 and is documented in
+cache manifest. The cache manifest is schema version 4 and is documented in
 [Cache and page metadata](cache_metadata_v2.md).
 
 The executable definition and validation rules live in
@@ -21,6 +21,7 @@ The executable definition and validation rules live in
 | `pipeline_revision` | non-empty string | Deployment-wide implementation and model revision. |
 | `source_hash` | non-empty string | SHA-256 identity supplied for the source image. |
 | `image` | object | Positive integer `width` and `height` in pixels. |
+| `cleanup_base` | object, optional | Content-addressed RGB PNG containing the exact post-cleanup pixels used by document rendering. |
 | `regions` | array | Ordered normalized page regions. |
 | `stage_provenance` | object | Stage name to provenance object. |
 
@@ -58,6 +59,7 @@ explicit default. The normal form materializes these values:
 | `ocr.alternatives` | `[]` |
 | `transform.value` | `null` |
 | `render.vertical` | `false` |
+| `render.ellipsized` | `false` |
 | region `user` | `{"manual_translation":""}` |
 | `user.manual_translation` | `""` |
 
@@ -146,27 +148,29 @@ The revision is the revision of that stage result; the top-level
 
 ### Mask reference
 
-Large masks stay outside the JSON document. A reference may identify a stored
-mask object or a deterministic derivation from the source image:
+Large masks stay outside the JSON document. New documents use a verified
+content-addressed PNG object:
 
 ```json
 {
-  "reference": "mask-object-id",
-  "encoding": "png",
+  "reference": "objects/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "encoding": "png-mask-l1",
   "width": 120,
   "height": 80,
   "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 }
 ```
 
-The reference, encoding, width, and height are required. A supplied digest
-must be a 64-character hexadecimal SHA-256 value.
+The reference, encoding, width, and height are required. Object references
+must be exactly `objects/<sha256>`, use `png-mask-l1`, and repeat the same
+digest in `sha256`. The loader verifies bytes, dimensions, PNG encoding, pixel
+budget, and containment before rendering. The only non-object form accepted
+is the schema 1 compatibility reference
+`derived://source/<safe-region-id>`.
 
-Phase 1 balloon detections use `derived://source/<region-id>` and
-`connected-component-v1`. Rerendering regenerates those pixels from the source
-image and retained geometry; the compact contour is also stored in `polygon`.
-Webtoon balloon masks use `webtoon-boundary-v1` for their existing boundary
-extractor.
+New manga and webtoon documents persist both semantic masks and the exact
+effective cleanup removal mask as `png-mask-l1` objects. Their derivation is
+represented by stage provenance rather than by changing the artifact encoding.
 
 ### OCR
 
@@ -185,11 +189,20 @@ Current kinds include `furigana_segments`, `furigana_ruby`, and `text`.
 
 ### Cleanup and render
 
-`cleanup` contains a non-empty `method`, provenance, and an optional mask
-reference.
+`cleanup` contains a non-empty `method`, provenance, and an optional reference
+to the exact effective removal mask. A document with `cleanup_base` uses these
+masks to prove that cleanup changed no pixel outside their union.
 
 `render` contains the rendered bounds and provenance. It can also record font
-family, positive font size, vertical layout, and text color.
+`orientation` records the explicit layout direction, and `source_boxes`
+retains the OCR geometry used by the specialized renderer. Render and source
+boxes must remain within the region. Dialogue can inherit its parent balloon's
+semantic mask and bounds while using its own tighter render box.
+After rendering, `font_size`, positive `line_count`, `fit_status`, and
+`ellipsized` record the actual layout outcome. `fit_status` is `fit`,
+`ellipsized`, or `overflow`; `ellipsized=true` is valid only with the matching
+status. Metadata edits recompute these fields, so truncation is visible to
+clients and logs rather than being a silent raster-only decision.
 
 ## Minimal example
 

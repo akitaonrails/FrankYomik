@@ -87,6 +87,9 @@ class BubbleResult:
     ocr_alternatives: tuple[OcrAlternative, ...] = ()
     ocr_routing_reason: str | None = None
     ocr_degraded: bool = False
+    cleanup_mask: object = None
+    cleanup_method: str | None = None
+    cleanup_degraded: bool = False
 
 
 def _png_bytes(width: int = 120, height: int = 160) -> bytes:
@@ -122,12 +125,14 @@ def _fake_dependencies(
     def detect_manga(page) -> None:
         count("detection")
         provenance = Provenance("fake-detector", "test-revision")
+        semantic_mask = np.zeros((160, 120), dtype=np.uint8)
+        semantic_mask[20:110, 15:90] = 255
         page.semantic_detections = [
             SemanticDetection(
                 "balloon-1", "balloon", BoundingBox(15, 20, 90, 110),
                 0.9, "bubble", provenance,
                 polygon=Polygon(((15, 20), (90, 20), (90, 110), (15, 110))),
-                mask=object(), reading_order=0,
+                mask=semantic_mask, reading_order=0,
             ),
             SemanticDetection(
                 "text-1", "text", BoundingBox(25, 30, 80, 90),
@@ -190,6 +195,10 @@ def _fake_dependencies(
         count("detection")
         page.detected = True
         provenance = Provenance("fake-detector", "test-revision")
+        first_mask = np.zeros((160, 120), dtype=np.uint8)
+        first_mask[20:100, 10:100] = 255
+        second_mask = np.zeros((160, 120), dtype=np.uint8)
+        second_mask[102:150, 15:105] = 255
         page.semantic_detections = [
             SemanticDetection(
                 "webtoon-panel", "panel", BoundingBox(0, 0, 120, 155),
@@ -197,7 +206,7 @@ def _fake_dependencies(
             ),
             SemanticDetection(
                 "webtoon-balloon", "balloon", BoundingBox(10, 20, 100, 100),
-                0.92, "bubble", provenance, mask=object(), reading_order=1,
+                0.92, "bubble", provenance, mask=first_mask, reading_order=1,
             ),
             SemanticDetection(
                 "webtoon-text", "text", BoundingBox(20, 30, 90, 80),
@@ -206,7 +215,7 @@ def _fake_dependencies(
             ),
             SemanticDetection(
                 "webtoon-balloon-2", "balloon", BoundingBox(15, 102, 105, 150),
-                0.91, "bubble", provenance, mask=object(), reading_order=3,
+                0.91, "bubble", provenance, mask=second_mask, reading_order=3,
             ),
             SemanticDetection(
                 "webtoon-text-2", "text", BoundingBox(30, 108, 90, 132),
@@ -251,6 +260,56 @@ def _fake_dependencies(
         page.sfx_translations = ["" for _ in page.sfx_detections]
         page.sfx_translation_eligible = [True for _ in page.sfx_detections]
 
+    def cleanup_manga(page, _mode) -> None:
+        count("cleanup")
+        page.output_img = page.img_pil.copy()
+        page.render_plan = SimpleNamespace(
+            base_font_size=18,
+            font_sizes={index: 18 for index, _ in enumerate(page.bubble_results)},
+        )
+        for result in page.bubble_results:
+            result.cleanup_mask = np.zeros(
+                (page.img_pil.height, page.img_pil.width), dtype=np.uint8,
+            )
+            result.cleanup_method = "stroke_clear"
+
+    def cleanup_webtoon(page) -> None:
+        count("cleanup")
+        page.output_img = page.img_pil.copy()
+        for region in page.regions:
+            region.bubble.cleanup_mask = np.zeros(
+                (page.img_pil.height, page.img_pil.width), dtype=np.uint8,
+            )
+            region.bubble.cleanup_method = "uniform_fill"
+
+    def render_document_region(target, _source, bbox, _text, **_kwargs) -> None:
+        count("render")
+        target.putpixel((bbox[0], bbox[1]), (1, 2, 3))
+        return {"font_size": 12, "line_count": 1,
+                "fit_status": "fit", "ellipsized": False}
+
+    def render_document_sfx(target, _source, bbox, _text) -> None:
+        count("render")
+        target.putpixel((bbox[0], bbox[1]), (4, 5, 6))
+        return {"font_size": 10, "line_count": 1,
+                "fit_status": "fit", "ellipsized": False}
+
+    def render_translation(*_args, **_kwargs):
+        count("render")
+        return {"font_size": 18, "line_count": 1,
+                "fit_status": "fit", "ellipsized": False}
+
+    def render_furigana(*_args, **_kwargs):
+        count("render")
+        return {"font_size": 16, "line_count": 2,
+                "fit_status": "fit", "ellipsized": False}
+
+    def render_artwork(*_args, **kwargs):
+        count("render")
+        calls["artwork_inpainted"] = kwargs.get("inpainted")
+        return {"font_size": 18, "line_count": 1,
+                "fit_status": "fit", "ellipsized": False}
+
     def analyze(_image):
         count("layout")
         column = SimpleNamespace(x0=80, y0=10, x1=110, y1=145)
@@ -288,17 +347,18 @@ def _fake_dependencies(
         create_manga_page=create_manga,
         detect_manga=detect_manga,
         ocr_manga=ocr_manga,
-        cleanup_manga=lambda _page, _mode: count("cleanup"),
+        cleanup_manga=cleanup_manga,
         render_manga=lambda page, _mode: (
-            count("render") or encode(page.img_pil)
+            count("legacy_render") or encode(page.img_pil)
         ),
         transform_furigana=add_furigana,
         translate_text=translate_text,
         translate_page=translate_page,
         furigana_font_limits=lambda _values: (None, None, None),
         estimate_source_font=lambda *_args, **_kwargs: 18,
-        render_translation=lambda *_args, **_kwargs: count("render"),
-        render_furigana=lambda *_args, **_kwargs: count("render"),
+        render_translation=render_translation,
+        render_artwork_translation=render_artwork,
+        render_furigana=render_furigana,
         pipeline_mode=lambda name: name,
         config_value=config,
         create_webtoon_page=create_webtoon,
@@ -306,8 +366,13 @@ def _fake_dependencies(
         ocr_webtoon=ocr_webtoon,
         translate_webtoon=translate_webtoon,
         prepare_webtoon_translation=prepare_webtoon_translation,
-        cleanup_webtoon=lambda _page: count("cleanup"),
-        render_webtoon=lambda page: count("render") or encode(page.img_pil),
+        cleanup_webtoon=cleanup_webtoon,
+        render_webtoon=lambda page: count("legacy_render") or encode(page.img_pil),
+        render_webtoon_document_region=render_document_region,
+        render_webtoon_document_sfx=render_document_sfx,
+        webtoon_document_geometry=lambda _page, region: (
+            region.bubble.bbox, (region.bubble.bbox,),
+        ),
     )
 
 
@@ -317,9 +382,11 @@ def test_degraded_uniform_cleanup_is_truthful_and_non_cacheable():
 
     def cleanup(page) -> None:
         calls["cleanup"] = calls.get("cleanup", 0) + 1
+        page.output_img = page.img_pil.copy()
         for region in page.regions:
             region.bubble.cleanup_method = "uniform_fill:degraded"
             region.bubble.cleanup_degraded = True
+            region.bubble.cleanup_mask = np.zeros((160, 120), dtype=np.uint8)
 
     result = process_job(ProcessingJob(
         job_id="cleanup-degraded", pipeline="webtoon",
@@ -335,7 +402,7 @@ def test_degraded_uniform_cleanup_is_truthful_and_non_cacheable():
         "deterministic-uniform-fill"
     )
     assert "model" not in cleanup_metadata["provenance"]
-    assert "mask" not in cleanup_metadata
+    assert cleanup_metadata["mask"]["encoding"] == "png-mask-l1"
 
 
 def _message_fields(
@@ -386,6 +453,16 @@ def _process_through_consumer(
     assert first.metadata_payload["pipeline_revision"] == "gate0-test"
     assert len(first.metadata_payload["regions"]) == expected_regions
     assert first.image_bytes.startswith(b"\x89PNG")
+    with Image.open(BytesIO(first.image_bytes)) as rendered:
+        assert rendered.size == (120, 160)
+        assert rendered.mode == "RGB"
+    if pipeline != "book_furigana":
+        cleanup_base = first.metadata_payload["cleanup_base"]
+        assert cleanup_base["reference"] == f"objects/{cleanup_base['sha256']}"
+        assert cleanup_base["encoding"] == "png"
+        assert cleanup_base["mode"] == "RGB"
+        assert first.artifact_payloads[cleanup_base["sha256"]]
+        assert calls.get("legacy_render", 0) == 0
 
     namespace = f"{pipeline}_pt-br"
     cached = consumer._page_cache.load_metadata_by_hash(
@@ -463,7 +540,7 @@ def test_worker_message_cache_and_rerender_contract(
         assert balloon["kind"] == "balloon"
         assert balloon["detector_label"] == "bubble"
         assert balloon["polygon"] == [[15, 20], [90, 20], [90, 110], [15, 110]]
-        assert balloon["mask"]["encoding"] == "connected-component-v1"
+        assert balloon["mask"]["encoding"] == "png-mask-l1"
         assert balloon["ocr"]["provenance"]["backend"] == "hayai-ocr"
         assert balloon["ocr"]["confidence"] == 0.8
         assert balloon["ocr"]["routing_reason"] == "hayai_crop_inconsistent"
@@ -472,6 +549,14 @@ def test_worker_message_cache_and_rerender_contract(
         )
         assert text["kind"] == "text"
         assert text["parent_id"] == balloon["id"]
+        if pipeline == "manga_furigana":
+            for payload in (first.metadata_payload,
+                            rerendered.metadata_payload):
+                rendered_balloon = payload["regions"][0]
+                assert rendered_balloon["render"]["font_size"] == 16
+                assert rendered_balloon["render"]["line_count"] == 2
+                assert rendered_balloon["render"]["fit_status"] == "fit"
+                assert rendered_balloon["render"]["ellipsized"] is False
     if pipeline == "webtoon":
         request = calls["translation_request"]
         submitted_ids = {item.id for item in request.items}
@@ -502,8 +587,8 @@ def test_worker_message_cache_and_rerender_contract(
         ] == [0, 1, 2, 3, 4, 5]
         assert text_1["parent_id"] == balloon_1["id"]
         assert text_2["parent_id"] == balloon_2["id"]
-        assert balloon_1["mask"]["encoding"] == "webtoon-boundary-v1"
-        assert balloon_2["mask"]["encoding"] == "webtoon-boundary-v1"
+        assert balloon_1["mask"]["encoding"] == "png-mask-l1"
+        assert balloon_2["mask"]["encoding"] == "png-mask-l1"
         compatibility_regions = [
             region for region in first.metadata_payload["regions"]
             if "detector_label" not in region and region["kind"] == "bubble"
@@ -570,6 +655,52 @@ def test_manga_batch_uses_final_ids_and_excludes_invalid_preserved_text():
                  for region in regions if region.get("ocr")}
     assert preserved["Kacchan"] is None
     assert preserved["…"] is None
+
+
+def test_artwork_text_uses_cleanup_mask_and_specialized_document_renderer():
+    calls: dict[str, object] = {}
+    deps = _fake_dependencies("manga_translate", calls)  # type: ignore[arg-type]
+
+    def detect(page) -> None:
+        provenance = Provenance("fake-detector", "test-revision")
+        page.semantic_detections = [SemanticDetection(
+            "artwork", "text", BoundingBox(20, 30, 90, 100),
+            0.9, "text_free", provenance, reading_order=0,
+        )]
+        page.bubbles_raw = [{
+            "bbox": (20, 30, 90, 100), "semantic_id": "artwork",
+            "is_artwork": True,
+        }]
+
+    def ocr(_image, raw) -> BubbleResult:
+        return BubbleResult(
+            bbox=raw["bbox"], ocr_text="ドン", is_valid=True,
+            is_artwork_text=True,
+        )
+
+    def cleanup(page, _mode) -> None:
+        page.output_img = page.img_pil.copy()
+        page.output_img.paste("white", (20, 30, 90, 100))
+        page.render_plan = SimpleNamespace(base_font_size=18, font_sizes={0: 18})
+        mask = np.zeros((160, 120), dtype=np.uint8)
+        mask[30:100, 20:90] = 255
+        page.bubble_results[0].cleanup_mask = mask
+        page.bubble_results[0].cleanup_method = "region_fill"
+
+    result = process_job(ProcessingJob(
+        job_id="artwork-document-render", pipeline="manga_translate",
+        image_bytes=_png_bytes(), source_hash="f" * 64, target_lang="en",
+    ), dependencies=replace(
+        deps, detect_manga=detect, ocr_manga=ocr, cleanup_manga=cleanup,
+    ))
+
+    assert result.status == "completed", result.error
+    assert calls["artwork_inpainted"] is True
+    region = result.metadata_payload["regions"][0]
+    assert region["kind"] == "artwork_text"
+    assert region["cleanup"]["method"] == "region_fill"
+    assert region["cleanup"]["mask"]["encoding"] == "png-mask-l1"
+    assert region["render"]["fit_status"] == "fit"
 
 
 def test_incomplete_page_result_fails_before_cleanup_or_render():
@@ -766,12 +897,10 @@ def test_tall_webtoon_stitches_semantics_before_page_document_mapping():
     }
     assert set(regions) == {"balloon", "text"}
     assert regions["balloon"]["bbox"] == [10, 1950, 100, 1995]
-    assert regions["balloon"]["mask"] == {
-        "reference": f"derived://source/{regions['balloon']['id']}",
-        "encoding": "webtoon-boundary-v1",
-        "width": 120,
-        "height": 4100,
-    }
+    assert regions["balloon"]["mask"]["reference"].startswith("objects/")
+    assert regions["balloon"]["mask"]["encoding"] == "png-mask-l1"
+    assert regions["balloon"]["mask"]["width"] == 120
+    assert regions["balloon"]["mask"]["height"] == 4100
     assert regions["text"]["polygon"] == [
         [20, 1960], [80, 1960], [80, 1980],
     ]

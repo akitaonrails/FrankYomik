@@ -513,6 +513,9 @@ class TestProcessJobWebtoon:
             sfx_translation_eligible=[],
             semantic_detections=[],
         )
+        _mock_cleanup.side_effect = lambda page: setattr(
+            page, "output_img", page.img_pil.copy(),
+        )
 
         result = process_job(ProcessingJob(
             job_id="webtoon-translation-fail",
@@ -545,6 +548,9 @@ class TestProcessJobWebtoon:
             sfx_translation_eligible=[],
             semantic_detections=[],
         )
+        _mock_cleanup.side_effect = lambda page: setattr(
+            page, "output_img", page.img_pil.copy(),
+        )
 
         result = process_job(ProcessingJob(
             job_id="webtoon-no-text",
@@ -554,11 +560,11 @@ class TestProcessJobWebtoon:
         ))
 
         assert result.status == "completed"
-        assert result.image_bytes == b"rendered"
+        assert result.image_bytes.startswith(b"\x89PNG")
         assert result.metadata_payload is not None
         assert result.metadata_payload["regions"] == []
         mock_translate.assert_not_called()
-        mock_render.assert_called_once()
+        mock_render.assert_not_called()
 
 
 # --- Error handling ---

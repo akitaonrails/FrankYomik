@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
 var errInvalidMetadata = errors.New("invalid metadata")
+
+var objectMaskReferenceRe = regexp.MustCompile(`^objects/([a-f0-9]{64})$`)
+var legacyMaskReferenceRe = regexp.MustCompile(`^derived://source/[A-Za-z0-9._:-]+$`)
 
 func invalidMetadata(format string, args ...interface{}) error {
 	return fmt.Errorf("%w: %s", errInvalidMetadata, fmt.Sprintf(format, args...))
@@ -32,7 +36,7 @@ func setDefaultForMissingOrNull(value map[string]interface{}, field string, defa
 func validatePageDocument(payload map[string]interface{}, expectedPipeline, expectedRevision, expectedSourceHash string) error {
 	if err := rejectUnknownFields(payload, "page document",
 		"schema_version", "page_id", "pipeline", "pipeline_revision",
-		"source_hash", "image", "regions", "stage_provenance"); err != nil {
+		"source_hash", "image", "cleanup_base", "regions", "stage_provenance"); err != nil {
 		return err
 	}
 	schema, err := requireJSONInt(payload["schema_version"], "schema version")
@@ -81,6 +85,15 @@ func validatePageDocument(payload map[string]interface{}, expectedPipeline, expe
 	height, err := requirePositiveJSONInt(image["height"], "image height")
 	if err != nil {
 		return err
+	}
+	if raw, ok := payload["cleanup_base"]; ok && raw != nil {
+		artifact, err := requireJSONObject(raw, "cleanup base")
+		if err != nil {
+			return err
+		}
+		if err := validateImageArtifact(artifact, width, height); err != nil {
+			return err
+		}
 	}
 	setDefaultForMissingOrNull(payload, "regions", []interface{}{})
 	regions, err := requireJSONArray(payload["regions"], "regions")
@@ -162,7 +175,8 @@ func validatePageRegion(region map[string]interface{}, pageWidth, pageHeight int
 	if _, err := requireNonEmptyJSONString(region["kind"], "region kind"); err != nil {
 		return "", 0, "", err
 	}
-	if _, err := validateBoundingBox(region["bbox"], "bounding box", pageWidth, pageHeight); err != nil {
+	regionBox, err := validateBoundingBox(region["bbox"], "bounding box", pageWidth, pageHeight)
+	if err != nil {
 		return "", 0, "", err
 	}
 	order, err := requireJSONInt(region["reading_order"], "reading order")
@@ -263,7 +277,7 @@ func validatePageRegion(region map[string]interface{}, pageWidth, pageHeight int
 		}
 	}
 	if raw, ok := region["render"]; ok && raw != nil {
-		if err := validateRender(raw, pageWidth, pageHeight); err != nil {
+		if err := validateRender(raw, pageWidth, pageHeight, regionBox); err != nil {
 			return "", 0, "", err
 		}
 	}
@@ -323,10 +337,12 @@ func validateMask(raw interface{}, pageWidth, pageHeight int64) error {
 	if err := rejectUnknownFields(mask, "mask", "reference", "encoding", "width", "height", "sha256"); err != nil {
 		return err
 	}
-	if _, err := requireNonEmptyJSONString(mask["reference"], "mask reference"); err != nil {
+	reference, err := requireNonEmptyJSONString(mask["reference"], "mask reference")
+	if err != nil {
 		return err
 	}
-	if _, err := requireNonEmptyJSONString(mask["encoding"], "mask encoding"); err != nil {
+	encoding, err := requireNonEmptyJSONString(mask["encoding"], "mask encoding")
+	if err != nil {
 		return err
 	}
 	width, err := requirePositiveJSONInt(mask["width"], "mask width")
@@ -340,6 +356,10 @@ func validateMask(raw interface{}, pageWidth, pageHeight int64) error {
 	if width != pageWidth || height != pageHeight {
 		return invalidMetadata("mask dimensions do not match the page")
 	}
+	objectMatch := objectMaskReferenceRe.FindStringSubmatch(reference)
+	if objectMatch == nil && !legacyMaskReferenceRe.MatchString(reference) {
+		return invalidMetadata("mask reference must be a safe object or legacy reference")
+	}
 	if rawHash, ok := mask["sha256"]; ok && rawHash != nil {
 		hash, err := requireJSONString(rawHash, "mask sha256")
 		if err != nil {
@@ -348,6 +368,48 @@ func validateMask(raw interface{}, pageWidth, pageHeight int64) error {
 		if !isValidSHA256Hex(hash) {
 			return invalidMetadata("mask sha256 must be a 64-character hexadecimal digest")
 		}
+		if objectMatch != nil && objectMatch[1] != hash {
+			return invalidMetadata("mask object reference must match its sha256")
+		}
+		if objectMatch != nil && encoding != "png-mask-l1" {
+			return invalidMetadata("mask object encoding must be png-mask-l1")
+		}
+	} else if objectMatch != nil {
+		return invalidMetadata("mask object reference requires sha256")
+	}
+	return nil
+}
+
+func validateImageArtifact(value map[string]interface{}, pageWidth, pageHeight int64) error {
+	if err := rejectUnknownFields(value, "image artifact", "reference", "encoding", "width", "height", "mode", "sha256"); err != nil {
+		return err
+	}
+	reference, err := requireNonEmptyJSONString(value["reference"], "image reference")
+	if err != nil {
+		return err
+	}
+	digest, err := requireNonEmptyJSONString(value["sha256"], "image sha256")
+	if err != nil || !isValidSHA256Hex(digest) || reference != "objects/"+digest {
+		return invalidMetadata("invalid content-addressed image artifact")
+	}
+	encoding, err := requireNonEmptyJSONString(value["encoding"], "image encoding")
+	if err != nil || encoding != "png" {
+		return invalidMetadata("cleanup base encoding must be png")
+	}
+	mode, err := requireNonEmptyJSONString(value["mode"], "image mode")
+	if err != nil || mode != "RGB" {
+		return invalidMetadata("cleanup base mode must be RGB")
+	}
+	width, err := requirePositiveJSONInt(value["width"], "image artifact width")
+	if err != nil {
+		return err
+	}
+	height, err := requirePositiveJSONInt(value["height"], "image artifact height")
+	if err != nil {
+		return err
+	}
+	if width != pageWidth || height != pageHeight {
+		return invalidMetadata("cleanup base dimensions do not match page")
 	}
 	return nil
 }
@@ -464,17 +526,21 @@ func validateCleanup(raw interface{}, pageWidth, pageHeight int64) error {
 	return nil
 }
 
-func validateRender(raw interface{}, pageWidth, pageHeight int64) error {
+func validateRender(raw interface{}, pageWidth, pageHeight int64, regionBox [4]int64) error {
 	render, err := requireJSONObject(raw, "render")
 	if err != nil {
 		return err
 	}
-	omitNullFields(render, "font_family", "font_size", "text_color")
-	if err := rejectUnknownFields(render, "render", "bbox", "provenance", "font_family", "font_size", "vertical", "text_color"); err != nil {
+	omitNullFields(render, "font_family", "font_size", "text_color", "orientation", "line_count", "fit_status", "source_boxes")
+	if err := rejectUnknownFields(render, "render", "bbox", "provenance", "font_family", "font_size", "vertical", "text_color", "orientation", "source_boxes", "line_count", "fit_status", "ellipsized"); err != nil {
 		return err
 	}
-	if _, err := validateBoundingBox(render["bbox"], "render box", pageWidth, pageHeight); err != nil {
+	renderBox, err := validateBoundingBox(render["bbox"], "render box", pageWidth, pageHeight)
+	if err != nil {
 		return err
+	}
+	if renderBox[0] < regionBox[0] || renderBox[1] < regionBox[1] || renderBox[2] > regionBox[2] || renderBox[3] > regionBox[3] {
+		return invalidMetadata("render box escapes region bounds")
 	}
 	prov, err := requireJSONObject(render["provenance"], "render provenance")
 	if err != nil {
@@ -483,10 +549,30 @@ func validateRender(raw interface{}, pageWidth, pageHeight int64) error {
 	if err := validateProvenance(prov); err != nil {
 		return err
 	}
-	for _, key := range []string{"font_family", "text_color"} {
+	for _, key := range []string{"font_family", "text_color", "orientation"} {
 		if _, err := optionalJSONString(render[key], key); err != nil {
 			return err
 		}
+	}
+	rawSourceBoxes := render["source_boxes"]
+	if rawSourceBoxes == nil {
+		rawSourceBoxes = []interface{}{}
+	}
+	sourceBoxes, err := requireJSONArray(rawSourceBoxes, "source boxes")
+	if err != nil {
+		return err
+	}
+	for _, rawBox := range sourceBoxes {
+		box, err := validateBoundingBox(rawBox, "source box", pageWidth, pageHeight)
+		if err != nil {
+			return err
+		}
+		if box[0] < regionBox[0] || box[1] < regionBox[1] || box[2] > regionBox[2] || box[3] > regionBox[3] {
+			return invalidMetadata("source box escapes region bounds")
+		}
+	}
+	if len(sourceBoxes) == 0 {
+		delete(render, "source_boxes")
 	}
 	if rawSize, ok := render["font_size"]; ok && rawSize != nil {
 		size, err := requireJSONInt(rawSize, "font size")
@@ -496,6 +582,30 @@ func validateRender(raw interface{}, pageWidth, pageHeight int64) error {
 			}
 			return invalidMetadata("font size must be positive")
 		}
+	}
+	if rawCount, ok := render["line_count"]; ok && rawCount != nil {
+		count, err := requireJSONInt(rawCount, "render line count")
+		if err != nil || count <= 0 {
+			if err != nil {
+				return err
+			}
+			return invalidMetadata("render line count must be positive")
+		}
+	}
+	fitStatus, err := optionalJSONString(render["fit_status"], "render fit status")
+	if err != nil {
+		return err
+	}
+	if fitStatus != "" && fitStatus != "fit" && fitStatus != "ellipsized" && fitStatus != "overflow" {
+		return invalidMetadata("invalid render fit status")
+	}
+	setDefaultForMissingOrNull(render, "ellipsized", false)
+	ellipsized, ok := render["ellipsized"].(bool)
+	if !ok {
+		return invalidMetadata("render ellipsized must be a boolean")
+	}
+	if ellipsized && fitStatus != "ellipsized" {
+		return invalidMetadata("ellipsized render must have ellipsized fit status")
 	}
 	setDefaultForMissingOrNull(render, "vertical", false)
 	if rawVertical, ok := render["vertical"]; ok {

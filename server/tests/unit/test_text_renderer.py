@@ -6,7 +6,6 @@ import kindle.text_renderer as text_renderer
 from kindle.text_renderer import (
     _is_sound_effect,
     _word_wrap,
-    _break_word_to_fit,
     _choose_layout,
     _cap_expanded_furigana_font_size,
     _cap_furigana_to_source_scale,
@@ -27,6 +26,30 @@ from kindle.text_renderer import (
     render_furigana_vertical,
 )
 from kindle.config import FONT_EN
+
+
+def test_furigana_render_is_contained_and_reports_actual_layout():
+    image = Image.new("RGB", (120, 140), (90, 100, 110))
+    before = np.asarray(image).copy()
+    bbox = (40, 40, 80, 100)
+    segments = [{
+        "text": "長い日本語文章長い日本語文章",
+        "furigana": "ながいにほんごぶんしょうながいにほんごぶんしょう",
+        "needs_furigana": True,
+    }]
+
+    outcome = render_furigana_vertical(image, bbox, segments)
+
+    changed = np.any(np.asarray(image) != before, axis=2)
+    allowed = np.zeros(changed.shape, dtype=bool)
+    allowed[40:100, 40:80] = True
+    assert not np.any(changed & ~allowed)
+    assert outcome == {
+        "font_size": 10,
+        "line_count": 2,
+        "fit_status": "overflow",
+        "ellipsized": False,
+    }
 
 
 def _make_draw_and_font(size=16):

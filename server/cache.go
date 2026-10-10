@@ -36,7 +36,7 @@ type Cache struct {
 }
 
 const (
-	cacheManifestSchemaVersion = 3
+	cacheManifestSchemaVersion = 4
 	legacyPipelineRevision     = "legacy-v1"
 )
 
@@ -61,8 +61,9 @@ type CacheManifest struct {
 	ImageObjectSHA256 string `json:"image_object_sha256"`
 	ImageBytes        int    `json:"image_bytes"`
 
-	MetadataObjectSHA256 string `json:"metadata_object_sha256"`
-	MetadataBytes        int    `json:"metadata_bytes"`
+	MetadataObjectSHA256  string   `json:"metadata_object_sha256"`
+	MetadataBytes         int      `json:"metadata_bytes"`
+	ArtifactObjectSHA256s []string `json:"artifact_object_sha256s,omitempty"`
 
 	ContentHash string `json:"content_hash"`
 	RenderHash  string `json:"render_hash"`
@@ -506,7 +507,8 @@ func (c *Cache) loadManifestByHash(pipeline, sourceHash string) (*CacheManifest,
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
-	if (m.SchemaVersion != 2 && m.SchemaVersion != cacheManifestSchemaVersion) ||
+	if (m.SchemaVersion != 2 && m.SchemaVersion != 3 &&
+		m.SchemaVersion != cacheManifestSchemaVersion) ||
 		m.Pipeline != pipeline || m.SourceHash != sourceHash {
 		return nil, fmt.Errorf("invalid manifest: %s", path)
 	}
@@ -734,6 +736,22 @@ func (c *Cache) UpdateMetadataBySourceHash(pipeline, sourceHash string, metadata
 	if err != nil {
 		return nil, err
 	}
+	referenced, err := referencedArtifactHashes(canonMeta)
+	if err != nil {
+		return nil, err
+	}
+	permitted := make(map[string]bool, len(m.ArtifactObjectSHA256s))
+	for _, digest := range m.ArtifactObjectSHA256s {
+		permitted[digest] = true
+	}
+	for digest := range referenced {
+		if !permitted[digest] {
+			return nil, invalidMetadata("metadata introduces unknown artifact: %s", digest)
+		}
+		if _, err := c.readObjectVerified(digest); err != nil {
+			return nil, invalidMetadata("referenced artifact unavailable: %s", digest)
+		}
+	}
 	metaObj, metaSize, err := c.StoreObject(canonMeta)
 	if err != nil {
 		return nil, err
@@ -747,6 +765,40 @@ func (c *Cache) UpdateMetadataBySourceHash(pipeline, sourceHash string, metadata
 		return nil, err
 	}
 	return m, nil
+}
+
+func referencedArtifactHashes(metadataJSON []byte) (map[string]bool, error) {
+	value, err := decodeJSONValue(metadataJSON)
+	if err != nil {
+		return nil, err
+	}
+	hashes := make(map[string]bool)
+	var visit func(interface{}) error
+	visit = func(raw interface{}) error {
+		switch typed := raw.(type) {
+		case map[string]interface{}:
+			if reference, ok := typed["reference"].(string); ok && strings.HasPrefix(reference, "objects/") {
+				digest, ok := typed["sha256"].(string)
+				if !ok || reference != "objects/"+digest || !isValidSHA256Hex(digest) {
+					return invalidMetadata("invalid content-addressed artifact reference")
+				}
+				hashes[digest] = true
+			}
+			for _, child := range typed {
+				if err := visit(child); err != nil {
+					return err
+				}
+			}
+		case []interface{}:
+			for _, child := range typed {
+				if err := visit(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return hashes, visit(value)
 }
 
 // ResolveSourceHash resolves a metadata key to source hash.

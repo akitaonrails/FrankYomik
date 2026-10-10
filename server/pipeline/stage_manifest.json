@@ -3,7 +3,7 @@
   "artifacts": {
     "config": {
       "path": "config.yaml",
-      "sha256": "4f2972e8ed527dea2c0fc037d3020b990d2d9704fd677bd4ba80961246c5a41b"
+      "sha256": "b3acd15f90ba4c183eb8859a73ffb15ef946bd5a390bdc0fce7a9928eb620076"
     },
     "manga_detector": {
       "path": "kindle/bubble_detector.py",
@@ -23,11 +23,11 @@
     },
     "manga_pipeline": {
       "path": "kindle/processor.py",
-      "sha256": "7ed083f77f0559472fe1472c31cf5f09964ff345484e6d312d8f6bf5d9672511"
+      "sha256": "02505221419fc5dce69daed022ddcfe3336582671360c4060e444bc9e5f3b52f"
     },
     "manga_renderer": {
       "path": "kindle/text_renderer.py",
-      "sha256": "62d2afd3f1dccc87b6a084cdd25b6043fbee37b4acf87add762517114cd2cbc2"
+      "sha256": "1c5aa77968c52c61f04962897daaabd11dc597432e55fa88cc2517ce2b67c7f7"
     },
     "book_layout": {
       "path": "kindle/book_layout.py",
@@ -43,7 +43,7 @@
     },
     "webtoon_pipeline": {
       "path": "webtoon/processor.py",
-      "sha256": "03b65b530590918d74ee9d0f98156c1771ab7cf4a4e3c262897c4f1f5eb68d34"
+      "sha256": "19fb16fe832f9c6852d37d5b8c489e155a1207605e7e864f47647aa89b7a65bd"
     },
     "webtoon_ocr": {
       "path": "webtoon/ocr.py",
@@ -55,15 +55,15 @@
     },
     "webtoon_inpainter": {
       "path": "webtoon/inpainter.py",
-      "sha256": "9a8fc8c6cbef89852cfd12f8bbf8d514152788def0e924ddbfadffd1a80e1ca2"
+      "sha256": "e63f53af6151bf4457ccea90430c7049fa8431ea4524426c34c774994ceb1b24"
     },
     "dialogue_font": {
-      "path": "fonts/KomikaText-Regular.ttf",
-      "sha256": "9fd8d1e74f53c7b8a440b9febee61eed5718cbe38b4bc04fa92eb2736db4ab4e"
+      "path": "fonts/ComicNeue-Regular.otf",
+      "sha256": "3ff9a69e2abcfeea638657de2cb497f3976c4be8508c31c053561a8bd7cc68f9"
     },
     "sfx_font": {
-      "path": "fonts/BadaBoomBB.ttf",
-      "sha256": "807627b7055b5695a80f13a652ff166c5cf2bceb2f96afd2a132196090847ad3"
+      "path": "fonts/ComicNeue-Bold.otf",
+      "sha256": "1cd63fb0576e42fbc8e76b95cc056c34df6f0cdff16572451f64bebbc52b415a"
     },
     "runtime_requirements": {
       "path": "requirements.txt",
@@ -71,7 +71,7 @@
     },
     "python_pipelinedunder__initdunder_": {
       "path": "pipeline/__init__.py",
-      "sha256": "9ff93d5ec778af378aeee085fcc54bd253fe1c30fbd56e9f8671aabbe2dfda3e"
+      "sha256": "ee5d4314271bc6e20cea40d5de4e95bd8ba5d469313f08ff68861e3185e30adb"
     },
     "python_pipeline_current_backend": {
       "path": "pipeline/current_backend.py",
@@ -79,11 +79,11 @@
     },
     "python_pipeline_document": {
       "path": "pipeline/document.py",
-      "sha256": "757ef1349c506e5e9d0be7d2df8f98394a3b1638b2cd592ccfcc7d3ccd3376b6"
+      "sha256": "80bb795c51d7778986e2b74f8257bb0d4fbb13542b110952e607f1e48b6d0ca0"
     },
     "python_pipeline_protocols": {
       "path": "pipeline/protocols.py",
-      "sha256": "934fd70491ccd11bc4697d531430a461eaaebdbf92a51e7e9eda1cad0a3f0929"
+      "sha256": "09e1f214d1889d6928f2b0c31bde673897b368fcc3067c5d7f3d0e27f7af61f1"
     },
     "python_pipeline_revision": {
       "path": "pipeline/revision.py",
@@ -99,7 +99,7 @@
     },
     "python_worker_consumer": {
       "path": "worker/consumer.py",
-      "sha256": "37a210a7f61d19ad74a4268ef7dfb2cadb215e078431d2e6764ce3627e981a29"
+      "sha256": "cf77e52cee3f7911d1f1aeb1563f0ccf8c63b49f37c1b0ce9ded6bc8453fa2b1"
     },
     "python_worker_health": {
       "path": "worker/health.py",
@@ -107,7 +107,7 @@
     },
     "python_worker_job": {
       "path": "worker/job.py",
-      "sha256": "ccc433d2f89156278b590afe34c0e4e22a04f440404a97682dcf5910d04bcefb"
+      "sha256": "d2455e37a2e63d0022bd74a3ba4557e2221cb758a1cf9d1da59d06ee57e76eb7"
     },
     "python_worker_main": {
       "path": "worker/main.py",
@@ -115,7 +115,7 @@
     },
     "python_worker_page_cache": {
       "path": "worker/page_cache.py",
-      "sha256": "66d97639dc0086d20dad52dc6c93cb80e5604c5ec7b8d5c6f38489242acd25e8"
+      "sha256": "32481e1c783d4cd9e774fd026b5bf346a3b99d74fdc272890289be41492a49fa"
     },
     "python_kindledunder__initdunder_": {
       "path": "kindle/__init__.py",
@@ -123,15 +123,15 @@
     },
     "python_kindle_config": {
       "path": "kindle/config.py",
-      "sha256": "b3ee61ab89b9cfc93a2afd85e54d53b8218981eb4d4443cf71996c8080598e57"
+      "sha256": "115c957e1922d125150671c4608a09229b1215fdcc930167991cac32dcb6d3d8"
     },
     "python_kindle_image_utils": {
       "path": "kindle/image_utils.py",
-      "sha256": "deeb324f29e505a01291cbbab027b94878cad3271f2476f90cdf74d734b1d588"
+      "sha256": "4b25a53eeb3150fa8424534de3f7d81c329e1781b58c90f32f793339da913579"
     },
     "python_kindle_inpainter": {
       "path": "kindle/inpainter.py",
-      "sha256": "377eb50db886cef3af1315a1fb8bcf034c2512225b86c429b2312a3bcdebb8aa"
+      "sha256": "46ffb5b7c054930f0b82d63e2997fcd34e88e5c384307925cf1a9987f2e5d3df"
     },
     "python_kindle_text_detector": {
       "path": "kindle/text_detector.py",
@@ -143,11 +143,11 @@
     },
     "python_webtoon_bubble_detector": {
       "path": "webtoon/bubble_detector.py",
-      "sha256": "02a8a2d4fe3d4aa5d77f8070dadd3a97c71600e9f143d2050284c4c02395a325"
+      "sha256": "1806ee148a6713fe74069064f4473b50099b33397e9c3f1284b90d34f03a73eb"
     },
     "python_webtoon_config": {
       "path": "webtoon/config.py",
-      "sha256": "f9035c28e7896c671c5ac6932ca794ffd85927009f68c786db27261be27f600b"
+      "sha256": "40a98c6aa14193b59c6ef0795fe0628b56cfd2b8070741125a7cfd01d7b63b24"
     },
     "python_webtoon_image_utils": {
       "path": "webtoon/image_utils.py",
@@ -162,8 +162,8 @@
       "sha256": "fd8ca79f70dafba7e9922d7a0d22498553e83416c7b8ab136564bf5efc6868e8"
     },
     "dialogue_bold_font": {
-      "path": "fonts/KomikaText-Bold.ttf",
-      "sha256": "ca64f94c912ca2363f4551f5b5699c911a0ca4539258211c04f570f386e8447a"
+      "path": "fonts/ComicNeue-Bold.otf",
+      "sha256": "1cd63fb0576e42fbc8e76b95cc056c34df6f0cdff16572451f64bebbc52b415a"
     },
     "japanese_font": {
       "path": "fonts/genei_antique/GenEiAntiquePv5-M.ttf",
@@ -175,7 +175,7 @@
     },
     "python_pipeline_adapters_current": {
       "path": "pipeline/adapters/current.py",
-      "sha256": "853ae3d12304525b4cc46859e5e8ddbdb1f1c7afd47f19339c48501b8cf6c062"
+      "sha256": "a842f6aa5fd38b029eaa746a8cc5491e0c8b1e57004bac623b0636d8d7addfa9"
     },
     "python_pipeline_detection": {
       "path": "pipeline/detection.py",
@@ -204,6 +204,10 @@
     "python_pipeline_cleanup": {
       "path": "pipeline/cleanup.py",
       "sha256": "2f00f03d091c125a175b2279e15e2e6cd919aabfba89d42b5653935e464c7a2a"
+    },
+    "python_pipeline_artifacts": {
+      "path": "pipeline/artifacts.py",
+      "sha256": "eaf76e65675840f5cf04e00fa4496549dc6de64cd1cc675cc2f250dc86e1fff3"
     }
   },
   "stages": {
@@ -211,7 +215,7 @@
       "backend": "rtdetr-v2",
       "implementation": {
         "id": "kindle.bubble_detector",
-        "revision": "sha256:4fa0079c906bcf07db8d0867dac9ce23e361364c711bb84bbdc21ac7a24d4945",
+        "revision": "sha256:e4c473645f5982298864b3fa191cd37a2d444a3e604edd78aae2ca5588f04d95",
         "component_artifacts": [
           "manga_detector",
           "manga_pipeline",
@@ -237,7 +241,7 @@
       "backend": "manga-ocr",
       "implementation": {
         "id": "pipeline.japanese-ocr-router",
-        "revision": "sha256:1d417ac2736714d0f193267ca9f8253309501a93944bed1223773c8cb6fbd247",
+        "revision": "sha256:03a862990332485aa27b99ce2138c942580d2516b54c540797a435a28f49f8a8",
         "component_artifacts": [
           "config",
           "manga_ocr",
@@ -319,7 +323,7 @@
       "backend": "ollama-chat",
       "implementation": {
         "id": "page-translation-v1",
-        "revision": "sha256:6f9046ad7582e48c21f2ea81e5ab9bcfae719094419415160df5b026e8769689",
+        "revision": "sha256:b91cd913e6af9c23a08df000406d8808c3ed5a7bdb3ba04cae0f82aac7e21a75",
         "component_artifacts": [
           "manga_translator",
           "python_pipeline_translation",
@@ -366,12 +370,15 @@
       "backend": "manga-cleanup-policy",
       "implementation": {
         "id": "pipeline.cleanup+kindle.inpainter",
-        "revision": "sha256:084d544591796adb2095563eaac8e8afac16864632d7995856a0aa5045b6d799",
+        "revision": "sha256:9a1df23026d935e392f872c8ba8dee7182da48325181f4b192c8022958d5467d",
         "component_artifacts": [
           "config",
           "manga_pipeline",
+          "python_kindle_image_utils",
           "python_kindle_inpainter",
+          "python_pipeline_artifacts",
           "python_pipeline_cleanup",
+          "python_pipeline_document",
           "python_worker_job"
         ]
       },
@@ -394,7 +401,7 @@
         "max_wall_seconds": 30,
         "seed": 0,
         "degraded_behavior": "last_safe_cleanup",
-        "cleanup_mask_persisted": false,
+        "cleanup_mask_persisted": true,
         "model_process": "persistent_supervised_spawn",
         "deadline_scope": [
           "lock_wait",
@@ -410,21 +417,31 @@
       "backend": "manga-renderer",
       "implementation": {
         "id": "kindle.text_renderer",
-        "revision": "sha256:62d2afd3f1dccc87b6a084cdd25b6043fbee37b4acf87add762517114cd2cbc2"
+        "revision": "sha256:fb1e664360879bffa8b8098ef177823ccea5bf4df7bfeee5d3a09cab0c7035d6",
+        "component_artifacts": [
+          "config",
+          "dialogue_font",
+          "dialogue_bold_font",
+          "japanese_font",
+          "manga_renderer",
+          "python_pipeline_artifacts",
+          "python_pipeline_document",
+          "python_worker_job"
+        ]
       },
       "model": null,
       "prompt": null,
       "output_config": {
-        "font_sha256": "9fd8d1e74f53c7b8a440b9febee61eed5718cbe38b4bc04fa92eb2736db4ab4e",
+        "font_sha256": "3ff9a69e2abcfeea638657de2cb497f3976c4be8508c31c053561a8bd7cc68f9",
         "min_font_size": 10,
         "max_font_size": 60,
         "english_page_font_divisor": 18,
         "furigana_size_ratio": 0.5,
         "text_margin": 2,
         "japanese_font_sha256": "eac60c8a4d9e38a0cc573ebdbd47b2416183626d708cdbbb74ce25148559f4fd",
-        "dialogue_font_sha256": "9fd8d1e74f53c7b8a440b9febee61eed5718cbe38b4bc04fa92eb2736db4ab4e",
-        "dialogue_bold_font_sha256": "ca64f94c912ca2363f4551f5b5699c911a0ca4539258211c04f570f386e8447a",
-        "sfx_font_sha256": "807627b7055b5695a80f13a652ff166c5cf2bceb2f96afd2a132196090847ad3"
+        "dialogue_font_sha256": "3ff9a69e2abcfeea638657de2cb497f3976c4be8508c31c053561a8bd7cc68f9",
+        "dialogue_bold_font_sha256": "1cd63fb0576e42fbc8e76b95cc056c34df6f0cdff16572451f64bebbc52b415a",
+        "sfx_font_sha256": "1cd63fb0576e42fbc8e76b95cc056c34df6f0cdff16572451f64bebbc52b415a"
       }
     },
     "book.detection": {
@@ -482,7 +499,7 @@
       "backend": "rtdetr-v2",
       "implementation": {
         "id": "webtoon.processor",
-        "revision": "sha256:9cb92f5a6337606064cb138edfff8c609ba3d17e6e08d2f38f8a98abdd3eb928",
+        "revision": "sha256:8d9b2f747c0283c0ed5c24c8a648ccb0acd79f9cfd07296d107cc262e03d4ba0",
         "component_artifacts": [
           "manga_detector",
           "webtoon_pipeline",
@@ -529,7 +546,7 @@
       "backend": "ollama-chat",
       "implementation": {
         "id": "page-translation-v1",
-        "revision": "sha256:94151bbe1b096a14be42c3ed7342fc619056712aa43569499f10f1edc9a822ea",
+        "revision": "sha256:80f4a3236e26477dbfcc1ca5891de663bb35da034365ab3d1af6b68ba4cb3cf4",
         "component_artifacts": [
           "manga_translator",
           "webtoon_translator",
@@ -569,10 +586,12 @@
       "backend": "webtoon-inpainter",
       "implementation": {
         "id": "pipeline.cleanup+webtoon.inpainter",
-        "revision": "sha256:0bbb356f8efb04b403d93aa2fdead792d89d3a8bc098ec899848ef7b1bfbf023",
+        "revision": "sha256:69e79fdd0f57ecf2a46084c4c0d1b157d4543268fd32aeac6e387ab54a7f901b",
         "component_artifacts": [
           "config",
+          "python_pipeline_artifacts",
           "python_pipeline_cleanup",
+          "python_pipeline_document",
           "python_webtoon_config",
           "python_webtoon_bubble_detector",
           "webtoon_inpainter",
@@ -605,7 +624,7 @@
         "uniform_stddev": 8,
         "uniform_range": 28,
         "degraded_behavior": "last_safe_cleanup",
-        "cleanup_mask_persisted": false,
+        "cleanup_mask_persisted": true,
         "policy_order": [
           "uniform_fill",
           "lama_tiles"
@@ -625,14 +644,25 @@
       "backend": "webtoon-renderer",
       "implementation": {
         "id": "webtoon.processor",
-        "revision": "sha256:6e8416ec1531278fb9e2ae2329dd7e57aba706421c47e0fe01fe3f740bf836e7"
+        "revision": "sha256:067bf6caee552e8177200be00a0867dc0bc2c833b8f68420411d29edd1bde3ac",
+        "component_artifacts": [
+          "config",
+          "dialogue_font",
+          "dialogue_bold_font",
+          "sfx_font",
+          "python_pipeline_artifacts",
+          "python_pipeline_document",
+          "python_webtoon_config",
+          "webtoon_pipeline",
+          "python_worker_job"
+        ]
       },
       "model": null,
       "prompt": null,
       "output_config": {
-        "dialogue_font_sha256": "9fd8d1e74f53c7b8a440b9febee61eed5718cbe38b4bc04fa92eb2736db4ab4e",
-        "sfx_font_sha256": "807627b7055b5695a80f13a652ff166c5cf2bceb2f96afd2a132196090847ad3",
-        "dialogue_bold_font_sha256": "ca64f94c912ca2363f4551f5b5699c911a0ca4539258211c04f570f386e8447a"
+        "dialogue_font_sha256": "3ff9a69e2abcfeea638657de2cb497f3976c4be8508c31c053561a8bd7cc68f9",
+        "sfx_font_sha256": "1cd63fb0576e42fbc8e76b95cc056c34df6f0cdff16572451f64bebbc52b415a",
+        "dialogue_bold_font_sha256": "1cd63fb0576e42fbc8e76b95cc056c34df6f0cdff16572451f64bebbc52b415a"
       }
     }
   },

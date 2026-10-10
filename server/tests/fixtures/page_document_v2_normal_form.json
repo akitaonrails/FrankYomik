@@ -5,39 +5,116 @@
     "pipeline": "manga_translate",
     "pipeline_revision": "pipeline-v2",
     "source_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    "image": {"width": 100, "height": 200},
-    "regions": [{
-      "id": "r1",
-      "kind": "bubble",
-      "bbox": [1, 2, 30, 40],
-      "reading_order": 0,
-      "polygon": [[1, 2], [29, 2], [29, 39]],
-      "mask": {"reference": "region-mask", "encoding": "png", "width": 100, "height": 200},
-      "detection_provenance": {"backend": "detector", "revision": "v1"},
-      "ocr": {
-        "text": "日本語", "language": "ja", "valid": true,
-        "provenance": {"backend": "ocr", "revision": "v1"},
-        "alternatives": [{"text": "日本", "provenance": {"backend": "ocr", "revision": "v1"}}]
-      },
-      "translation": {
-        "text": "Japanese", "target_language": "en",
-        "provenance": {"backend": "translator", "revision": "v1"}
-      },
-      "transform": {
-        "kind": "text", "value": null,
-        "provenance": {"backend": "transformer", "revision": "v1"}
-      },
-      "cleanup": {
-        "method": "fill", "provenance": {"backend": "cleaner", "revision": "v1"},
-        "mask": {"reference": "cleanup-mask", "encoding": "png", "width": 100, "height": 200}
-      },
-      "render": {
-        "bbox": [1, 2, 30, 40], "vertical": false,
-        "provenance": {"backend": "renderer", "revision": "v1"}
-      },
-      "user": {"manual_translation": ""}
-    }],
-    "stage_provenance": {"detection": {"backend": "detector", "revision": "v1"}}
+    "image": {
+      "width": 100,
+      "height": 200
+    },
+    "regions": [
+      {
+        "id": "r1",
+        "kind": "bubble",
+        "bbox": [
+          1,
+          2,
+          30,
+          40
+        ],
+        "reading_order": 0,
+        "polygon": [
+          [
+            1,
+            2
+          ],
+          [
+            29,
+            2
+          ],
+          [
+            29,
+            39
+          ]
+        ],
+        "mask": {
+          "reference": "derived://source/region-mask",
+          "encoding": "png-mask-l1",
+          "width": 100,
+          "height": 200
+        },
+        "detection_provenance": {
+          "backend": "detector",
+          "revision": "v1"
+        },
+        "ocr": {
+          "text": "日本語",
+          "language": "ja",
+          "valid": true,
+          "provenance": {
+            "backend": "ocr",
+            "revision": "v1"
+          },
+          "alternatives": [
+            {
+              "text": "日本",
+              "provenance": {
+                "backend": "ocr",
+                "revision": "v1"
+              }
+            }
+          ]
+        },
+        "translation": {
+          "text": "Japanese",
+          "target_language": "en",
+          "provenance": {
+            "backend": "translator",
+            "revision": "v1"
+          }
+        },
+        "transform": {
+          "kind": "text",
+          "value": null,
+          "provenance": {
+            "backend": "transformer",
+            "revision": "v1"
+          }
+        },
+        "cleanup": {
+          "method": "fill",
+          "provenance": {
+            "backend": "cleaner",
+            "revision": "v1"
+          },
+          "mask": {
+            "reference": "derived://source/cleanup-mask",
+            "encoding": "png-mask-l1",
+            "width": 100,
+            "height": 200
+          }
+        },
+        "render": {
+          "bbox": [
+            1,
+            2,
+            30,
+            40
+          ],
+          "vertical": false,
+          "provenance": {
+            "backend": "renderer",
+            "revision": "v1"
+          }
+        },
+        "user": {
+          "manual_translation": ""
+        }
+      }
+    ],
+    "stage_provenance": {
+      "detection": {
+        "backend": "detector",
+        "revision": "v1"
+      }
+    }
   },
   "nullable_fields": [
     "/regions/0/confidence",
@@ -65,12 +142,41 @@
     "/regions/0/render/text_color"
   ],
   "defaulted_fields": [
-    {"path": "/regions", "default": []},
-    {"path": "/stage_provenance", "default": {}},
-    {"path": "/regions/0/ocr/alternatives", "default": []},
-    {"path": "/regions/0/transform/value", "default": null},
-    {"path": "/regions/0/render/vertical", "default": false},
-    {"path": "/regions/0/user", "default": {}},
-    {"path": "/regions/0/user/manual_translation", "default": ""}
+    {
+      "path": "/regions",
+      "default": []
+    },
+    {
+      "path": "/stage_provenance",
+      "default": {}
+    },
+    {
+      "path": "/regions/0/ocr/alternatives",
+      "default": []
+    },
+    {
+      "path": "/regions/0/transform/value",
+      "default": null
+    },
+    {
+      "path": "/regions/0/render/vertical",
+      "default": false
+    },
+    {
+      "path": "/regions/0/user",
+      "default": {}
+    },
+    {
+      "path": "/regions/0/user/manual_translation",
+      "default": ""
+    },
+    {
+      "path": "/regions/0/render/ellipsized",
+      "default": false
+    },
+    {
+      "path": "/regions/0/render/source_boxes",
+      "default": []
+    }
   ]
 }

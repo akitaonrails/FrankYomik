@@ -10,6 +10,7 @@ from pipeline import (
     PAGE_DOCUMENT_SCHEMA_VERSION,
     BoundingBox,
     CleanupMetadata,
+    ImageReference,
     MaskReference,
     OcrAlternative,
     OcrResult,
@@ -31,7 +32,7 @@ SOURCE_HASH = "b" * 64
 def _document() -> PageDocument:
     detector = Provenance("semantic-detector", "postprocess-v2", "weights@abc")
     mask = MaskReference(
-        "masks/r_1.rle", "coco-rle", 1200, 1800, "a" * 64
+        "derived://source/r_1", "coco-rle", 1200, 1800
     )
     region = PageRegion(
         id="r_1",
@@ -106,6 +107,57 @@ def test_full_document_round_trip_is_lossless_and_canonical():
     assert restored.to_json() == encoded
     assert json.loads(encoded)["schema_version"] == PAGE_DOCUMENT_SCHEMA_VERSION
     assert "こんにちは" in encoded
+
+
+def test_cleanup_base_round_trips_as_content_addressed_rgb_png():
+    document = _document()
+    artifact = ImageReference(
+        "objects/" + "c" * 64, "png", 1200, 1800, "RGB", "c" * 64,
+    )
+    document = PageDocument(
+        page_id=document.page_id, pipeline=document.pipeline,
+        pipeline_revision=document.pipeline_revision,
+        source_hash=document.source_hash, width=document.width,
+        height=document.height, cleanup_base=artifact,
+        regions=document.regions, stage_provenance=document.stage_provenance,
+    )
+
+    assert PageDocument.from_json(document.to_json()).cleanup_base == artifact
+
+
+@pytest.mark.parametrize("reference", [
+    "file:///tmp/mask.png", "../mask.png", "objects/../escape",
+    "derived://source/../../escape", "https://example.test/mask",
+])
+def test_mask_reference_rejects_unsafe_schemes(reference):
+    with pytest.raises(ValueError, match="safe object or legacy"):
+        MaskReference(reference, "png-mask-l1", 10, 10)
+
+
+def test_render_source_boxes_must_stay_inside_region():
+    payload = _document().to_dict()
+    payload["regions"][0]["render"]["source_boxes"] = [[0, 0, 12, 30]]
+
+    with pytest.raises(ValueError, match="source box escapes"):
+        PageDocument.from_dict(payload)
+
+
+def test_render_fit_outcome_round_trips_and_rejects_inconsistent_ellipsis():
+    payload = _document().to_dict()
+    render = payload["regions"][0]["render"]
+    render.update({
+        "font_size": 8, "line_count": 2,
+        "fit_status": "ellipsized", "ellipsized": True,
+    })
+    restored = PageDocument.from_dict(payload)
+
+    assert restored.regions[0].render.fit_status == "ellipsized"
+    assert restored.regions[0].render.line_count == 2
+    assert restored.regions[0].render.ellipsized is True
+
+    render["fit_status"] = "fit"
+    with pytest.raises(ValueError, match="ellipsized render"):
+        PageDocument.from_dict(payload)
 
 
 def test_serialization_and_content_hash_ignore_mapping_insertion_order():

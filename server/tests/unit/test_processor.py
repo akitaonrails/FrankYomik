@@ -213,3 +213,23 @@ class TestRenderPageImage:
         assert page.render_plan.artwork_inpainted == frozenset()
         assert region.cleanup_method is None
         assert region.cleanup_degraded is True
+
+    def test_disabled_artwork_model_moves_exact_fill_into_cleanup_stage(self):
+        source = Image.new("RGB", (100, 140), (12, 34, 56))
+        region = BubbleResult(
+            bbox=(20, 20, 70, 100), ocr_text="ドン", is_valid=True,
+            transformed="BOOM", is_artwork_text=True,
+        )
+        page = PageResult(
+            image_path="", name="page", img_pil=source,
+            bubble_results=[region],
+        )
+
+        with patch("kindle.processor.MANGA_INPAINT_ENABLED", False):
+            cleanup_page(page, PipelineMode.TRANSLATE)
+
+        assert region.cleanup_method == "region_fill"
+        assert np.all(region.cleanup_mask[20:100, 20:70] == 255)
+        assert np.count_nonzero(region.cleanup_mask) == 50 * 80
+        assert page.output_img.getpixel((20, 20)) == (255, 255, 255)
+        assert 0 in page.render_plan.artwork_inpainted

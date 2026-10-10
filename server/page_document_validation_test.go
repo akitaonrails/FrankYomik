@@ -433,6 +433,13 @@ func TestPageDocumentValidatorRejectsAdversarialPayloads(t *testing.T) {
 				"width": json.Number("99"), "height": json.Number("200"),
 			}
 		}},
+		{"unsafe mask reference", func(payload map[string]interface{}) {
+			region := payload["regions"].([]interface{})[0].(map[string]interface{})
+			region["mask"] = map[string]interface{}{
+				"reference": "file:///tmp/mask.png", "encoding": "png-mask-l1",
+				"width": json.Number("100"), "height": json.Number("200"),
+			}
+		}},
 		{"unknown top-level field", func(payload map[string]interface{}) {
 			payload["future_field"] = "must not be ignored"
 		}},
@@ -460,5 +467,81 @@ func TestPageDocumentValidatorRejectsAdversarialPayloads(t *testing.T) {
 				t.Fatalf("expected invalid metadata error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestMetadataUpdateRestrictsAndVerifiesArtifactAllowlist(t *testing.T) {
+	cache := NewCacheWithRevision(t.TempDir(), "pipeline-v2")
+	image := makePNGBytes()
+	sourceHash := hashHex(image)
+	manifest, err := cache.StoreBySourceHash(
+		"webtoon", sourceHash, image, image,
+		[]byte(`{"schema_version":1,"regions":[]}`), "", "", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := []byte("verified-cleanup-base")
+	artifactHash, _, err := cache.StoreObject(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.ArtifactObjectSHA256s = []string{artifactHash}
+	if err := cache.writeManifestByHash(manifest); err != nil {
+		t.Fatal(err)
+	}
+	document := map[string]interface{}{
+		"schema_version":    2,
+		"page_id":           "page",
+		"pipeline":          "webtoon",
+		"pipeline_revision": "pipeline-v2",
+		"source_hash":       sourceHash,
+		"image": map[string]interface{}{
+			"width": 100, "height": 80,
+		},
+		"cleanup_base": map[string]interface{}{
+			"reference": "objects/" + artifactHash, "encoding": "png",
+			"width": 100, "height": 80, "mode": "RGB", "sha256": artifactHash,
+		},
+		"regions":          []interface{}{},
+		"stage_provenance": map[string]interface{}{},
+	}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.UpdateMetadataBySourceHash("webtoon", sourceHash, raw, ""); err != nil {
+		t.Fatalf("valid existing artifact rejected: %v", err)
+	}
+	before, err := cache.loadManifestByHash("webtoon", sourceHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignHash, _, err := cache.StoreObject([]byte("foreign-object"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document["cleanup_base"].(map[string]interface{})["reference"] = "objects/" + foreignHash
+	document["cleanup_base"].(map[string]interface{})["sha256"] = foreignHash
+	raw, _ = json.Marshal(document)
+	if _, err := cache.UpdateMetadataBySourceHash("webtoon", sourceHash, raw, ""); !errors.Is(err, errInvalidMetadata) {
+		t.Fatalf("expected unknown artifact rejection, got %v", err)
+	}
+	after, _ := cache.loadManifestByHash("webtoon", sourceHash)
+	if after.MetadataObjectSHA256 != before.MetadataObjectSHA256 {
+		t.Fatal("failed artifact update mutated manifest")
+	}
+	document["cleanup_base"].(map[string]interface{})["reference"] = "objects/" + artifactHash
+	document["cleanup_base"].(map[string]interface{})["sha256"] = artifactHash
+	if err := os.WriteFile(cache.objectPath(artifactHash), []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(document)
+	if _, err := cache.UpdateMetadataBySourceHash("webtoon", sourceHash, raw, ""); !errors.Is(err, errInvalidMetadata) {
+		t.Fatalf("expected tampered artifact rejection, got %v", err)
+	}
+	after, _ = cache.loadManifestByHash("webtoon", sourceHash)
+	if after.MetadataObjectSHA256 != before.MetadataObjectSHA256 {
+		t.Fatal("tampered artifact update mutated manifest")
 	}
 }

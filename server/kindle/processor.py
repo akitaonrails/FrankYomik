@@ -75,6 +75,7 @@ class BubbleResult:
     ocr_degraded: bool = False
     cleanup_method: str | None = None
     cleanup_degraded: bool = False
+    cleanup_mask: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -395,11 +396,25 @@ def cleanup_page(page: PageResult, mode: PipelineMode,
                 outcome = cleanup_region(page.output_img, br.bbox)
                 page.output_img = outcome.image
                 br.cleanup_degraded = outcome.degraded
+                br.cleanup_mask = (None if outcome.mask is None else
+                                   np.asarray(outcome.mask))
                 if outcome.applied:
                     artwork_inpainted.add(i)
                     br.cleanup_method = "lama_tiles"
+            else:
+                x1, y1, x2, y2 = br.bbox
+                page.output_img.paste("white", (x1, y1, x2, y2))
+                cleanup_mask = np.zeros(
+                    (page.img_pil.height, page.img_pil.width), dtype=np.uint8,
+                )
+                cleanup_mask[y1:y2, x1:x2] = 255
+                br.cleanup_mask = cleanup_mask
+                br.cleanup_method = "region_fill"
+                artwork_inpainted.add(i)
             continue
-        clear_text_strokes(page.output_img, br.bbox, mask=br.mask)
+        br.cleanup_mask = clear_text_strokes(
+            page.output_img, br.bbox, mask=br.mask,
+        )
 
     page.render_plan = MangaRenderPlan(
         base_font_size=base_font_size,

@@ -97,5 +97,5 @@ INPAINT_SEED = int(_inpaint_cfg.get("seed", 0))
 INPAINT_UNIFORM_STDDEV = float(_inpaint_cfg.get("uniform_stddev", 8))
 INPAINT_UNIFORM_RANGE = int(_inpaint_cfg.get("uniform_range", 28))
 # --- Fonts ---
-FONT_KO = FONT_EN              # Dialogue text (Komika Text)
-FONT_KO_BOLD = FONT_SFX        # SFX overlay (BadaBoom BB)
+FONT_KO = FONT_EN              # Dialogue text (Comic Neue)
+FONT_KO_BOLD = FONT_SFX        # SFX overlay (Comic Neue Bold)

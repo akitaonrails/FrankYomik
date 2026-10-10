@@ -35,6 +35,7 @@ class MangaCleanupOutcome:
     applied: bool
     degraded: bool = False
     reason: str | None = None
+    mask: Image.Image | None = None
 
 
 def cleanup_region(
@@ -65,16 +66,21 @@ def cleanup_region(
         return MangaCleanupOutcome(img_pil, False, True, "page_budget")
     if mask is None:
         return MangaCleanupOutcome(img_pil, False, True, "empty_mask")
+    mask_pixels = np.asarray(mask).copy()
+    x1, y1, x2, y2 = bbox
+    contained = np.zeros(mask_pixels.shape, dtype=np.uint8)
+    contained[y1:y2, x1:x2] = mask_pixels[y1:y2, x1:x2]
+    mask = Image.fromarray(contained, mode="L")
     policy = CleanupPolicy(context_px=pad)
     try:
         plan = plan_cleanup(img_pil, mask, semantic_mask=None, policy=policy)
     except CleanupBudgetExceeded:
         log.warning("Manga artwork cleanup exceeds tile budget")
-        return MangaCleanupOutcome(img_pil, False, True, "tile_budget")
+        return MangaCleanupOutcome(img_pil, False, True, "tile_budget", mask)
     if not host_memory_available(policy.min_host_available_mb):
-        return MangaCleanupOutcome(img_pil, False, True, "host_memory")
+        return MangaCleanupOutcome(img_pil, False, True, "host_memory", mask)
     if not gpu_memory_available(policy.min_gpu_available_mb):
-        return MangaCleanupOutcome(img_pil, False, True, "gpu_memory")
+        return MangaCleanupOutcome(img_pil, False, True, "gpu_memory", mask)
     end = deadline(policy)
     requests: list[tuple[Image.Image, Image.Image, int]] = []
     for index, tile in enumerate(plan.tiles):
@@ -86,7 +92,7 @@ def cleanup_region(
         results = supervised_inpaint_tiles(requests, end=end)
     except SupervisedInpaintError as error:
         log.warning("Manga artwork cleanup degraded: %s", error.reason)
-        return MangaCleanupOutcome(img_pil, False, True, error.reason)
+        return MangaCleanupOutcome(img_pil, False, True, error.reason, mask)
 
     result = img_pil.copy()
     for tile, result_crop in zip(plan.tiles, results, strict=True):
@@ -99,7 +105,7 @@ def cleanup_region(
         )
         result.paste(Image.fromarray(composite.astype(np.uint8)), crop_box[:2])
 
-    return MangaCleanupOutcome(result, True)
+    return MangaCleanupOutcome(result, True, mask=mask)
 
 
 def inpaint_region(

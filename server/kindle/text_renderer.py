@@ -307,9 +307,20 @@ def compute_bubble_font_size(bbox: tuple[int, int, int, int],
 
 # --- English rendering entry point ---
 
+def _restore_outside_bbox(
+    image: Image.Image, original: Image.Image,
+    bbox: tuple[int, int, int, int],
+) -> None:
+    """Keep a renderer transaction strictly inside its declared bounds."""
+    x1, y1, x2, y2 = bbox
+    image.paste(original.crop((0, 0, image.width, y1)), (0, 0))
+    image.paste(original.crop((0, y2, image.width, image.height)), (0, y2))
+    image.paste(original.crop((0, y1, x1, y2)), (0, y1))
+    image.paste(original.crop((x2, y1, image.width, y2)), (x2, y1))
+
 def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
                    text: str, base_font_size: int | None = None,
-                   mask: 'np.ndarray | None' = None) -> None:
+                   mask: 'np.ndarray | None' = None) -> dict[str, object]:
     """Render English text inside a bubble, choosing the best layout.
 
     ``base_font_size`` is the page-wide target computed from image height.
@@ -323,16 +334,39 @@ def render_english(img: Image.Image, bbox: tuple[int, int, int, int],
     bh = y2 - y1 - 2 * TEXT_MARGIN
 
     if bw < 10 or bh < 10 or not text.strip():
-        return
+        return {"font_size": MIN_FONT_SIZE, "line_count": 1,
+                "fit_status": "overflow", "ellipsized": False}
 
     layout = _choose_layout(text)
+    original = img.copy()
     log.debug("  Layout: %s for '%s' in %dx%d", layout, text, bw, bh)
 
     if layout == "vertical_sfx":
+        chars = list(text.strip())
+        font_size = _fit_vertical_chars(chars, bw, bh)
         _render_vertical_sfx(img, bbox, text, mask=mask)
+        _restore_outside_bbox(img, original, bbox)
+        fits = len(chars) * int(font_size * 1.1) <= bh
+        return {"font_size": font_size, "line_count": len(chars) or 1,
+                "fit_status": "fit" if fits else "overflow",
+                "ellipsized": False}
     else:
+        safe_bbox = _mask_safe_bbox(bbox, mask) if mask is not None else bbox
+        safe_bw = safe_bbox[2] - safe_bbox[0] - 2 * TEXT_MARGIN
+        safe_bh = safe_bbox[3] - safe_bbox[1] - 2 * TEXT_MARGIN
+        font_size = _fit_horizontal_english_size(
+            text, safe_bw, safe_bh, base_font_size,
+        )
+        font = _load_font(FONT_EN_BOLD, font_size)
+        draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        lines = _word_wrap(text, font, safe_bw, draw)
+        fits = bool(lines) and len(lines) * int(font_size * 1.2) <= safe_bh
         _render_horizontal_english(img, bbox, text,
                                    target_size=base_font_size, mask=mask)
+        _restore_outside_bbox(img, original, bbox)
+        return {"font_size": font_size, "line_count": len(lines) or 1,
+                "fit_status": "fit" if fits else "overflow",
+                "ellipsized": False}
 
 
 # --- Vertical sound effect rendering ---
@@ -599,7 +633,29 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                              page_font_cap: int | None = None,
                              source_outlier_threshold: int | None = None,
                              page_font_floor: int | None = None,
-                             layout_img: Image.Image | None = None) -> None:
+                             layout_img: Image.Image | None = None,
+                             ) -> dict[str, object]:
+    """Render furigana transactionally inside the declared document box."""
+    original = img.copy()
+    outcome = _render_furigana_vertical_impl(
+        img, bbox, segments, mask=mask,
+        source_font_size=source_font_size, page_font_cap=page_font_cap,
+        source_outlier_threshold=source_outlier_threshold,
+        page_font_floor=page_font_floor, layout_img=layout_img,
+    )
+    _restore_outside_bbox(img, original, bbox)
+    return outcome
+
+
+def _render_furigana_vertical_impl(
+    img: Image.Image, bbox: tuple[int, int, int, int], segments: list[dict],
+    mask: 'np.ndarray | None' = None,
+    source_font_size: int | None = None,
+    page_font_cap: int | None = None,
+    source_outlier_threshold: int | None = None,
+    page_font_floor: int | None = None,
+    layout_img: Image.Image | None = None,
+) -> dict[str, object]:
     """Render vertical Japanese text with furigana inside a bubble region.
 
     When `mask` is provided, the bbox is first tightened to the mask's
@@ -616,7 +672,8 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     bh = y2 - y1 - 2 * TEXT_MARGIN
 
     if bw < 10 or bh < 10:
-        return
+        return {"font_size": MIN_FONT_SIZE, "line_count": 1,
+                "fit_status": "overflow", "ellipsized": False}
 
     chars = []
     for seg in segments:
@@ -638,14 +695,15 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             })
 
     if not chars:
-        return
+        return {"font_size": MIN_FONT_SIZE, "line_count": 1,
+                "fit_status": "overflow", "ellipsized": False}
 
     # Wide-short bboxes belong to horizontal source text (chapter title strips,
     # narration banners). Stacking chars into vertical columns scatters new
     # white-backed glyphs onto adjacent artwork and looks worse than just
     # laying them out left-to-right where the original text was.
     if bw >= bh * _WIDE_BBOX_HORIZONTAL_RATIO:
-        _render_furigana_horizontal(
+        return _render_furigana_horizontal(
             img, bbox, chars,
             mask=mask,
             source_font_size=source_font_size,
@@ -654,7 +712,6 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             page_font_floor=page_font_floor,
             layout_img=layout_img,
         )
-        return
 
     original_font_size = None
     if mask is None:
@@ -674,7 +731,8 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         bw = x2 - x1 - 2 * TEXT_MARGIN
         bh = y2 - y1 - 2 * TEXT_MARGIN
         if bw < 10 or bh < 10:
-            return
+            return {"font_size": initial_font_size, "line_count": 1,
+                    "fit_status": "overflow", "ellipsized": False}
 
     geometric_font_size = _fit_vertical_font_size(chars, bw, bh)
     font_size = geometric_font_size
@@ -734,6 +792,8 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
 
     col_x = start_x
     char_y = start_y
+    rendered_count = 0
+    columns_used = 1
 
     for idx, ch_info in enumerate(chars):
         # Column overflow — move to next column
@@ -742,6 +802,7 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             char_y = start_y
             if col_x < x1 + TEXT_MARGIN:
                 break
+            columns_used += 1
 
         # Segment-aware column break: if this is the start of a new segment,
         # check if the whole segment fits in the remaining column space.
@@ -755,6 +816,7 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                 char_y = start_y
                 if col_x < x1 + TEXT_MARGIN:
                     break
+                columns_used += 1
 
         ch = ch_info["char"]
 
@@ -823,12 +885,19 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                 furi_y += furi_char_h
 
         char_y += char_height
+        rendered_count += 1
 
     if mask is not None:
         overlay_arr = np.array(overlay)
         overlay_arr[:, :, 3][mask == 0] = 0
         overlay = Image.fromarray(overlay_arr)
         img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
+    return {
+        "font_size": font_size,
+        "line_count": max(1, columns_used),
+        "fit_status": "fit" if rendered_count == len(chars) else "overflow",
+        "ellipsized": False,
+    }
 
 
 def _render_furigana_horizontal(
@@ -841,7 +910,7 @@ def _render_furigana_horizontal(
     source_outlier_threshold: int | None = None,
     page_font_floor: int | None = None,
     layout_img: Image.Image | None = None,
-) -> None:
+) -> dict[str, object]:
     """Render furigana chars left-to-right for wide-short detections.
 
     Used when the source text was horizontal (chapter title strips, narration
@@ -852,7 +921,8 @@ def _render_furigana_horizontal(
     bw = x2 - x1 - 2 * TEXT_MARGIN
     bh = y2 - y1 - 2 * TEXT_MARGIN
     if bw < 10 or bh < 10:
-        return
+        return {"font_size": MIN_FONT_SIZE, "line_count": 1,
+                "fit_status": "overflow", "ellipsized": False}
 
     has_furigana = any(c["furigana"] for c in chars)
     n = len(chars)
@@ -952,6 +1022,13 @@ def _render_furigana_horizontal(
         overlay_arr[:, :, 3][mask == 0] = 0
         overlay = Image.fromarray(overlay_arr)
         img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
+    return {
+        "font_size": font_size,
+        "line_count": max(1, rows_needed),
+        "fit_status": ("fit" if rows_needed * row_height <= bh
+                       else "overflow"),
+        "ellipsized": False,
+    }
 
 
 def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
@@ -1568,7 +1645,7 @@ def _font_background_cell_height(font_size: int, chars: str, bg_pad: int,
 
 def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
                                text: str, base_font_size: int | None = None,
-                               inpainted: bool = False) -> None:
+                               inpainted: bool = False) -> dict[str, object]:
     """Render English text on artwork with background for readability.
 
     When inpainted=True (AI cleaned the background), uses a semi-transparent
@@ -1581,12 +1658,20 @@ def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
     bh = y2 - y1 - 2 * TEXT_MARGIN
 
     if bw < 10 or bh < 10 or not text.strip():
-        return
+        return {"font_size": MIN_FONT_SIZE, "line_count": 1,
+                "fit_status": "overflow", "ellipsized": False}
 
     layout = _choose_layout(text)
+    original = img.copy()
     if layout == "vertical_sfx":
+        chars = list(text.strip())
+        font_size = _fit_vertical_chars(chars, bw, bh)
         _render_vertical_sfx(img, bbox, text)
-        return
+        _restore_outside_bbox(img, original, bbox)
+        fits = len(chars) * int(font_size * 1.1) <= bh
+        return {"font_size": font_size, "line_count": len(chars) or 1,
+                "fit_status": "fit" if fits else "overflow",
+                "ellipsized": False}
 
     font_size = _fit_horizontal_english_size(text, bw, bh, base_font_size)
     font = _load_font(FONT_EN_BOLD, font_size)
@@ -1594,7 +1679,8 @@ def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
 
     lines = _word_wrap(text, font, bw, draw)
     if not lines:
-        return
+        return {"font_size": font_size, "line_count": 1,
+                "fit_status": "overflow", "ellipsized": False}
 
     line_height = int(font_size * 1.2)
     total_height = len(lines) * line_height
@@ -1628,6 +1714,10 @@ def render_english_on_artwork(img: Image.Image, bbox: tuple[int, int, int, int],
         text_x = x1 + TEXT_MARGIN + (bw - line_w) // 2
         draw.text((text_x, text_y), line, fill="black", font=font)
         text_y += line_height
+    _restore_outside_bbox(img, original, bbox)
+    return {"font_size": font_size, "line_count": len(lines),
+            "fit_status": "fit" if total_height <= bh else "overflow",
+            "ellipsized": False}
 
 
 # --- Debug ---

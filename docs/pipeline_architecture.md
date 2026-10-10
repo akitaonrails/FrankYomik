@@ -29,7 +29,7 @@ Flutter or Chromium client
   -> Redis Stream job carrying pipeline_revision
   -> Python worker: reject mismatched revision, run selected pipeline
   -> PageDocument v2 plus rendered PNG
-  -> cache manifest v3 and content-addressed objects
+  -> cache manifest v4 and content-addressed objects
   -> Redis status and WebSocket completion
   -> client downloads and displays the rendered PNG
 ```
@@ -49,9 +49,11 @@ queue and delivery state. The filesystem cache is the persistent result store.
    current OCR path.
 3. OCR each region with Manga OCR.
 4. Verify the configured Ollama model digest, then translate valid regions.
-5. Run cleanup to remove source text.
-6. Render translated text onto the cleaned page.
-7. Build a version 2 document with geometry-based region IDs and stage provenance.
+5. Run cleanup and persist its exact base pixels and effective masks as
+   content-addressed PNG objects.
+6. Build a version 2 document with geometry-based region IDs, render inputs,
+   and stage provenance.
+7. Render the document onto the persisted cleanup base.
 
 ### Manga furigana
 
@@ -79,6 +81,31 @@ mask-bounded deterministic fill. Recovered pages are returned as completed but
 are noncacheable, and their region provenance names the fill rather than LaMa.
 Its stage results are normalized into the same document contract as the other
 pipelines.
+
+### Document rendering and rerender
+
+Manga and webtoon live processing now crosses the same `PageDocument` render
+boundary as metadata rerender. The renderer starts from the exact RGB cleanup
+base named by `cleanup_base`, processes regions by `reading_order`, and uses
+the persisted render box, source OCR boxes, orientation, parent balloon, and
+semantic mask. It retains Frank's manga translation, vertical furigana,
+color-aware webtoon dialogue, and outlined SFX renderers. Book rendering keeps
+its existing gutter flow.
+
+Each completed text render writes its final font size, line count, and fit
+status back into the document. Webtoon fallback ellipsis is explicitly marked;
+overflow is logged and remains inspectable after a metadata edit. Artwork text
+uses its dedicated renderer on the already-cleaned base, so rendering does not
+perform a hidden second cleanup.
+
+Cleanup mask references name the exact effective removal masks. Object
+references are restricted to `objects/<sha256>`, are hash and dimension
+checked before use, and must stay within their region. Rerender performs no
+detection, OCR, translation, cleanup, or model call. Legacy schema 1 records
+continue through the prior source-based compatibility path.
+
+English dialogue and SFX use the bundled OFL Comic Neue regular and bold
+fonts. Restricted Komika Text and BadaBoom files are no longer distributed.
 
 ## Typed stage boundaries
 

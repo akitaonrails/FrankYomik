@@ -12,6 +12,7 @@ import json
 import logging
 import multiprocessing
 import os
+import sys
 import select
 import socket
 import threading
@@ -127,13 +128,10 @@ class LamaBackend(InpaintBackend):
 
 
 def _cuda_empty_cache():
-    """Free GPU memory if torch is available."""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except ImportError:
-        pass
+    """Free GPU memory only when torch is already safely imported."""
+    torch = sys.modules.get("torch")
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +529,7 @@ class CleanupOutcome:
     method: str
     degraded: bool = False
     reason: str | None = None
+    mask: Image.Image | None = None
 
 
 def build_inpaint_mask(
@@ -559,7 +558,7 @@ def build_effective_cleanup_mask(
     """Build the exact production removal mask for one webtoon bubble."""
     selected = policy or _policy()
     boxes = [det.bbox_rect for det in bubble.text_regions]
-    return build_cleanup_mask(
+    mask = build_cleanup_mask(
         original_img.size,
         boxes,
         semantic_mask=bubble.bubble_mask,
@@ -571,6 +570,13 @@ def build_effective_cleanup_mask(
             original_img, boxes, bubble.bg_color,
         ),
     )
+    if mask is None:
+        return None
+    pixels = np.asarray(mask)
+    contained = np.zeros(pixels.shape, dtype=np.uint8)
+    x1, y1, x2, y2 = bubble.bbox
+    contained[y1:y2, x1:x2] = pixels[y1:y2, x1:x2]
+    return Image.fromarray(contained, mode="L")
 
 
 def _fill_masked(
@@ -604,17 +610,17 @@ def cleanup_bubble(
         )
     except CleanupBudgetExceeded as error:
         _fill_masked(dest, mask, bubble.bg_color)
-        return CleanupOutcome(True, "uniform_fill", True, str(error))
+        return CleanupOutcome(True, "uniform_fill", True, str(error), mask)
 
     if plan.uniform_color is not None:
         _fill_masked(dest, mask, plan.uniform_color)
-        return CleanupOutcome(True, "uniform_fill")
+        return CleanupOutcome(True, "uniform_fill", mask=mask)
     if not host_memory_available(policy.min_host_available_mb):
         _fill_masked(dest, mask, bubble.bg_color)
-        return CleanupOutcome(True, "uniform_fill", True, "host_memory")
+        return CleanupOutcome(True, "uniform_fill", True, "host_memory", mask)
     if not gpu_memory_available(policy.min_gpu_available_mb):
         _fill_masked(dest, mask, bubble.bg_color)
-        return CleanupOutcome(True, "uniform_fill", True, "gpu_memory")
+        return CleanupOutcome(True, "uniform_fill", True, "gpu_memory", mask)
 
     end = deadline(policy)
     requests: list[tuple[Image.Image, Image.Image, int]] = []
@@ -629,7 +635,7 @@ def cleanup_bubble(
         log.warning("LaMa cleanup degraded: %s", error.reason)
         _reset_backend()
         _fill_masked(dest, mask, bubble.bg_color)
-        return CleanupOutcome(True, "uniform_fill", True, error.reason)
+        return CleanupOutcome(True, "uniform_fill", True, error.reason, mask)
     for tile, result_crop in zip(plan.tiles, results, strict=True):
         crop_box = tile.bbox
         result_arr = np.asarray(result_crop.convert("RGB"))
@@ -637,7 +643,7 @@ def cleanup_bubble(
         mask_arr = np.asarray(mask.crop(crop_box)) > 0
         composite = np.where(mask_arr[:, :, None], result_arr, target_arr)
         dest.paste(Image.fromarray(composite.astype(np.uint8)), crop_box[:2])
-    return CleanupOutcome(True, "lama_tiles")
+    return CleanupOutcome(True, "lama_tiles", mask=mask)
 
 
 def inpaint_bubble(
@@ -653,6 +659,8 @@ def inpaint_bubble(
     )
     bubble.cleanup_method = outcome.method
     bubble.cleanup_degraded = outcome.degraded
+    bubble.cleanup_mask = (None if outcome.mask is None else
+                           np.asarray(outcome.mask))
     if outcome.degraded:
         bubble.cleanup_method = f"{outcome.method}:degraded"
     return outcome.applied

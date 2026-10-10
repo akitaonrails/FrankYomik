@@ -23,6 +23,8 @@ VALID_PIPELINES = frozenset({
     "webtoon",
 })
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+_OBJECT_REFERENCE_RE = re.compile(r"^objects/([a-f0-9]{64})$")
+_LEGACY_MASK_REFERENCE_RE = re.compile(r"^derived://source/[A-Za-z0-9._:-]+$")
 _JSON_NUMBER_RE = re.compile(
     r"^(?P<sign>-?)(?P<int>0|[1-9][0-9]*)(?:\.(?P<frac>[0-9]+))?"
     r"(?:[eE](?P<exp>[+-]?[0-9]+))?$"
@@ -324,6 +326,13 @@ class MaskReference:
             digest = _require_non_empty("mask sha256", self.sha256)
             if not _SHA256_RE.fullmatch(digest):
                 raise ValueError("mask sha256 must be a 64-character hexadecimal digest")
+        match = _OBJECT_REFERENCE_RE.fullmatch(self.reference)
+        if match is not None and self.sha256 != match.group(1):
+            raise ValueError("mask object reference must match its sha256")
+        if match is not None and self.encoding != "png-mask-l1":
+            raise ValueError("mask object encoding must be png-mask-l1")
+        if match is None and _LEGACY_MASK_REFERENCE_RE.fullmatch(self.reference) is None:
+            raise ValueError("mask reference must be a safe object or legacy reference")
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -352,6 +361,60 @@ class MaskReference:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ImageReference:
+    """Content-addressed raster artifact used as an exact render base."""
+
+    reference: str
+    encoding: str
+    width: int
+    height: int
+    mode: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        match = _OBJECT_REFERENCE_RE.fullmatch(
+            _require_non_empty("image reference", self.reference),
+        )
+        digest = _require_non_empty("image sha256", self.sha256)
+        if match is None or not _SHA256_RE.fullmatch(digest):
+            raise ValueError("image reference must be a content-addressed object")
+        if match.group(1) != digest:
+            raise ValueError("image object reference must match its sha256")
+        _require_non_empty("image encoding", self.encoding)
+        _require_integer("image width", self.width)
+        _require_integer("image height", self.height)
+        _require_non_empty("image mode", self.mode)
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("image dimensions must be positive")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "reference": self.reference,
+            "encoding": self.encoding,
+            "width": self.width,
+            "height": self.height,
+            "mode": self.mode,
+            "sha256": self.sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> ImageReference:
+        _reject_unknown_fields(
+            value,
+            frozenset({
+                "reference", "encoding", "width", "height", "mode", "sha256",
+            }),
+            "image artifact",
+        )
+        return cls(
+            reference=_require_non_empty("image reference", value["reference"]),
+            encoding=_require_non_empty("image encoding", value["encoding"]),
+            width=_require_integer("image width", value["width"]),
+            height=_require_integer("image height", value["height"]),
+            mode=_require_non_empty("image mode", value["mode"]),
+            sha256=_require_non_empty("image sha256", value["sha256"]),
+        )
 @dataclass(frozen=True, slots=True)
 class OcrAlternative:
     text: str
@@ -579,20 +642,39 @@ class RenderMetadata:
     font_size: int | None = None
     vertical: bool = False
     text_color: str | None = None
+    orientation: str | None = None
+    source_boxes: tuple[BoundingBox, ...] = ()
+    line_count: int | None = None
+    fit_status: str | None = None
+    ellipsized: bool = False
 
     def __post_init__(self) -> None:
         _optional_string("font family", self.font_family)
         _optional_integer("font size", self.font_size)
         _require_boolean("vertical", self.vertical)
         _optional_string("text color", self.text_color)
+        _optional_string("render orientation", self.orientation)
+        object.__setattr__(self, "source_boxes", tuple(self.source_boxes))
+        _optional_integer("render line count", self.line_count)
+        _optional_string("render fit status", self.fit_status)
         if self.font_size is not None and self.font_size <= 0:
             raise ValueError("font size must be positive")
+        if self.line_count is not None and self.line_count <= 0:
+            raise ValueError("render line count must be positive")
+        if self.fit_status is not None and self.fit_status not in {
+            "fit", "ellipsized", "overflow",
+        }:
+            raise ValueError("invalid render fit status")
+        _require_boolean("render ellipsized", self.ellipsized)
+        if self.ellipsized and self.fit_status != "ellipsized":
+            raise ValueError("ellipsized render must have ellipsized fit status")
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
             "bbox": self.bbox.as_list(),
             "provenance": self.provenance.to_dict(),
             "vertical": self.vertical,
+            "ellipsized": self.ellipsized,
         }
         if self.font_family is not None:
             result["font_family"] = self.font_family
@@ -600,6 +682,14 @@ class RenderMetadata:
             result["font_size"] = self.font_size
         if self.text_color is not None:
             result["text_color"] = self.text_color
+        if self.orientation is not None:
+            result["orientation"] = self.orientation
+        if self.source_boxes:
+            result["source_boxes"] = [box.as_list() for box in self.source_boxes]
+        if self.line_count is not None:
+            result["line_count"] = self.line_count
+        if self.fit_status is not None:
+            result["fit_status"] = self.fit_status
         return result
 
     @classmethod
@@ -608,7 +698,8 @@ class RenderMetadata:
             value,
             frozenset({
                 "bbox", "provenance", "font_family", "font_size", "vertical",
-                "text_color",
+                "text_color", "orientation", "source_boxes",
+                "line_count", "fit_status", "ellipsized",
             }),
             "render",
         )
@@ -620,6 +711,20 @@ class RenderMetadata:
             vertical=_require_boolean(
                 "vertical", _default_if_null(value, "vertical", False)),
             text_color=_optional_string("text color", value.get("text_color")),
+            orientation=_optional_string(
+                "render orientation", value.get("orientation")),
+            source_boxes=tuple(
+                BoundingBox.from_value(_sequence(item))
+                for item in _sequence(_default_if_null(value, "source_boxes", ()))
+            ),
+            line_count=_optional_integer(
+                "render line count", value.get("line_count")),
+            fit_status=_optional_string(
+                "render fit status", value.get("fit_status")),
+            ellipsized=_require_boolean(
+                "render ellipsized",
+                _default_if_null(value, "ellipsized", False),
+            ),
         )
 
 
@@ -746,6 +851,7 @@ class PageDocument:
     regions: tuple[PageRegion, ...] = ()
     stage_provenance: Mapping[str, Provenance] = field(default_factory=dict)
     schema_version: int = PAGE_DOCUMENT_SCHEMA_VERSION
+    cleanup_base: ImageReference | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty("page id", self.page_id)
@@ -766,6 +872,13 @@ class PageDocument:
         _require_integer("image height", self.height)
         if self.width <= 0 or self.height <= 0:
             raise ValueError("page dimensions must be positive")
+        if self.cleanup_base is not None and (
+            self.cleanup_base.width != self.width
+            or self.cleanup_base.height != self.height
+            or self.cleanup_base.mode != "RGB"
+            or self.cleanup_base.encoding != "png"
+        ):
+            raise ValueError("cleanup base must be an RGB PNG matching the page")
 
         object.__setattr__(self, "regions", tuple(self.regions))
         ids = {region.id for region in self.regions}
@@ -799,6 +912,27 @@ class PageDocument:
                 or region.render.bbox.y2 > self.height
             ):
                 raise ValueError(f"region {region.id!r} render box lies outside the page")
+            if region.render is not None:
+                render_box = region.render.bbox
+                if (
+                    render_box.x1 < region.bbox.x1
+                    or render_box.y1 < region.bbox.y1
+                    or render_box.x2 > region.bbox.x2
+                    or render_box.y2 > region.bbox.y2
+                ):
+                    raise ValueError(
+                        f"region {region.id!r} render box escapes region bounds"
+                    )
+                for source_box in region.render.source_boxes:
+                    if (
+                        source_box.x1 < region.bbox.x1
+                        or source_box.y1 < region.bbox.y1
+                        or source_box.x2 > region.bbox.x2
+                        or source_box.y2 > region.bbox.y2
+                    ):
+                        raise ValueError(
+                            f"region {region.id!r} source box escapes region bounds"
+                        )
 
         parents = {region.id: region.parent_id for region in self.regions}
         for region_id in parents:
@@ -816,7 +950,7 @@ class PageDocument:
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "page_id": self.page_id,
             "pipeline": self.pipeline,
@@ -829,6 +963,9 @@ class PageDocument:
                 for name, provenance in sorted(self.stage_provenance.items())
             },
         }
+        if self.cleanup_base is not None:
+            result["cleanup_base"] = self.cleanup_base.to_dict()
+        return result
 
     def to_json(self) -> str:
         """Return canonical UTF-8-safe JSON suitable for hashes and caches."""
@@ -843,7 +980,8 @@ class PageDocument:
             value,
             frozenset({
                 "schema_version", "page_id", "pipeline", "pipeline_revision",
-                "source_hash", "image", "regions", "stage_provenance",
+                "source_hash", "image", "cleanup_base", "regions",
+                "stage_provenance",
             }),
             "page document",
         )
@@ -851,6 +989,7 @@ class PageDocument:
         _reject_unknown_fields(image, frozenset({"width", "height"}), "image")
         regions = _sequence(_default_if_null(value, "regions", ()))
         provenance = _mapping(_default_if_null(value, "stage_provenance", {}))
+        cleanup_base = value.get("cleanup_base")
         return cls(
             schema_version=_require_integer("schema version", value["schema_version"]),
             page_id=_require_non_empty("page id", value["page_id"]),
@@ -860,6 +999,8 @@ class PageDocument:
             source_hash=_require_non_empty("source hash", value["source_hash"]),
             width=_require_integer("image width", image["width"]),
             height=_require_integer("image height", image["height"]),
+            cleanup_base=(None if cleanup_base is None else
+                          ImageReference.from_dict(_mapping(cleanup_base))),
             regions=tuple(PageRegion.from_dict(_mapping(item)) for item in regions),
             stage_provenance={
                 _require_non_empty("stage name", name):

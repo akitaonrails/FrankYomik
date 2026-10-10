@@ -270,12 +270,20 @@ Document the policy decision tree, thresholds, tile/context geometry, seeds, mod
 
 ## Phase 5: consume the richer document in rendering
 
+**Implementation status:** complete in the production pipeline; release and
+visual acceptance remain part of the later release gate.
+
 ### Implementation
 
 - Make manga and webtoon rendering consume the normalized page document rather than detector-specific objects.
 - Use semantic kind, parent balloon, instance mask, reading direction, and source typography estimates to select placement and style.
 - Retain Frank's specialized English manga, vertical furigana, prose-gutter, and color-aware webtoon renderers. Add only Koharu mechanics that improve the reading output: stable layout inputs, mask-aware bounds, correct horizontal/vertical selection, Unicode shaping/font fallback where required, and deterministic typography provenance.
 - Preserve source image dimensions and the client-facing PNG behavior so lens signature matching and full-page replacement remain compatible.
+- Persist the exact cleaned RGB page and effective removal masks as verified,
+  content-addressed PNG objects. Metadata-only rerender starts from those
+  pixels and cannot invoke an earlier stage.
+- Use bundled OFL Comic Neue regular/bold for dialogue and SFX. Remove the
+  previously tracked restricted font assets from production packaging.
 
 ### Gate
 

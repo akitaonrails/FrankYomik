@@ -134,6 +134,11 @@ def render_english(*args, **kwargs):
     return implementation(*args, **kwargs)
 
 
+def render_english_artwork(*args, **kwargs):
+    from kindle.text_renderer import render_english_on_artwork as implementation
+    return implementation(*args, **kwargs)
+
+
 def render_furigana_vertical(*args, **kwargs):
     from kindle.text_renderer import render_furigana_vertical as implementation
     return implementation(*args, **kwargs)
@@ -179,6 +184,21 @@ def _webtoon_render(*args, **kwargs):
     return implementation(*args, **kwargs)
 
 
+def _webtoon_render_document_region(*args, **kwargs):
+    from webtoon.processor import render_document_region as implementation
+    return implementation(*args, **kwargs)
+
+
+def _webtoon_render_document_sfx(*args, **kwargs):
+    from webtoon.processor import render_document_sfx as implementation
+    return implementation(*args, **kwargs)
+
+
+def _webtoon_document_geometry(*args, **kwargs):
+    from webtoon.processor import document_render_geometry as implementation
+    return implementation(*args, **kwargs)
+
+
 def _webtoon_cleanup(page):
     from webtoon.processor import cleanup_page as implementation
     return implementation(page)
@@ -209,6 +229,7 @@ class PipelineDependencies:
     furigana_font_limits: Callable = compute_furigana_page_font_limits
     estimate_source_font: Callable = estimate_source_vertical_font_size
     render_translation: Callable = render_english
+    render_artwork_translation: Callable = render_english_artwork
     render_furigana: Callable = render_furigana_vertical
     pipeline_mode: Callable = _pipeline_mode
     config_value: Callable = _config_value
@@ -219,6 +240,9 @@ class PipelineDependencies:
     prepare_webtoon_translation: Callable = _webtoon_prepare_translation
     cleanup_webtoon: PageCleanupStage = _webtoon_cleanup
     render_webtoon: PageRenderStage = _webtoon_render
+    render_webtoon_document_region: Callable = _webtoon_render_document_region
+    render_webtoon_document_sfx: Callable = _webtoon_render_document_sfx
+    webtoon_document_geometry: Callable = _webtoon_document_geometry
     provenance_for: Callable[[str, str, str], Provenance] | None = None
     language_for: Callable[[str], str] | None = None
     cleanup_for: Callable[[str, str], str | None] | None = None

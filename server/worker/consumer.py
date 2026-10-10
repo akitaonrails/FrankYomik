@@ -349,6 +349,7 @@ class Consumer:
         # Resolve metadata payload for rerender jobs.
         cache_pipeline_for_lookup = pipeline if target_lang == "en" else f"{pipeline}_{target_lang}"
         metadata_payload = None
+        artifact_payloads = None
         if rerender_from_metadata and source_hash:
             metadata_payload = self._page_cache.load_metadata_by_hash(
                 cache_pipeline_for_lookup, source_hash,
@@ -370,6 +371,20 @@ class Consumer:
                 ))
                 self._rdb.xack(stream, self.consumer_group, msg_id)
                 return "skipped"
+            try:
+                artifact_payloads = self._page_cache.load_document_artifacts(
+                    metadata_payload,
+                )
+            except (FileNotFoundError, ValueError) as error:
+                log.error("Rerender artifacts invalid for job %s: %s", job_id, error)
+                self._store_result(ProcessingResult(
+                    job_id=job_id, status="failed",
+                    error="Rerender artifacts are missing or corrupted",
+                    pipeline=pipeline, source_hash=source_hash,
+                    pipeline_revision=pipeline_revision,
+                ))
+                self._rdb.xack(stream, self.consumer_group, msg_id)
+                return "skipped"
 
         # Process
         job = ProcessingJob(
@@ -383,6 +398,7 @@ class Consumer:
             source_hash=source_hash,
             rerender_from_metadata=rerender_from_metadata,
             metadata_payload=metadata_payload,
+            artifact_payloads=artifact_payloads,
             target_lang=target_lang,
             pipeline_revision=pipeline_revision,
         )
@@ -412,6 +428,7 @@ class Consumer:
                 source_image_bytes=image_bytes,
                 rendered_image_bytes=result.image_bytes,
                 metadata_payload=result.metadata_payload,
+                artifact_payloads=result.artifact_payloads,
                 title=title,
                 chapter=chapter,
                 page_number=page_number,
@@ -555,7 +572,8 @@ class Consumer:
                      source_hash: str,
                      source_image_bytes: bytes, rendered_image_bytes: bytes,
                      metadata_payload: dict, title: str, chapter: str,
-                     page_number: str, result: ProcessingResult) -> None:
+                     page_number: str, result: ProcessingResult,
+                     artifact_payloads: dict[str, bytes] | None = None) -> None:
         """Save processed output to robust cache v2 and update hashes."""
         if not source_hash:
             source_hash = hashlib.sha256(source_image_bytes).hexdigest()
@@ -566,6 +584,7 @@ class Consumer:
                 source_image_bytes=source_image_bytes,
                 rendered_image_bytes=rendered_image_bytes,
                 metadata_payload=metadata_payload,
+                artifact_payloads=artifact_payloads,
                 document_pipeline=document_pipeline,
                 title=title,
                 chapter=chapter,

@@ -31,6 +31,10 @@ The cleanup policy audit, frozen eight-case recomputation, FLUX.2 Klein model
 manifest, Strix runtime evidence, and Phase 4 promotion gates are recorded in
 [`phase4_cleanup_evaluation.md`](phase4_cleanup_evaluation.md).
 
+The renderer, font, PageDocument rerender, Flutter/WebView, extension lens, and
+real-Chromium gates are recorded in
+[`phase5_rendering_evaluation.md`](phase5_rendering_evaluation.md).
+
 ## What should be compared
 
 ### 1. Detection and segmentation

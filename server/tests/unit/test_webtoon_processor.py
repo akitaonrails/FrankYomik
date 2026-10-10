@@ -1027,7 +1027,7 @@ class TestRenderSfx:
         assert diff.sum() > 0, "SFX rendering should change some pixels"
 
     def test_renders_within_detection_bbox_area(self):
-        """Most pixel changes should be near the detection bbox."""
+        """Every changed pixel, including stroke and shadow, stays in bounds."""
         img = Image.new("RGB", (500, 500), (128, 128, 128))
         original = img.copy()
         orig_arr = np.array(original)
@@ -1038,17 +1038,10 @@ class TestRenderSfx:
         result = np.array(img)
         diff = np.abs(result.astype(int) - orig_arr.astype(int)).sum(axis=2) > 2
         if diff.any():
-            changed_ys = np.where(diff.any(axis=1))[0]
-            changed_xs = np.where(diff.any(axis=0))[0]
-            # Allow tolerance for stroke_width=3 (both sides) + shadow=2 + larger font
-            x1, y1, _x2, _y2 = det.bbox_rect
-            tolerance = 30
-            assert changed_ys.min() >= y1 - tolerance, (
-                f"SFX extends too far above: {changed_ys.min()} < {y1 - tolerance}"
-            )
-            assert changed_xs.min() >= x1 - tolerance, (
-                f"SFX extends too far left: {changed_xs.min()} < {x1 - tolerance}"
-            )
+            x1, y1, x2, y2 = det.bbox_rect
+            allowed = np.zeros(diff.shape, dtype=bool)
+            allowed[y1:y2, x1:x2] = True
+            assert not np.any(diff & ~allowed)
 
     def test_drop_shadow_present(self):
         """Drop shadow should create visible dark pixels offset from text."""
@@ -1071,6 +1064,41 @@ class TestRenderSfx:
         det = _make_det(50, 50, 150, 150, text="값")
         _render_sfx(img, det, "", original)
         # No crash = pass
+
+
+def test_webtoon_renderer_reports_forced_ellipsis():
+    image = Image.new("RGB", (120, 80), "white")
+    detection = _make_det(10, 10, 110, 45)
+    bubble = _make_bubble([detection], bbox=(5, 5, 115, 50))
+
+    outcome = _render_webtoon_english(
+        image, bubble, "many words that cannot all fit in this tiny region",
+        (10, 10, 110, 45), skip_bg_rect=True,
+    )
+
+    assert outcome["font_size"] == 8
+    assert outcome["line_count"] >= 1
+    assert outcome["fit_status"] == "ellipsized"
+    assert outcome["ellipsized"] is True
+
+
+def test_webtoon_renderer_reports_overflow_and_clips_long_word():
+    image = Image.new("RGB", (140, 90), (120, 120, 120))
+    before = np.asarray(image).copy()
+    detection = _make_det(30, 25, 100, 60)
+    bubble = _make_bubble([detection], bbox=(20, 15, 110, 70))
+
+    outcome = _render_webtoon_english(
+        image, bubble, "SUPERCALIFRAGILISTICEXPIALIDOCIOUS",
+        (30, 25, 100, 60), skip_bg_rect=True,
+    )
+
+    changed = np.any(np.asarray(image) != before, axis=2)
+    allowed = np.zeros(changed.shape, dtype=bool)
+    allowed[25:60, 30:100] = True
+    assert not np.any(changed & ~allowed)
+    assert outcome["fit_status"] == "overflow"
+    assert outcome["ellipsized"] is False
 
 
 class TestIsHangulText:

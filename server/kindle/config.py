@@ -52,9 +52,9 @@ def _resolve_font(path: str) -> str:
 
 FONT_JP = _resolve_font(_fonts.get("jp", "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"))
 FONT_JP_BOLD = _resolve_font(_fonts.get("jp_bold", "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc"))
-FONT_EN = _resolve_font(_fonts.get("en", "fonts/KomikaText-Regular.ttf"))
-FONT_EN_BOLD = _resolve_font(_fonts.get("en_bold", "fonts/KomikaText-Bold.ttf"))
-FONT_SFX = _resolve_font(_fonts.get("sfx", "fonts/BadaBoomBB.ttf"))
+FONT_EN = _resolve_font(_fonts.get("en", "fonts/ComicNeue-Regular.otf"))
+FONT_EN_BOLD = _resolve_font(_fonts.get("en_bold", "fonts/ComicNeue-Bold.otf"))
+FONT_SFX = _resolve_font(_fonts.get("sfx", "fonts/ComicNeue-Bold.otf"))
 
 # --- Bubble detection (RT-DETR-v2) ---
 BUBBLE_PADDING = 5            # Pixels to pad inside bubble for text rendering

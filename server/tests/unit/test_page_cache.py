@@ -98,6 +98,54 @@ def test_update_metadata_marks_stale(tmp_path):
     assert cache.load_output_image_by_hash("webtoon", source_hash) is None
 
 
+def test_metadata_update_only_reuses_verified_manifest_artifacts_atomically(tmp_path):
+    cache = PageCache(str(tmp_path), pipeline_revision="rev-a")
+    source = _png_like(31)
+    source_hash = cache._hash_bytes(source)
+    artifact = b"content-addressed-cleanup-base"
+    artifact_hash = cache._hash_bytes(artifact)
+    metadata = _page_document_payload("webtoon", source_hash, "rev-a")
+    metadata["cleanup_base"] = {
+        "reference": f"objects/{artifact_hash}", "encoding": "png",
+        "width": 1200, "height": 1800, "mode": "RGB",
+        "sha256": artifact_hash,
+    }
+    manifest = cache.store_page(
+        pipeline="webtoon", source_hash=source_hash,
+        source_image_bytes=source, rendered_image_bytes=_png_like(32),
+        metadata_payload=metadata, artifact_payloads={artifact_hash: artifact},
+    )
+    original_content_hash = manifest["content_hash"]
+
+    updated = cache.update_metadata_by_hash(
+        pipeline="webtoon", source_hash=source_hash, metadata_payload=metadata,
+    )
+    assert updated["artifact_object_sha256s"] == [artifact_hash]
+
+    foreign = b"foreign-cache-object"
+    foreign_hash, _ = cache._store_object(foreign)
+    introduced = json.loads(json.dumps(metadata))
+    introduced["cleanup_base"]["reference"] = f"objects/{foreign_hash}"
+    introduced["cleanup_base"]["sha256"] = foreign_hash
+    before = cache.load_manifest_by_hash("webtoon", source_hash)
+    with pytest.raises(ValueError, match="introduces unknown artifact"):
+        cache.update_metadata_by_hash(
+            pipeline="webtoon", source_hash=source_hash,
+            metadata_payload=introduced,
+        )
+    assert cache.load_manifest_by_hash("webtoon", source_hash) == before
+
+    with open(cache._object_path(artifact_hash), "wb") as artifact_file:
+        artifact_file.write(b"tampered")
+    with pytest.raises(ValueError, match="Object hash mismatch"):
+        cache.update_metadata_by_hash(
+            pipeline="webtoon", source_hash=source_hash,
+            metadata_payload=metadata,
+        )
+    assert cache.load_manifest_by_hash("webtoon", source_hash) == before
+    assert original_content_hash == before["content_hash"]
+
+
 def test_update_metadata_rejects_hash_conflict(tmp_path):
     cache = PageCache(str(tmp_path))
     src = _png_like(5)

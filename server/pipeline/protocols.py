@@ -82,6 +82,7 @@ class PipelineRuntime(Protocol):
     furigana_font_limits: Callable[..., Any]
     estimate_source_font: Callable[..., Any]
     render_translation: Callable[..., Any]
+    render_artwork_translation: Callable[..., Any]
     render_furigana: Callable[..., Any]
     pipeline_mode: Callable[..., Any]
     config_value: Callable[..., Any]
@@ -92,6 +93,9 @@ class PipelineRuntime(Protocol):
     prepare_webtoon_translation: Callable[[object], None]
     cleanup_webtoon: PageCleanupStage
     render_webtoon: PageRenderStage
+    render_webtoon_document_region: Callable[..., Any]
+    render_webtoon_document_sfx: Callable[..., Any]
+    webtoon_document_geometry: Callable[..., Any]
     provenance_for: Callable[[str, str, str], Provenance] | None
     language_for: Callable[[str], str] | None
     cleanup_for: Callable[[str, str], str | None] | None

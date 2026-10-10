@@ -9,9 +9,9 @@ ollama:
 fonts:
   jp: "fonts/genei_antique/GenEiAntiquePv5-M.ttf"
   jp_bold: "fonts/genei_antique/GenEiAntiquePv5-M.ttf"
-  en: "fonts/KomikaText-Regular.ttf"
-  en_bold: "fonts/KomikaText-Bold.ttf"
-  sfx: "fonts/BadaBoomBB.ttf"
+  en: "fonts/ComicNeue-Regular.otf"
+  en_bold: "fonts/ComicNeue-Bold.otf"
+  sfx: "fonts/ComicNeue-Bold.otf"
 
 ocr:
   device: "cuda"  # ROCm exposes CUDA API; rocm/pytorch uses torch.cuda

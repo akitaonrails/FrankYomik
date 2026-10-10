@@ -34,7 +34,7 @@ _SLUG_RE = re.compile(r"[^a-z0-9\-]")
 _PATH_COMPONENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 
-CACHE_MANIFEST_SCHEMA_VERSION = 3
+CACHE_MANIFEST_SCHEMA_VERSION = 4
 METADATA_SCHEMA_VERSION = PAGE_DOCUMENT_SCHEMA_VERSION
 
 
@@ -164,7 +164,7 @@ class PageCache:
             schema_version = manifest.get("schema_version")
             if (not isinstance(schema_version, int)
                     or isinstance(schema_version, bool)
-                    or schema_version not in {2, CACHE_MANIFEST_SCHEMA_VERSION}):
+                    or schema_version not in {2, 3, CACHE_MANIFEST_SCHEMA_VERSION}):
                 return None
             if (manifest.get("pipeline") != pipeline
                     or manifest.get("source_hash") != source_hash):
@@ -215,10 +215,37 @@ class PageCache:
 
     def load_object(self, sha256_hex: str) -> bytes | None:
         """Load a raw object by its SHA256 hex hash, without needing a manifest."""
+        if not _SHA256_RE.fullmatch(sha256_hex or ""):
+            return None
         try:
             return self._read_object_verified(sha256_hex)
         except (FileNotFoundError, ValueError):
             return None
+
+    @staticmethod
+    def _referenced_object_hashes(payload: Any) -> set[str]:
+        hashes: set[str] = set()
+        if isinstance(payload, dict):
+            reference = payload.get("reference")
+            digest = payload.get("sha256")
+            if isinstance(reference, str) and reference.startswith("objects/"):
+                if (not isinstance(digest, str)
+                        or reference != f"objects/{digest}"
+                        or not _SHA256_RE.fullmatch(digest)):
+                    raise ValueError("invalid content-addressed artifact reference")
+                hashes.add(digest)
+            for value in payload.values():
+                hashes.update(PageCache._referenced_object_hashes(value))
+        elif isinstance(payload, list):
+            for value in payload:
+                hashes.update(PageCache._referenced_object_hashes(value))
+        return hashes
+
+    def load_document_artifacts(self, metadata_payload: Any) -> dict[str, bytes]:
+        result: dict[str, bytes] = {}
+        for digest in self._referenced_object_hashes(metadata_payload):
+            result[digest] = self._read_object_verified(digest)
+        return result
 
     def load_source_image_by_hash(self, pipeline: str,
                                   source_hash: str) -> bytes | None:
@@ -332,6 +359,7 @@ class PageCache:
         source_image_bytes: bytes,
         rendered_image_bytes: bytes,
         metadata_payload: Any,
+        artifact_payloads: dict[str, bytes] | None = None,
         document_pipeline: str | None = None,
         title: str = "",
         chapter: str = "",
@@ -348,6 +376,15 @@ class PageCache:
             metadata_payload, pipeline=document_pipeline or pipeline,
             source_hash=source_hash)
         metadata_bytes = self._canonical_json_bytes(metadata_payload)
+        referenced_hashes = self._referenced_object_hashes(metadata_payload)
+        supplied = artifact_payloads or {}
+        for digest, payload in supplied.items():
+            if not _SHA256_RE.fullmatch(digest) or self._hash_bytes(payload) != digest:
+                raise ValueError("artifact payload hash mismatch")
+            self._store_object(payload)
+        if not referenced_hashes.issubset(supplied):
+            missing = sorted(referenced_hashes - set(supplied))
+            raise ValueError(f"missing referenced artifact payload: {missing[0]}")
         source_obj_sha, source_obj_size = self._store_object(source_image_bytes)
         image_obj_sha, image_obj_size = self._store_object(rendered_image_bytes)
         meta_obj_sha, meta_obj_size = self._store_object(metadata_bytes)
@@ -372,6 +409,7 @@ class PageCache:
             "image_bytes": image_obj_size,
             "metadata_object_sha256": meta_obj_sha,
             "metadata_bytes": meta_obj_size,
+            "artifact_object_sha256s": sorted(referenced_hashes),
             "content_hash": content_hash,
             "render_hash": render_hash,
             "image_stale": False,
@@ -411,11 +449,25 @@ class PageCache:
             metadata_payload, pipeline=document_pipeline or pipeline,
             source_hash=source_hash)
         metadata_bytes = self._canonical_json_bytes(metadata_payload)
+        referenced_hashes = self._referenced_object_hashes(metadata_payload)
+        existing_artifacts = manifest.get("artifact_object_sha256s", [])
+        if (not isinstance(existing_artifacts, list)
+                or not all(isinstance(item, str) for item in existing_artifacts)):
+            raise ValueError("invalid cached artifact manifest")
+        permitted_artifacts = set(existing_artifacts)
+        introduced = referenced_hashes - permitted_artifacts
+        if introduced:
+            raise ValueError(
+                f"metadata introduces unknown artifact: {sorted(introduced)[0]}"
+            )
+        for digest in referenced_hashes:
+            self._read_object_verified(digest)
         meta_obj_sha, meta_obj_size = self._store_object(metadata_bytes)
         manifest["schema_version"] = CACHE_MANIFEST_SCHEMA_VERSION
         manifest["pipeline_revision"] = self.pipeline_revision
         manifest["metadata_object_sha256"] = meta_obj_sha
         manifest["metadata_bytes"] = meta_obj_size
+        manifest["artifact_object_sha256s"] = sorted(permitted_artifacts)
         manifest["content_hash"] = self._hash_bytes(metadata_bytes)
         manifest["render_hash"] = self._hash_bytes(
             f"v2|{manifest['content_hash']}|{manifest['image_object_sha256']}".encode())

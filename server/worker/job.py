@@ -6,8 +6,10 @@ import hashlib
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
+
+import numpy as np
 
 from pipeline.adapters.current import (
     PipelineDependencies,
@@ -19,6 +21,9 @@ from pipeline.adapters.current import (
     _webtoon_ocr,
     _webtoon_prepare_translation,
     _webtoon_render,
+    _webtoon_render_document_region,
+    _webtoon_render_document_sfx,
+    _webtoon_document_geometry,
     _webtoon_translate,
     analyze_book_layout,
     cleanup_manga_page,
@@ -38,18 +43,21 @@ from pipeline.adapters.current import (
     render_book_furigana,
     render_cleaned_manga_page,
     render_english,
+    render_english_artwork,
     render_furigana_vertical,
     transform_furigana,
     translate,
     translate_page,
 )
 from pipeline.current_backend import cleanup_for, language_for, provenance_for
+from pipeline.artifacts import resolve_artifact, store_image_artifact, store_mask_artifact
 from pipeline.detection import SemanticDetection, validate_detection_collection
 from pipeline.document import (
     PAGE_DOCUMENT_SCHEMA_VERSION,
     VALID_PIPELINES,
     BoundingBox,
     CleanupMetadata,
+    ImageReference,
     MaskReference,
     OcrAlternative,
     OcrResult,
@@ -102,6 +110,7 @@ def production_dependencies() -> PipelineDependencies:
         furigana_font_limits=compute_furigana_page_font_limits,
         estimate_source_font=estimate_source_vertical_font_size,
         render_translation=render_english,
+        render_artwork_translation=render_english_artwork,
         render_furigana=render_furigana_vertical,
         pipeline_mode=_pipeline_mode,
         config_value=_config_value,
@@ -112,6 +121,9 @@ def production_dependencies() -> PipelineDependencies:
         prepare_webtoon_translation=_webtoon_prepare_translation,
         cleanup_webtoon=_webtoon_cleanup,
         render_webtoon=_webtoon_render,
+        render_webtoon_document_region=_webtoon_render_document_region,
+        render_webtoon_document_sfx=_webtoon_render_document_sfx,
+        webtoon_document_geometry=_webtoon_document_geometry,
         provenance_for=provenance_for,
         language_for=language_for,
         cleanup_for=cleanup_for,
@@ -131,6 +143,7 @@ class ProcessingJob:
     source_hash: str = ""
     rerender_from_metadata: bool = False
     metadata_payload: dict[str, Any] | None = None
+    artifact_payloads: dict[str, bytes] | None = None
     target_lang: str = "en"
     pipeline_revision: str = DEFAULT_PIPELINE_REVISION
 
@@ -148,6 +161,7 @@ class ProcessingResult:
     content_hash: str = ""
     render_hash: str = ""
     metadata_payload: dict[str, Any] | None = None
+    artifact_payloads: dict[str, bytes] | None = None
     pipeline_revision: str = DEFAULT_PIPELINE_REVISION
     # "prose" when the page is typeset text rather than artwork. The manga
     # pipelines report it so a client can tell that a book needs book_furigana
@@ -350,11 +364,16 @@ def _build_region(
     confidence: float | None = None,
     cleanup_method: str | None = None,
     vertical: bool = False,
+    render_font_size: int | None = None,
+    render_bbox: tuple[int, int, int, int] | list[int] | None = None,
+    render_orientation: str | None = None,
+    render_source_boxes: tuple[BoundingBox, ...] = (),
     region_id: str | None = None,
     parent_id: str | None = None,
     detector_label: str | None = None,
     polygon: Polygon | None = None,
     mask: MaskReference | None = None,
+    cleanup_mask: MaskReference | None = None,
     ocr_confidence: float | None = None,
     ocr_alternatives: tuple[OcrAlternative, ...] = (),
     ocr_routing_reason: str | None = None,
@@ -411,6 +430,7 @@ def _build_region(
         cleanup = CleanupMetadata(
             cleanup_method,
             selected_cleanup_provenance,
+            cleanup_mask,
         )
 
     return PageRegion(
@@ -439,9 +459,13 @@ def _build_region(
         transform=transform,
         cleanup=cleanup,
         render=RenderMetadata(
-            bbox=box,
+            bbox=(box if render_bbox is None else
+                  BoundingBox.from_value(render_bbox)),
             provenance=render_provenance,
+            font_size=render_font_size,
             vertical=vertical,
+            orientation=render_orientation,
+            source_boxes=render_source_boxes,
         ),
         source_font_size=source_font_size,
         user=UserEdit(),
@@ -464,15 +488,16 @@ def _semantic_region_ids(
 def _semantic_mask_reference(
     region_id: str, detection: SemanticDetection, width: int, height: int,
     encoding: str = "connected-component-v1",
+    artifacts: dict[str, bytes] | None = None,
 ) -> MaskReference | None:
     if detection.mask is None:
         return None
-    return MaskReference(
-        reference=f"derived://source/{region_id}",
-        encoding=encoding,
-        width=width,
-        height=height,
-    )
+    if artifacts is None:
+        return MaskReference(
+            reference=f"derived://source/{region_id}", encoding=encoding,
+            width=width, height=height,
+        )
+    return store_mask_artifact(detection.mask, artifacts)
 
 
 def _append_unprocessed_semantic_regions(
@@ -484,6 +509,7 @@ def _append_unprocessed_semantic_regions(
     height: int,
     provenance: Provenance,
     mask_encoding: str = "connected-component-v1",
+    artifacts: dict[str, bytes] | None = None,
 ) -> None:
     """Persist geometry which current OCR/render stages do not yet consume."""
     used_orders = {region.reading_order for region in regions}
@@ -505,6 +531,7 @@ def _append_unprocessed_semantic_regions(
             mask=_semantic_mask_reference(
                 ids[detection.id], detection, width, height,
                 mask_encoding,
+                artifacts,
             ),
             parent_id=(None if detection.parent_id is None
                        else ids[detection.parent_id]),
@@ -546,6 +573,7 @@ def _build_metadata_payload(
     img_w: int,
     img_h: int,
     stage_provenance: dict[str, Provenance],
+    cleanup_base: ImageReference | None = None,
 ) -> dict[str, Any]:
     """Build and validate the PageDocument returned with every result."""
     return PageDocument(
@@ -556,9 +584,54 @@ def _build_metadata_payload(
         source_hash=_job_source_hash(job),
         width=img_w,
         height=img_h,
+        cleanup_base=cleanup_base,
         regions=tuple(regions),
         stage_provenance=stage_provenance,
     ).to_dict()
+
+
+def _cleanup_mask_reference(
+    mask: Any,
+    width: int,
+    height: int,
+    artifacts: dict[str, bytes],
+) -> MaskReference:
+    selected = (np.zeros((height, width), dtype=np.uint8)
+                if mask is None else mask)
+    return store_mask_artifact(selected, artifacts)
+
+
+def _validate_render_artifacts(
+    document: PageDocument,
+    source: Any,
+    cleanup_base: Any,
+    artifacts: dict[str, bytes],
+) -> None:
+    if source.mode != "RGB" or cleanup_base.mode != "RGB":
+        raise ValueError("render images must use RGB mode")
+    if source.size != (document.width, document.height) or cleanup_base.size != source.size:
+        raise ValueError("render artifact dimensions do not match PageDocument")
+    union = np.zeros((document.height, document.width), dtype=bool)
+    for region in document.regions:
+        for reference, is_cleanup in (
+            (region.mask, False),
+            (None if region.cleanup is None else region.cleanup.mask, True),
+        ):
+            if reference is None:
+                continue
+            mask = np.asarray(resolve_artifact(reference, artifacts, mode="L")) > 0
+            x1, y1, x2, y2 = region.bbox.as_list()
+            outside = mask.copy()
+            outside[y1:y2, x1:x2] = False
+            if np.any(outside):
+                raise ValueError(f"region {region.id!r} mask escapes its bounds")
+            if is_cleanup:
+                union |= mask
+    changed = np.any(
+        np.asarray(source.convert("RGB")) != np.asarray(cleanup_base), axis=2,
+    )
+    if np.any(changed & ~union):
+        raise ValueError("cleanup base changes pixels outside cleanup masks")
 
 
 def _rerender_from_metadata(job: ProcessingJob,
@@ -608,10 +681,20 @@ def _rerender_from_metadata(job: ProcessingJob,
 
     _report(progress_cb, "rerender", "preparing image", 25)
     img_cv, img_pil = deps.decode_image(job.image_bytes)
-    img_out = img_pil.copy()
+    using_cleanup_base = document is not None and document.cleanup_base is not None
+    if using_cleanup_base:
+        img_out = resolve_artifact(
+            document.cleanup_base, job.artifact_payloads or {}, mode="RGB",
+        )
+    else:
+        img_out = img_pil.copy()
     img_w, img_h = img_out.width, img_out.height
     if document is not None and (document.width, document.height) != (img_w, img_h):
         raise ValueError("metadata image dimensions do not match source image")
+    if using_cleanup_base and document is not None:
+        _validate_render_artifacts(
+            document, img_pil, img_out, job.artifact_payloads or {},
+        )
 
     _report(progress_cb, "rerender", "drawing edits", 50)
 
@@ -628,7 +711,17 @@ def _rerender_from_metadata(job: ProcessingJob,
 
     # Pre-process regions into a renderable list
     render_items: list[dict] = []
-    for ri, region in enumerate(regions):
+    document_regions = (
+        {} if document is None else {item.id: item for item in document.regions}
+    )
+    ordered_regions = sorted(
+        regions,
+        key=lambda item: (
+            item.get("reading_order", 1 << 30) if isinstance(item, dict)
+            else 1 << 30
+        ),
+    )
+    for ri, region in enumerate(ordered_regions):
         if not isinstance(region, dict):
             continue
         bbox = _bbox_from_region(region, img_w, img_h)
@@ -640,10 +733,39 @@ def _rerender_from_metadata(job: ProcessingJob,
         kind = str(region.get("kind") or "bubble")
 
         mask = None
-        if job.pipeline.startswith("manga_") and kind != "artwork_text":
+        vertical = job.pipeline == "manga_furigana"
+        source_boxes: tuple[tuple[int, int, int, int], ...] = ()
+        container_bbox = bbox
+        cleanup_method = None
+        if using_cleanup_base and document is not None:
+            typed_region = document_regions[str(region.get("id"))]
+            container_region = typed_region
+            if typed_region.parent_id is not None:
+                container_region = document_regions[typed_region.parent_id]
+            container_bbox = tuple(container_region.bbox.as_list())
+            if typed_region.render is not None:
+                bbox = tuple(typed_region.render.bbox.as_list())
+                vertical = typed_region.render.vertical
+                source_boxes = tuple(
+                    tuple(item.as_list())
+                    for item in typed_region.render.source_boxes
+                )
+            mask_reference = typed_region.mask
+            if mask_reference is None and typed_region.parent_id is not None:
+                mask_reference = document_regions[typed_region.parent_id].mask
+            if mask_reference is not None:
+                mask = resolve_artifact(
+                    mask_reference, job.artifact_payloads or {}, mode="L",
+                )
+                mask = np.asarray(mask)
+            cleanup_method = (
+                None if typed_region.cleanup is None
+                else typed_region.cleanup.method
+            )
+        elif job.pipeline.startswith("manga_") and kind != "artwork_text":
             mask = deps.extract_manga_mask(img_cv, bbox)
 
-        if job.pipeline == "manga_furigana":
+        if vertical:
             if manual:
                 transformed_val = deps.annotate(manual)
             if not isinstance(transformed_val, list):
@@ -658,7 +780,8 @@ def _rerender_from_metadata(job: ProcessingJob,
                 )
             render_items.append({"bbox": bbox, "mask": mask, "kind": kind,
                                  "mode": "furigana", "value": transformed_val,
-                                 "source_font_size": source_font_size})
+                                 "source_font_size": source_font_size,
+                                 "region_id": region.get("id")})
         else:
             text = manual
             if not text:
@@ -671,14 +794,24 @@ def _rerender_from_metadata(job: ProcessingJob,
             if not text:
                 continue
             render_items.append({"bbox": bbox, "mask": mask, "kind": kind,
-                                 "mode": "translate", "value": text})
+                                 "mode": "translate", "value": text,
+                                 "region_id": region.get("id"),
+                                 "cleanup_method": cleanup_method})
+            if using_cleanup_base and document is not None:
+                render_items[-1]["font_size"] = (
+                    None if typed_region.render is None
+                    else typed_region.render.font_size
+                )
+                render_items[-1]["source_boxes"] = source_boxes
+                render_items[-1]["container_bbox"] = container_bbox
 
     # Pass 1: Clear
-    for item in render_items:
-        if item["kind"] == "artwork_text":
-            deps.clear_region(img_out, item["bbox"])
-        else:
-            deps.clear_strokes(img_out, item["bbox"], mask=item["mask"])
+    if not using_cleanup_base:
+        for item in render_items:
+            if item["kind"] == "artwork_text":
+                deps.clear_region(img_out, item["bbox"])
+            else:
+                deps.clear_strokes(img_out, item["bbox"], mask=item["mask"])
 
     # Pass 2: Render
     page_font_cap, source_outlier_threshold, page_font_floor = (
@@ -690,9 +823,11 @@ def _rerender_from_metadata(job: ProcessingJob,
         ])
     )
     applied = 0
+    render_outcomes: dict[str, dict[str, object]] = {}
     for item in render_items:
+        outcome = None
         if item["mode"] == "furigana":
-            deps.render_furigana(
+            outcome = deps.render_furigana(
                 img_out, item["bbox"], item["value"],
                 mask=item["mask"],
                 source_font_size=item.get("source_font_size"),
@@ -702,10 +837,59 @@ def _rerender_from_metadata(job: ProcessingJob,
                 layout_img=img_pil,
             )
         else:
-            deps.render_translation(
-                img_out, item["bbox"], item["value"],
-                base_font_size=base_font_size, mask=item["mask"])
+            if job.pipeline == "webtoon":
+                if item["kind"] == "sfx":
+                    outcome = deps.render_webtoon_document_sfx(
+                        img_out, img_pil, item["bbox"], item["value"],
+                    )
+                else:
+                    outcome = deps.render_webtoon_document_region(
+                        img_out, img_pil, item["bbox"], item["value"],
+                        mask=item["mask"],
+                        source_boxes=item.get("source_boxes", ()),
+                        container_bbox=item.get("container_bbox"),
+                    )
+            else:
+                if item["kind"] == "artwork_text":
+                    outcome = deps.render_artwork_translation(
+                        img_out, item["bbox"], item["value"],
+                        base_font_size=item.get("font_size") or base_font_size,
+                        inpainted=True,
+                    )
+                else:
+                    outcome = deps.render_translation(
+                        img_out, item["bbox"], item["value"],
+                        base_font_size=item.get("font_size") or base_font_size,
+                        mask=item["mask"])
+        region_id = item.get("region_id")
+        if isinstance(region_id, str) and isinstance(outcome, dict):
+            render_outcomes[region_id] = outcome
+            if outcome.get("fit_status") != "fit":
+                log.warning(
+                    "Render fit for region %s: %s", region_id,
+                    outcome.get("fit_status"),
+                )
         applied += 1
+
+    if document is not None and render_outcomes:
+        updated_regions = []
+        for region in document.regions:
+            outcome = render_outcomes.get(region.id)
+            if outcome is None or region.render is None:
+                updated_regions.append(region)
+                continue
+            updated_regions.append(replace(
+                region,
+                render=replace(
+                    region.render,
+                    font_size=int(outcome["font_size"]),
+                    line_count=int(outcome["line_count"]),
+                    fit_status=str(outcome["fit_status"]),
+                    ellipsized=bool(outcome.get("ellipsized", False)),
+                ),
+            ))
+        document = replace(document, regions=tuple(updated_regions))
+        payload = document.to_dict()
 
     _report(progress_cb, "rerender", "encoding", 95)
     output_bytes = deps.encode_image(img_out)
@@ -717,6 +901,7 @@ def _rerender_from_metadata(job: ProcessingJob,
         pipeline=job.pipeline,
         source_hash=job.source_hash,
         metadata_payload=payload,
+        artifact_payloads=job.artifact_payloads,
     )
 
 
@@ -762,8 +947,8 @@ def _process_manga(job: ProcessingJob,
         raw = page.bubbles_raw[idx] if idx < len(page.bubbles_raw) else {}
         semantic_id = raw.get("semantic_id") if isinstance(raw, dict) else None
         semantic = semantic_by_id.get(semantic_id)
-        kind = (semantic.kind if semantic is not None else
-                "artwork_text" if br.is_artwork_text else "bubble")
+        kind = ("artwork_text" if br.is_artwork_text else
+                semantic.kind if semantic is not None else "bubble")
         region_id = (semantic_ids[semantic.id] if semantic is not None else
                      _next_region_id(
                          page_id, kind, BoundingBox.from_value(br.bbox),
@@ -811,8 +996,10 @@ def _process_manga(job: ProcessingJob,
     _report(progress_cb, "cleanup", "", 92)
     deps.cleanup_manga(page, mode)
 
-    _report(progress_cb, "rendering", "", 95)
-    output_bytes = deps.render_manga(page, mode)
+    artifact_payloads: dict[str, bytes] = {}
+    cleaned_base = page.output_img.copy()
+    cleanup_base = store_image_artifact(cleaned_base, artifact_payloads)
+
     bubble_count = sum(1 for br in page.bubble_results
                        if br.transformed is not None)
 
@@ -876,7 +1063,17 @@ def _process_manga(job: ProcessingJob,
             confidence=None if confidence is None else float(confidence),
             cleanup_method=(getattr(br, "cleanup_method", None)
                             or _cleanup_method(deps, job.pipeline, kind)),
+            cleanup_mask=_cleanup_mask_reference(
+                getattr(br, "cleanup_mask", None), img_w, img_h,
+                artifact_payloads,
+            ),
             vertical=mode_name == "furigana",
+            render_font_size=(
+                None if mode_name == "furigana" else
+                page.render_plan.font_sizes.get(
+                    idx, page.render_plan.base_font_size,
+                )
+            ),
             region_id=region_id,
             parent_id=(None if semantic is None or semantic.parent_id is None
                        else semantic_ids[semantic.parent_id]),
@@ -884,6 +1081,7 @@ def _process_manga(job: ProcessingJob,
             polygon=(None if semantic is None else semantic.polygon),
             mask=(None if semantic is None else _semantic_mask_reference(
                 semantic_ids[semantic.id], semantic, img_w, img_h,
+                artifacts=artifact_payloads,
             )),
             ocr_confidence=getattr(br, "ocr_confidence", None),
             ocr_alternatives=getattr(br, "ocr_alternatives", ()),
@@ -898,29 +1096,46 @@ def _process_manga(job: ProcessingJob,
         img_w,
         img_h,
         detection_provenance,
+        artifacts=artifact_payloads,
     )
+
+    metadata_payload = _build_metadata_payload(
+        job, regions, img_w, img_h,
+        {
+            "detection": detection_provenance,
+            "ocr": ocr_provenance,
+            ("transform" if mode_name == "furigana"
+             else "translation"): (
+                transform_provenance if mode_name == "furigana"
+                else translation_provenance
+            ),
+            "cleanup": cleanup_provenance,
+            "render": render_provenance,
+        },
+        cleanup_base,
+    )
+    _report(progress_cb, "rendering", "", 95)
+    rendered = _rerender_from_metadata(
+        replace(
+            job, rerender_from_metadata=True,
+            metadata_payload=metadata_payload,
+            artifact_payloads=artifact_payloads,
+        ),
+        None,
+        deps,
+    )
+    if rendered.status != "completed" or rendered.image_bytes is None:
+        raise RuntimeError(rendered.error or "document rendering failed")
 
     return ProcessingResult(
         job_id=job.job_id,
         status="completed",
-        image_bytes=output_bytes,
+        image_bytes=rendered.image_bytes,
         bubble_count=bubble_count,
         pipeline=job.pipeline,
         source_hash=job.source_hash,
-        metadata_payload=_build_metadata_payload(
-            job, regions, img_w, img_h,
-            {
-                "detection": detection_provenance,
-                "ocr": ocr_provenance,
-                ("transform" if mode_name == "furigana"
-                 else "translation"): (
-                    transform_provenance if mode_name == "furigana"
-                    else translation_provenance
-                ),
-                "cleanup": cleanup_provenance,
-                "render": render_provenance,
-            },
-        ),
+        metadata_payload=rendered.metadata_payload,
+        artifact_payloads=artifact_payloads,
         cacheable=not any(
             (getattr(item, "ocr_degraded", False)
              or getattr(item, "cleanup_degraded", False))
@@ -1138,8 +1353,10 @@ def _process_webtoon(job: ProcessingJob,
     _report(progress_cb, "cleanup", "", 80)
     deps.cleanup_webtoon(page)
 
-    _report(progress_cb, "rendering", "", 90)
-    output_bytes = deps.render_webtoon(page)
+    artifact_payloads: dict[str, bytes] = {}
+    cleaned_base = page.output_img.copy()
+    cleanup_base = store_image_artifact(cleaned_base, artifact_payloads)
+
     bubble_count = sum(1 for r in page.regions if r.english)
 
     img_w, img_h = page.img_pil.width, page.img_pil.height
@@ -1161,6 +1378,7 @@ def _process_webtoon(job: ProcessingJob,
 
     for idx, region in enumerate(page.regions):
         bubble = region.bubble
+        render_bbox, source_boxes = deps.webtoon_document_geometry(page, region)
         region_id, reading_order, kind, semantic = webtoon_region_plans[idx]
         is_first_semantic_region = semantic is not None
         if is_first_semantic_region:
@@ -1187,6 +1405,15 @@ def _process_webtoon(job: ProcessingJob,
             target_language=job.target_lang,
             cleanup_method=(getattr(bubble, "cleanup_method", None)
                             or _cleanup_method(deps, job.pipeline, "bubble")),
+            cleanup_mask=_cleanup_mask_reference(
+                getattr(bubble, "cleanup_mask", None), img_w, img_h,
+                artifact_payloads,
+            ),
+            render_bbox=render_bbox,
+            render_orientation="horizontal",
+            render_source_boxes=tuple(
+                BoundingBox.from_value(item) for item in source_boxes
+            ),
             region_id=region_id,
             detector_label=(semantic.raw_label
                             if is_first_semantic_region else None),
@@ -1194,6 +1421,7 @@ def _process_webtoon(job: ProcessingJob,
             mask=(_semantic_mask_reference(
                 semantic_ids[semantic.id], semantic, img_w, img_h,
                 "webtoon-boundary-v1",
+                artifact_payloads,
             ) if is_first_semantic_region else None),
         ))
 
@@ -1224,6 +1452,9 @@ def _process_webtoon(job: ProcessingJob,
             target_language=(job.target_lang
                              if page.sfx_translations[idx] else None),
             cleanup_method=_cleanup_method(deps, job.pipeline, "sfx"),
+            cleanup_mask=_cleanup_mask_reference(
+                None, img_w, img_h, artifact_payloads,
+            ),
             region_id=region_id,
             parent_id=(None if semantic is None or semantic.parent_id is None
                        else semantic_ids[semantic.parent_id]),
@@ -1240,25 +1471,42 @@ def _process_webtoon(job: ProcessingJob,
         img_h,
         detection_provenance,
         "webtoon-boundary-v1",
+        artifact_payloads,
     )
+
+    metadata_payload = _build_metadata_payload(
+        job, regions, img_w, img_h,
+        {
+            "detection": detection_provenance,
+            "ocr": ocr_provenance,
+            "translation": translation_provenance,
+            "cleanup": cleanup_provenance,
+            "render": render_provenance,
+        },
+        cleanup_base,
+    )
+    _report(progress_cb, "rendering", "", 90)
+    rendered = _rerender_from_metadata(
+        replace(
+            job, rerender_from_metadata=True,
+            metadata_payload=metadata_payload,
+            artifact_payloads=artifact_payloads,
+        ),
+        None,
+        deps,
+    )
+    if rendered.status != "completed" or rendered.image_bytes is None:
+        raise RuntimeError(rendered.error or "document rendering failed")
 
     return ProcessingResult(
         job_id=job.job_id,
         status="completed",
-        image_bytes=output_bytes,
+        image_bytes=rendered.image_bytes,
         bubble_count=bubble_count,
         pipeline=job.pipeline,
         source_hash=job.source_hash,
-        metadata_payload=_build_metadata_payload(
-            job, regions, img_w, img_h,
-            {
-                "detection": detection_provenance,
-                "ocr": ocr_provenance,
-                "translation": translation_provenance,
-                "cleanup": cleanup_provenance,
-                "render": render_provenance,
-            },
-        ),
+        metadata_payload=rendered.metadata_payload,
+        artifact_payloads=artifact_payloads,
         cacheable=not any(
             getattr(region.bubble, "cleanup_degraded", False)
             for region in page.regions

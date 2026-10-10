@@ -541,6 +541,7 @@ def _clear_bubble_text(img: Image.Image, bubble: WebtoonBubble) -> None:
     pad = 18
     mask = bubble.bubble_mask
     img_w, img_h = img.width, img.height
+    effective = np.zeros((img_h, img_w), dtype=np.uint8)
 
     # Phase 1: clear the text region.
     # With mask: clip clearing to bubble boundary (preserves artwork).
@@ -548,20 +549,29 @@ def _clear_bubble_text(img: Image.Image, bubble: WebtoonBubble) -> None:
     text_bbox = _text_region_bbox(bubble, img_w, img_h)
     if mask is not None:
         _clear_with_mask(img, text_bbox, mask, bg_color)
+        x1, y1, x2, y2 = text_bbox
+        effective[y1:y2, x1:x2] = np.where(
+            mask[y1:y2, x1:x2] > 0, 255, 0,
+        )
     else:
         clear_text_in_region(img, text_bbox, fill_color=bg_color)
+        x1, y1, x2, y2 = text_bbox
+        effective[y1:y2, x1:x2] = 255
 
     # Phase 2: clear EVERY detection with rectangle + local bg color.
     for det in bubble.text_regions:
         x1, y1, x2, y2 = det.bbox_rect
         det_bbox = (
-            max(0, x1 - pad),
-            max(0, y1 - pad),
-            min(img_w, x2 + pad),
-            min(img_h, y2 + pad),
+            max(bubble.bbox[0], x1 - pad),
+            max(bubble.bbox[1], y1 - pad),
+            min(bubble.bbox[2], x2 + pad),
+            min(bubble.bbox[3], y2 + pad),
         )
         local_bg = _sample_local_bg(img, det.bbox_rect)
         clear_text_in_region(img, det_bbox, fill_color=local_bg)
+        dx1, dy1, dx2, dy2 = det_bbox
+        effective[dy1:dy2, dx1:dx2] = 255
+    bubble.cleanup_mask = effective
 
 
 def _sample_local_bg(img: Image.Image,
@@ -866,7 +876,7 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
                             skip_bg_rect: bool = False,
                             color_ref_img: Image.Image | None = None,
                             detections: list[TextDetection] | None = None,
-                            ) -> None:
+                            ) -> dict[str, object]:
     """Render English text within the text-region bbox.
 
     Uses render_bbox (tight around OCR detections) instead of bubble.bbox
@@ -919,7 +929,8 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     bh = by2 - by1
 
     if bw < 10 or bh < 10:
-        return
+        return {"font_size": 8, "line_count": 1, "fit_status": "overflow",
+                "ellipsized": False}
 
     # Find largest font size that fits within the render bbox.
     # Inner margin keeps text comfortably inside balloon boundaries —
@@ -937,6 +948,8 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
 
     font = None
     lines: list[str] = []
+    ellipsized = False
+    overflow = False
 
     chosen_size = 8
     for size in range(target_font_size, 7, -1):
@@ -946,7 +959,11 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
             continue
         wrapped = _wrap_text(text, f, fit_w)
         total_h = _total_block_height(f, wrapped, font_size=size)
-        if total_h <= fit_h:
+        max_line_w = max(
+            (f.getbbox(line)[2] - f.getbbox(line)[0] for line in wrapped),
+            default=0,
+        )
+        if total_h <= fit_h and max_line_w <= fit_w:
             font = f
             lines = wrapped
             chosen_size = size
@@ -957,18 +974,27 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
         try:
             font = ImageFont.truetype(FONT_KO, 8)
         except OSError:
-            return
+            return {"font_size": 8, "line_count": 1,
+                    "fit_status": "overflow", "ellipsized": False}
         lines = _wrap_text(text, font, fit_w)
         # If still too tall, truncate lines to fit
         gap = _line_spacing(chosen_size)
         total_h = _total_block_height(font, lines, font_size=chosen_size)
+        max_line_w = max(
+            (font.getbbox(line)[2] - font.getbbox(line)[0] for line in lines),
+            default=0,
+        )
+        overflow = total_h > fit_h or max_line_w > fit_w
         if total_h > fit_h and len(lines) > 1:
             max_lines = max(1, fit_h // (_line_height(font, "X") + gap))
             lines = lines[:max_lines]
             lines[-1] = lines[-1].rstrip() + "..."
+            ellipsized = True
+            overflow = False
 
     if not lines:
-        return
+        return {"font_size": chosen_size, "line_count": 1,
+                "fit_status": "overflow", "ellipsized": False}
 
     # Calculate total text block height and center within render bbox.
     # Account for the font's top bearing: getbbox returns (left, top,
@@ -1021,6 +1047,11 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
     # Skip when: (a) inpainted — the surface is already clean, clipping
     # only cuts through English text glyphs creating ghost artifacts, or
     # (b) mask poorly covers the render area — would clip the text itself.
+    overlay_arr = np.array(overlay)
+    bounded_alpha = np.zeros(overlay_arr.shape[:2], dtype=np.uint8)
+    bounded_alpha[by1:by2, bx1:bx2] = 255
+    overlay_arr[:, :, 3][bounded_alpha == 0] = 0
+    overlay = Image.fromarray(overlay_arr)
     if bubble.bubble_mask is not None and not skip_bg_rect:
         mask_roi = bubble.bubble_mask[by1:by2, bx1:bx2]
         mask_coverage = np.count_nonzero(mask_roi) / max(1, mask_roi.size)
@@ -1030,6 +1061,13 @@ def _render_webtoon_english(img: Image.Image, bubble: WebtoonBubble,
             overlay = Image.fromarray(overlay_arr)
 
     img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
+    return {
+        "font_size": chosen_size,
+        "line_count": len(lines),
+        "fit_status": ("ellipsized" if ellipsized else
+                       "overflow" if overflow else "fit"),
+        "ellipsized": ellipsized,
+    }
 
 
 def _wrap_text(text: str, font: ImageFont.FreeTypeFont,
@@ -1120,18 +1158,28 @@ def _sample_sfx_color(img: Image.Image,
 
 
 def _render_sfx(img: Image.Image, det: TextDetection, english: str,
-                original_img: Image.Image) -> None:
+                original_img: Image.Image) -> dict[str, object]:
     """Render translated SFX on top of original art with bold outlined text."""
     x1, y1, x2, y2 = det.bbox_rect
     det_h = y2 - y1
     det_w = x2 - x1
 
-    # Font size: ~90% of detection height for prominent SFX, capped at 120px
-    font_size = max(20, min(120, int(det_h * 0.9)))
-    try:
-        font = ImageFont.truetype(FONT_KO_BOLD, font_size)
-    except OSError:
-        return
+    # Fit the complete outlined glyph box inside the persisted render bounds.
+    font = None
+    outline_margin = 6  # 3px stroke + 2px shadow + one safety pixel.
+    for font_size in range(max(6, min(120, int(det_h * 0.9))), 5, -1):
+        try:
+            candidate = ImageFont.truetype(FONT_KO_BOLD, font_size)
+        except OSError:
+            return
+        measured = candidate.getbbox(english, stroke_width=3)
+        if (measured[2] - measured[0] <= det_w - outline_margin * 2
+                and measured[3] - measured[1] <= det_h - outline_margin * 2):
+            font = candidate
+            break
+    if font is None:
+        return {"font_size": 6, "line_count": 1,
+                "fit_status": "overflow", "ellipsized": False}
 
     body_color = _sample_sfx_color(original_img, det.bbox_rect)
 
@@ -1140,7 +1188,7 @@ def _render_sfx(img: Image.Image, det: TextDetection, english: str,
     draw = ImageDraw.Draw(overlay)
 
     # Measure text
-    bbox = font.getbbox(english)
+    bbox = font.getbbox(english, stroke_width=3)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
 
@@ -1161,6 +1209,8 @@ def _render_sfx(img: Image.Image, det: TextDetection, english: str,
     rgba_img = img.convert("RGBA")
     composited = Image.alpha_composite(rgba_img, overlay)
     img.paste(composited.convert("RGB"))
+    return {"font_size": font_size, "line_count": 1,
+            "fit_status": "fit", "ellipsized": False}
 
 
 def _draw_webtoon_debug(page: WebtoonPageResult) -> Image.Image:
@@ -1253,3 +1303,67 @@ def render_cleaned_page_to_bytes(page: WebtoonPageResult) -> bytes:
             _render_sfx(page.output_img, detection, translated, page.img_pil)
 
     return encode_image_pil(page.output_img)
+
+
+def render_document_region(
+    target: Image.Image,
+    source: Image.Image,
+    bbox: tuple[int, int, int, int],
+    text: str,
+    *,
+    mask: np.ndarray | None = None,
+    source_boxes: tuple[tuple[int, int, int, int], ...] = (),
+    container_bbox: tuple[int, int, int, int] | None = None,
+) -> dict[str, object]:
+    """Render one PageDocument dialogue region with Frank's webtoon renderer."""
+    x1, y1, x2, y2 = bbox
+    boxes = source_boxes or (bbox,)
+    detections = [TextDetection(
+        bbox_poly=[[sx1, sy1], [sx2, sy1], [sx2, sy2], [sx1, sy2]],
+        text="", confidence=1.0, bbox_rect=(sx1, sy1, sx2, sy2),
+    ) for sx1, sy1, sx2, sy2 in boxes]
+    bubble = WebtoonBubble(
+        bbox=container_bbox or bbox,
+        text_regions=detections,
+        bg_color=_sample_local_bg(source, bbox),
+        bubble_mask=mask,
+    )
+    return _render_webtoon_english(
+        target, bubble, text, bbox,
+        skip_bg_rect=True, color_ref_img=source, detections=detections,
+    )
+
+
+def document_render_geometry(
+    page: WebtoonPageResult,
+    region: WebtoonTextRegion,
+) -> tuple[tuple[int, int, int, int], tuple[tuple[int, int, int, int], ...]]:
+    """Return the exact legacy render box and OCR boxes for persistence."""
+    detections = region.group_detections or region.bubble.text_regions
+    render_bbox = _text_region_bbox_from_dets(
+        detections, page.img_pil.width, page.img_pil.height,
+    )
+    render_bbox = _expand_render_bbox(render_bbox, region.bubble)
+    bx1, by1, bx2, by2 = region.bubble.bbox
+    x1, y1, x2, y2 = render_bbox
+    contained = (max(bx1, x1), max(by1, y1), min(bx2, x2), min(by2, y2))
+    source_boxes = tuple(
+        (max(bx1, sx1), max(by1, sy1), min(bx2, sx2), min(by2, sy2))
+        for sx1, sy1, sx2, sy2 in (item.bbox_rect for item in detections)
+    )
+    return contained, source_boxes
+
+
+def render_document_sfx(
+    target: Image.Image,
+    source: Image.Image,
+    bbox: tuple[int, int, int, int],
+    text: str,
+) -> dict[str, object]:
+    """Render one PageDocument SFX region with Frank's SFX renderer."""
+    x1, y1, x2, y2 = bbox
+    detection = TextDetection(
+        bbox_poly=[[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+        text="", confidence=1.0, bbox_rect=bbox,
+    )
+    return _render_sfx(target, detection, text, source)

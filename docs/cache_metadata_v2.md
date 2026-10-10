@@ -9,7 +9,7 @@ The cache stores output for these reader pipelines:
 - `book_furigana`
 - `webtoon`
 
-Public image and metadata URLs remain unchanged. Cache manifest version 3 and
+Public image and metadata URLs remain unchanged. Cache manifest version 4 and
 page metadata version 2 are separate schemas even though they currently share
 the same storage tree.
 
@@ -74,27 +74,29 @@ Objects contain the source image, rendered image, or canonical metadata JSON.
 The manifest is authoritative. A by-reference record is an optional pointer
 from reader metadata to the source hash.
 
-## Manifest schema version 3
+## Manifest schema version 4
 
 `manifest.json` contains:
 
-- `schema_version`: `3`
+- `schema_version`: `4`
 - `pipeline`: durable cache namespace, including a non-English language suffix
 - `pipeline_revision`; omitted only by legacy manifests
 - `source_hash`
 - `source_object_sha256`, `source_bytes`
 - `image_object_sha256`, `image_bytes`
 - `metadata_object_sha256`, `metadata_bytes`
+- `artifact_object_sha256s`: cleanup base and mask object digests referenced
+  by the document
 - `content_hash`: SHA-256 of canonical metadata JSON
 - `render_hash`: SHA-256 of `v2|content_hash|image_object_sha256`
 - `image_stale`: true after a metadata edit until rerender completes
 - `created_at_unix_ms`, `updated_at_unix_ms`
 - optional reader reference fields: `title_slug`, `chapter`, `page`
 
-Manifest version 2 has the same object and hash fields but no
-`pipeline_revision`. It is read as the `legacy-v1` revision. The next page store
-or metadata update promotes it to manifest version 3. Unknown manifest versions
-are cache misses.
+Manifest version 2 has no `pipeline_revision`; it is read as the `legacy-v1`
+revision. Version 3 predates document raster artifacts. Both remain readable.
+The next page store or metadata update promotes them to version 4. Unknown
+manifest versions are cache misses.
 
 Unknown JSON fields are safe for older Go readers to ignore. Writers must
 preserve the revision when rewriting a current manifest.
@@ -146,10 +148,13 @@ languages, it is the language-qualified cache namespace such as
 `manga_translate_pt-br`.
 
 1. verify `base_content_hash` for optimistic concurrency;
-2. store canonical metadata and mark the image stale;
-3. enqueue a rerender with `rerender_from_metadata=1`;
-4. rerender without detection, OCR, or translation;
-5. write the fresh image and clear the stale flag.
+2. require every content-addressed reference to belong to the existing
+   manifest and verify its object hash;
+3. store canonical metadata and mark the image stale;
+4. enqueue a rerender with `rerender_from_metadata=1`;
+5. rerender from the exact cleanup base without detection, OCR, translation,
+   or cleanup;
+6. write the fresh image and clear the stale flag.
 
 The cross-runtime boundary test exercises the HTTP PATCH handler, canonical
 cache write, Python cache load and metadata-only rerender, then compares the
@@ -161,6 +166,9 @@ Python hash with the hash returned by the handler.
   Go cache writes use a temporary file and atomic rename but do not currently
   issue `fsync`; neither implementation synchronizes the containing directory.
 - Object reads verify their SHA-256 digest.
+- Raster objects are bounded before PNG decode and checked for declared mode
+  and dimensions. Metadata edits cannot introduce an object outside the
+  page's existing artifact allowlist.
 - Pipeline, source hash, and pipeline revision claims in metadata must agree
   with the cache lookup.
 - Python and Go both perform strict PageDocument type, graph, hash, pipeline,

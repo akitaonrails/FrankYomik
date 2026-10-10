@@ -38,6 +38,7 @@ class WebtoonBubble:
     semantic_id: str | None = None             # Detector-contract identity, when present
     cleanup_method: str | None = None           # Selected cleanup route after execution
     cleanup_degraded: bool = False              # Prevents caching transient recovery
+    cleanup_mask: np.ndarray | None = None      # Exact pixels selected for cleanup
 
 
 def cluster_detections(detections: list[TextDetection],
