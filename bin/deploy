@@ -195,7 +195,9 @@ except (OSError, ValueError, KeyError) as exc:
     ) from exc
 PY
       DOCKER_CONFIG="${REGISTRY_FORWARD_DIR}/docker-config"
-      export REGISTRY DOCKER_CONFIG
+      RELEASE_REGISTRY_URL="http://localhost:${port}"
+      RELEASE_REGISTRY_HOST="localhost:${port}"
+      export REGISTRY DOCKER_CONFIG RELEASE_REGISTRY_URL RELEASE_REGISTRY_HOST
       return 0
     fi
     sleep 0.1
@@ -268,7 +270,26 @@ publish_image() {
   local release_ref="${image}:${TAG}"
   local candidate_tag="candidate-${SOURCE_REVISION:0:12}-${BASHPID}-$RANDOM"
   local candidate_ref="${image}:${candidate_tag}"
-  local candidate_digest existing_digest release_digest status
+  local existing_digest release_digest status
+
+  # This function runs in command substitution. Its EXIT trap removes every
+  # local tag whether publishing succeeds or fails.
+  trap "docker image rm '${candidate_ref}' '${release_ref}' >/dev/null 2>&1 || true" EXIT
+
+  if existing_digest="$(resolve_digest "${release_ref}")"; then
+    docker pull "${release_ref}" >&2 || return 1
+    verify_local_labels "${release_ref}" || {
+      echo "Existing release tag does not belong to this source and pipeline revision: ${release_ref}" >&2
+      return 1
+    }
+    printf '%s\n' "${existing_digest}"
+    return 0
+  else
+    status=$?
+    if [[ "${status}" -ne 44 ]]; then
+      return "${status}"
+    fi
+  fi
 
   docker build -f "${dockerfile}" \
     --build-arg "SOURCE_REVISION=${SOURCE_REVISION}" \
@@ -276,34 +297,12 @@ publish_image() {
     --build-arg "RELEASE_VERSION=${TAG}" \
     -t "${candidate_ref}" . >&2 || return 1
   verify_local_labels "${candidate_ref}" || return 1
-  docker push "${candidate_ref}" >&2 || return 1
-  candidate_digest="$(resolve_digest "${candidate_ref}")" || return 1
-  [[ "${candidate_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    echo "Registry returned an invalid digest for ${candidate_ref}" >&2
-    return 1
-  }
-  if existing_digest="$(resolve_digest "${release_ref}")"; then
-    :
-  else
-    status=$?
-    if [[ "${status}" -eq 44 ]]; then
-      existing_digest=""
-    else
-      return "${status}"
-    fi
-  fi
-  if [[ -n "${existing_digest}" && "${existing_digest}" != "${candidate_digest}" ]]; then
-    echo "Refusing to overwrite ${release_ref}: existing ${existing_digest}, candidate ${candidate_digest}" >&2
-    return 1
-  fi
-  if [[ -z "${existing_digest}" ]]; then
-    docker tag "${candidate_ref}" "${release_ref}" || return 1
-    docker push "${release_ref}" >&2 || return 1
-  fi
+  docker tag "${candidate_ref}" "${release_ref}" || return 1
+  docker push "${release_ref}" >&2 || return 1
 
   release_digest="$(resolve_digest "${release_ref}")" || return 1
-  [[ "${release_digest}" == "${candidate_digest}" ]] || {
-    echo "Release tag verification failed for ${release_ref}" >&2
+  [[ "${release_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "Registry returned an invalid digest for ${release_ref}" >&2
     return 1
   }
   printf '%s\n' "${release_digest}"
@@ -421,3 +420,13 @@ echo "==> Release manifest: ${MANIFEST_PATH}"
 echo "==> Current status"
 ssh_cmd "cd '${REMOTE_DIR}' && API_IMAGE='${API_IMAGE}' WORKER_IMAGE='${WORKER_IMAGE}' \
   PIPELINE_REVISION='${PIPELINE_REVISION}' docker compose -f docker-compose.prod.yml ps"
+
+echo "==> Removing obsolete Frank Yomik release artifacts"
+if [[ -n "${RELEASE_REGISTRY_URL:-}" && -n "${RELEASE_REGISTRY_HOST:-}" ]]; then
+  "${ROOT}/bin/release-cleanup" --apply \
+    --registry-url "${RELEASE_REGISTRY_URL}" \
+    --registry-host "${RELEASE_REGISTRY_HOST}" \
+    --registry-owner "${REGISTRY#*/}"
+else
+  "${ROOT}/bin/release-cleanup" --apply --skip-registry
+fi

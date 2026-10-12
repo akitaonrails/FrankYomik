@@ -55,8 +55,9 @@ Build, push, record, and restart from exact registry digests:
 AUTH_TOKEN=... bin/deploy v2.0.0 rocm
 ```
 
-The command requires a clean worktree. It refuses an existing release tag if
-the new image digest differs, verifies both OCI revision labels locally and on
+The command requires a clean worktree. It never replaces an existing release
+tag: an existing tag is reused only when both OCI revision labels match the
+source and pipeline being deployed. It verifies those labels locally and on
 the host, and writes the resulting JSON record under `release-manifests/`
 locally and beside the remote Compose project. Before any service recreation,
 it uploads `docker-compose.prod.yml`, `docker-compose.v1-rollback.yml`, and
@@ -80,6 +81,53 @@ exact `manifest unknown` response is treated as an unused release tag.
 Authentication, network, server, and malformed response failures stop before
 the release tag is pushed. Set `REGISTRY` explicitly only for a separately
 configured registry that the local Docker daemon can already reach.
+
+## Release cleanup
+
+Every successful `bin/deploy` ends by running `bin/release-cleanup --apply`.
+The cleanup is scoped to Frank Yomik repositories and package names. It:
+
+- removes local build, gate, candidate, and release image copies that no
+  running local container uses;
+- removes stopped containers only when they use an image already selected for
+  removal;
+- keeps all running homelab images, the two newest stable server releases, and
+  every image or package whose tag contains `rollback`;
+- removes older homelab image copies, Gitea container package versions, and
+  generated release manifests;
+- removes local candidate and release tags on success and failure. New deploys
+  publish only the final version tag, so they do not create registry candidate
+  packages.
+
+The two stable server releases form the normal rollback window. The checked-in
+v1 rollback Compose file and its explicitly tagged images remain separate from
+that window. A client-only release does not displace a server rollback because
+the cleanup derives the server versions from image labels and registry
+packages.
+
+Preview the exact selection without changing either Docker host or the
+registry:
+
+```bash
+bin/release-cleanup
+```
+
+Apply the same procedure manually after an interrupted older release:
+
+```bash
+bin/release-cleanup --apply
+```
+
+The default homelab registry cleanup uses Gitea's package API through the same
+authenticated SSH relay as the image push. A separately configured `REGISTRY`
+skips package cleanup unless its deployment wrapper explicitly supplies the
+corresponding package cleanup; Docker host and manifest cleanup still run.
+
+The script does not run global Docker prune commands. Shared BuildKit cache,
+unrelated images and containers, named volumes, model caches, application data,
+benchmark evidence, and audit evidence are outside its ownership boundary.
+Docker may reclaim unreferenced layers while selected images are removed;
+shared build cache remains available to other projects.
 
 For a manual restart, copy the `deployed` references from that release manifest:
 
