@@ -21,7 +21,7 @@ unidic-lite==1.0.8
 
 # Imaging
 opencv-python-headless==4.13.0.92
-Pillow==12.3.0
+Pillow==13.0.0
 numpy==2.4.2
 
 # Latin-script OCR for artwork text and webtoons
