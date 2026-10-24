@@ -28,8 +28,9 @@ numpy==2.5.4
 easyocr==1.7.2
 
 # Inpainting for artwork text. Installed with --no-deps in the images: its
-# pins conflict with the numpy/Pillow/opencv versions above.
-simple-lama-inpainting==0.1.2
+# pins conflict with the numpy/Pillow/opencv versions above. 0.1.2 is not
+# viable: it declares pillow<10, and Dependabot's bump cannot be locked.
+simple-lama-inpainting==0.1.0
 
 # Services and IO
 redis==8.1.0
