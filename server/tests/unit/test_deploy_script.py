@@ -2,6 +2,7 @@ import json
 import os
 import socket
 import subprocess
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -74,7 +75,13 @@ case "$*" in
     ;;
   *\"image inspect\"*)
     case "$*" in
-      *org.opencontainers.image.revision*) printf '%s\\n' '{SOURCE}'; exit 0 ;;
+      *org.opencontainers.image.revision*)
+        if [ "${{FAKE_CONFLICT:-0}}" = 1 ]; then
+          case "$*" in
+            *:v-test*) printf 'not-this-source\\n'; exit 0 ;;
+          esac
+        fi
+        printf '%s\\n' '{SOURCE}'; exit 0 ;;
       *io.frank-yomik.pipeline-revision*) printf '%s\\n' '{PIPELINE}'; exit 0 ;;
     esac
     ;;
@@ -96,29 +103,14 @@ case "$*" in
     ;;
 esac
 case "$*" in
-  *\" -O exit \"*)
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = -S ]; then control="$2"; shift 2; continue; fi
-      shift
-    done
-    if [ -f "$control.pid" ]; then kill "$(cat "$control.pid")" 2>/dev/null || true; fi
-    rm -f "$control" "$control.pid"
-    exit 0
-    ;;
-  *\" -f \"*\" -L \"*)
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        -S) control="$2"; shift 2 ;;
-        -L) spec="$2"; shift 2 ;;
-        *) shift ;;
-      esac
-    done
-    port="${{spec#127.0.0.1:}}"; port="${{port%%:*}}"
-    python3 -c 'import socket,sys,time; s=socket.socket(); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(); time.sleep(60)' "$port" &
-    pid=$!
-    sleep 0.05
-    kill -0 "$pid" 2>/dev/null || exit 1
-    touch "$control"; printf '%s\\n' "$pid" > "$control.pid"
+  *"exec(base64.b64decode"*)
+    IFS= read -r request_line || request_line=''
+    printf 'relay %s\\n' "$request_line" >> '{log}'
+    case "$request_line" in
+      DELETE\\ *) body='{{}}' ;;
+      *) body='[{{"type":"container","name":"frank-yomik-api","version":"candidate-stale"}}]' ;;
+    esac
+    printf 'HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: %s\\r\\nConnection: close\\r\\n\\r\\n%s' "${{#body}}" "$body"
     exit 0
     ;;
 esac
@@ -203,7 +195,7 @@ def test_deploy_refuses_to_replace_conflicting_release_tag(tmp_path: Path) -> No
     )
 
     assert result.returncode != 0
-    assert "Refusing to overwrite" in result.stderr
+    assert "Existing release tag does not belong to this source and pipeline revision" in result.stderr
     assert "ssh " not in log.read_text()
     assert not (tmp_path / "manifests/v-test.json").exists()
 
@@ -281,8 +273,35 @@ def test_deploy_uses_and_cleans_up_temporary_registry_forward(tmp_path: Path) ->
     assert json.loads((tmp_path / "forwarded-config.json").read_text()) == {
         "auths": {f"localhost:{port}": {"auth": "test"}}
     }
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", port))
+    assert (
+        "relay GET /api/v1/packages/akitaonrails"
+        "?type=container&q=frank-yomik&limit=100&page=1 HTTP/1.1" in calls
+    )
+    assert (
+        "relay DELETE /api/v1/packages/akitaonrails/container/"
+        "frank-yomik-api/candidate-stale HTTP/1.1" in calls
+    )
+    # The temporary forward must be gone when deploy exits. Poll with
+    # connect(): a live forwarder would accept, while a closed port answers
+    # ECONNREFUSED even while TIME_WAIT churn from the relay still involves
+    # the port (which makes rebinding a probe socket flaky).
+    deadline = time.monotonic() + 10
+    while True:
+        listening = True
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=2):
+                pass
+        except ConnectionRefusedError:
+            break
+        except OSError:
+            listening = False
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                "registry forward is still listening after deploy exit"
+                if listening
+                else "could not confirm the registry forward is gone"
+            )
+        time.sleep(0.2)
 
 
 def test_deploy_stops_if_registry_forward_port_collides(tmp_path: Path) -> None:

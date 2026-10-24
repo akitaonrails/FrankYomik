@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "bin" / "release_cleanup.py"
+MODULE_PATH = Path(__file__).resolve().parents[3] / "bin" / "release_cleanup.py"
 SPEC = importlib.util.spec_from_file_location("release_cleanup", MODULE_PATH)
 assert SPEC and SPEC.loader
 cleanup = importlib.util.module_from_spec(SPEC)
