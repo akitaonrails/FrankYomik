@@ -9,3 +9,9 @@ updates:
       pip:
         patterns:
           - "*"
+    ignore:
+      # 0.1.1+ declares pillow<10, which conflicts with the security-mandated
+      # Pillow 13 pin; the images install this package --no-deps anyway, so
+      # its declared dependencies never apply.
+      - dependency-name: "simple-lama-inpainting"
+        versions: [">= 0.1.1"]
