@@ -11,8 +11,8 @@
 # server/pipeline/stage_manifest.json. Update that manifest with these pins.
 # Japanese OCR (vertical manga and prose text)
 manga-ocr==0.1.16
-transformers==5.10.4
-huggingface-hub==1.5.0
+transformers==5.20.2
+huggingface-hub==2.2.0
 
 # Morphological analysis behind furigana readings. fugashi needs a dictionary;
 # unidic-lite is the one kindle/furigana.py is tuned against.
@@ -20,25 +20,26 @@ fugashi==1.5.2
 unidic-lite==1.0.8
 
 # Imaging
-opencv-python-headless==4.13.0.92
+opencv-python-headless==5.0.0.93
 Pillow==13.0.0
-numpy==2.4.2
+numpy==2.5.4
 
 # Latin-script OCR for artwork text and webtoons
 easyocr==1.7.2
 
 # Inpainting for artwork text. Installed with --no-deps in the images: its
-# pins conflict with the numpy/Pillow/opencv versions above.
+# pins conflict with the numpy/Pillow/opencv versions above. 0.1.2 is not
+# viable: it declares pillow<10, and Dependabot's bump cannot be locked.
 simple-lama-inpainting==0.1.0
 
 # Services and IO
-redis==7.2.1
+redis==8.1.0
 requests==2.34.2
 pyyaml==6.0.3
 deep-translator==1.11.4
 
 # Naver Webtoon scraping
-nodriver==0.48.1
+nodriver==0.50.6
 
 # Tests
 pytest==9.1.1

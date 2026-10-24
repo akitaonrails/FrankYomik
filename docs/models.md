@@ -9,7 +9,7 @@ explains the shipped choices and operational requirements.
 
 | Stage | Model | Pinned identity | Runtime and cache |
 |---|---|---|---|
-| Manga and webtoon detection | RT-DETR-v2 comic text and balloon detector | `ogkalu/comic-text-and-bubble-detector` at `4269a0e53d40419f4746e8b3e30ae7faef3a26c6` | `transformers==5.10.4`; Hugging Face cache |
+| Manga and webtoon detection | RT-DETR-v2 comic text and balloon detector | `ogkalu/comic-text-and-bubble-detector` at `4269a0e53d40419f4746e8b3e30ae7faef3a26c6` | `transformers==5.20.2`; Hugging Face cache |
 | Manga and book OCR | Manga OCR | `kha-white/manga-ocr-base` at `aa6573bd10b0d446cbf622e29c3e084914df9741` | `manga-ocr==0.1.16`; Manga OCR and Hugging Face caches |
 | Webtoon OCR | EasyOCR Korean | `korean_g2.pth`, MD5 `befecf7b1ca2fffb5af814a51443682d` | `easyocr==1.7.2`; EasyOCR cache |
 | Manga and webtoon translation | Qwen 3 14B through Ollama | `qwen3:14b`, Ollama digest `sha256:bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8` | External Ollama or llama-swap service |
