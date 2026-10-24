@@ -166,7 +166,7 @@ packaging==26.3
     #   pytest
     #   scikit-image
     #   transformers
-pillow==12.3.0
+pillow==13.0.0
     # via
     #   -r server/requirements.txt
     #   easyocr

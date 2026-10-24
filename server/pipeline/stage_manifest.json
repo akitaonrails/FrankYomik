@@ -191,11 +191,11 @@
     },
     "runtime_requirements": {
       "path": "requirements.txt",
-      "sha256": "65ad8c61152c1baa71c89b50ea3720ee54341e0c236f4ef47d1230557ba77938"
+      "sha256": "00d86771fba8cdb0cbc5f0274f88fd49c7613e37f525c24b864d9769b2bb76d9"
     },
     "runtime_requirements_lock": {
       "path": "requirements.worker.lock",
-      "sha256": "e1a38f3d4a10b4a976e3e33cdb6fc806260d2aa6afe6d343dae985b30a23adba"
+      "sha256": "e9c49fbfed2136401a9b8f034f94e7edcedd68b969de7f0467b1762fd430125f"
     },
     "sfx_font": {
       "path": "fonts/ComicNeue-Bold.otf",
