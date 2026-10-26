@@ -12,7 +12,7 @@
 # Japanese OCR (vertical manga and prose text)
 manga-ocr==0.1.16
 transformers==5.20.2
-huggingface-hub==2.2.0
+huggingface-hub==2.3.0
 
 # Morphological analysis behind furigana readings. fugashi needs a dictionary;
 # unidic-lite is the one kindle/furigana.py is tuned against.
