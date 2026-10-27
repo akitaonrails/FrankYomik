@@ -56,7 +56,7 @@ httpx2==2.16.0
     # via huggingface-hub
 httpx2-jsfetch==1.0 ; sys_platform == 'emscripten'
     # via httpx2
-huggingface-hub==2.2.0
+huggingface-hub==2.3.0
     # via
     #   -r server/requirements.txt
     #   tokenizers
