@@ -11,8 +11,8 @@
 # server/pipeline/stage_manifest.json. Update that manifest with these pins.
 # Japanese OCR (vertical manga and prose text)
 manga-ocr==0.1.16
-transformers==5.20.2
-huggingface-hub==2.3.0
+transformers==5.22.2
+huggingface-hub==2.4.0
 
 # Morphological analysis behind furigana readings. fugashi needs a dictionary;
 # unidic-lite is the one kindle/furigana.py is tuned against.
@@ -39,7 +39,7 @@ pyyaml==6.0.3
 deep-translator==1.11.4
 
 # Naver Webtoon scraping
-nodriver==0.50.6
+nodriver==0.50.99
 
 # Tests
-pytest==9.1.1
+pytest==9.2.0
