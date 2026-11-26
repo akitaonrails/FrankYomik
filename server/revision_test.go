@@ -8,7 +8,7 @@ import (
 )
 
 func TestDerivedPipelineRevisionMatchesPinnedManifest(t *testing.T) {
-	const expected = "sha256:237cf3a4e7a44bbed3b9008e8fd4888012f5be9d490ee3e727386b7dda32b40c"
+	const expected = "sha256:23797c3b613de9d778617b4d3f1ab235d8d3e84f207a6468c5facbaa6ea3313f"
 	if got := derivedPipelineRevision(); got != expected {
 		t.Fatalf("derived revision = %q, want %q", got, expected)
 	}
