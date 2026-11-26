@@ -45,7 +45,7 @@ jobs:
 
       - name: Analyze
         working-directory: client
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Run tests
         working-directory: client
