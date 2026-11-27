@@ -6,6 +6,7 @@ import re
 from kindle.translator import (
     LANG_MAP,
     _clean_response,
+    _format_glossary_hint,
     _post_chat_content,
     verify_ollama_model,
 )
@@ -22,12 +23,19 @@ def translate(korean_text: str, target_lang: str = "en") -> str:
     return _translate_verified(korean_text, target_lang)
 
 
-def _translate_verified(korean_text: str, target_lang: str = "en") -> str:
+def _translate_verified(
+    korean_text: str,
+    target_lang: str = "en",
+    *,
+    terms: tuple[tuple[str, str], ...] = (),
+) -> str:
     """Translate dialogue after the configured model has been verified."""
     _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
+    glossary_block = _format_glossary_hint(terms)
     prompt = (
         f"Translate this Korean manhwa/webtoon dialogue to natural {lang_name}.\n"
         "Keep it concise and suitable for a speech bubble.\n"
+        f"{glossary_block}"
         f"Output ONLY the {lang_name} translation, nothing else.\n"
         f"\nKorean: {korean_text}"
     )

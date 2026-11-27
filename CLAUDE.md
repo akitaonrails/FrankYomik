@@ -588,7 +588,7 @@ more time, or an external service.
   when absent, both derive the SHA-256 fingerprint of the pinned stage manifest
 - `ALLOW_LEGACY_PIPELINE_REVISION`: set to `1` only with
   `PIPELINE_REVISION=legacy-v1` for deliberate compatibility migration
-- `server/config.yaml`: worker-side config for Ollama, OCR, fonts, cache, and webtoon settings
+- `server/config.yaml`: worker-side config for Ollama, OCR, fonts, cache, webtoon settings, and optional per-series `glossaries` (`reading_overrides` for furigana and `terms` for translation)
 - `docker-compose.yml`: the normal multi-service deployment path
 
 ## Practical trust boundaries

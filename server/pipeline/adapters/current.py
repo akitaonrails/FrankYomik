@@ -52,9 +52,9 @@ def extract_bubble_mask_manga(*args, **kwargs):
     return implementation(*args, **kwargs)
 
 
-def furigana_annotate(text):
+def furigana_annotate(*args, **kwargs):
     from kindle.furigana import annotate as implementation
-    return implementation(text)
+    return implementation(*args, **kwargs)
 
 
 def clear_text_in_region(*args, **kwargs):
@@ -102,9 +102,9 @@ def render_cleaned_manga_page(*args, **kwargs):
     return implementation(*args, **kwargs)
 
 
-def transform_furigana(result):
+def transform_furigana(*args, **kwargs):
     from kindle.processor import transform_furigana as implementation
-    return implementation(result)
+    return implementation(*args, **kwargs)
 
 
 def translate(*args, **kwargs):

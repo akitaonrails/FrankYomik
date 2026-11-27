@@ -85,3 +85,13 @@ worker:
   heartbeat_ttl: 60
   progress_ttl: 60
   high_burst_before_low: 3
+
+# Optional per-series furigana reading overrides and translation term glossaries.
+# Keys match the job title (case-insensitive) or its slug, e.g.:
+# glossaries:
+#   "Jujutsu Kaisen":
+#     reading_overrides:
+#       "五条": "ゴジョウ"
+#     terms:
+#       "領域展開": "Domain Expansion"
+glossaries: {}

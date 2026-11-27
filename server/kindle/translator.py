@@ -67,9 +67,22 @@ def translate(japanese_text: str, target_lang: str = "en") -> str:
     return _translate_verified(japanese_text, target_lang)
 
 
-def _translate_verified(japanese_text: str, target_lang: str = "en") -> str:
+def _format_glossary_hint(terms: tuple[tuple[str, str], ...]) -> str:
+    if not terms:
+        return ""
+    lines = "\n".join(f"- {source} -> {target}" for source, target in terms)
+    return f"\nGlossary (apply these renderings exactly):\n{lines}\n"
+
+
+def _translate_verified(
+    japanese_text: str,
+    target_lang: str = "en",
+    *,
+    terms: tuple[tuple[str, str], ...] = (),
+) -> str:
     """Translate after the caller has verified the configured model once."""
     _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
+    glossary_block = _format_glossary_hint(terms)
     prompt = (
         f"Translate this Japanese manga dialogue to natural, fluent {lang_name}.\n"
         "Guidelines:\n"
@@ -79,6 +92,7 @@ def _translate_verified(japanese_text: str, target_lang: str = "en") -> str:
         "- Preserve Japanese nicknames and honorific-based names (e.g. Kacchan, "
         "Onee-chan) — do NOT translate or replace them.\n"
         "- Keep it concise — speech bubbles have limited space.\n"
+        f"{glossary_block}"
         f"Output ONLY the {lang_name} translation, nothing else.\n"
         f"\nJapanese: {japanese_text}"
     )
@@ -166,6 +180,11 @@ def translate_page(request: PageTranslationRequest) -> PageTranslationResult:
         return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
     def single(item: TranslationItem, target_lang: str) -> str:
+        item_terms = tuple(
+            (source, target)
+            for source, target in request.terms
+            if source in item.source_text
+        )
         if request.source_language == "ko":
             from webtoon.translator import (
                 _translate_sfx_verified,
@@ -174,7 +193,15 @@ def translate_page(request: PageTranslationRequest) -> PageTranslationResult:
 
             if item.kind == "sfx":
                 return _translate_sfx_verified(item.source_text, target_lang)
+            if item_terms:
+                return translate_korean_verified(
+                    item.source_text, target_lang, terms=item_terms,
+                )
             return translate_korean_verified(item.source_text, target_lang)
+        if item_terms:
+            return _translate_verified(
+                item.source_text, target_lang, terms=item_terms,
+            )
         return _translate_verified(item.source_text, target_lang)
 
     values: list[TranslationValue] = []

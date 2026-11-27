@@ -4,6 +4,8 @@ import os
 
 import yaml
 
+from pipeline.glossary import load_glossaries_from_yaml
+
 # --- YAML config loader ---
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -97,6 +99,9 @@ TEXT_DETECTION_GPU = os.environ.get(
 # --- Manga inpainting (artwork text) ---
 MANGA_INPAINT_ENABLED = _manga_inp.get("enabled", False)
 MANGA_INPAINT_PAD = _manga_inp.get("pad", 20)
+
+# --- Per-series reading overrides and translation term glossaries ---
+GLOSSARIES = load_glossaries_from_yaml(_yaml)
 
 # --- File paths (relative to git repo root, one level above _PROJECT_ROOT) ---
 _REPO_ROOT = os.path.dirname(_PROJECT_ROOT)

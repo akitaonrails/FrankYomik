@@ -34,3 +34,21 @@ def test_kindle_public_processor_api_is_advertised_without_loading_it():
     )
 
     subprocess.run([sys.executable, "-c", command], check=True)
+
+
+def test_importing_kindle_processor_and_furigana_does_not_require_fugashi():
+    command = (
+        "import sys; sys.modules['fugashi'] = None; "
+        "import numpy as np; from PIL import Image; "
+        "import kindle.furigana; "
+        "from kindle.processor import ("
+        "    PipelineMode, load_page_from_memory, render_page_to_bytes"
+        "); "
+        "img_pil = Image.new('RGB', (32, 32), (255, 255, 255)); "
+        "img_cv = np.array(img_pil)[:, :, ::-1].copy(); "
+        "page = load_page_from_memory(img_cv, img_pil, name='no-fugashi'); "
+        "png = render_page_to_bytes(page, PipelineMode.TRANSLATE); "
+        "assert png[:4] == b'\\x89PNG'"
+    )
+
+    subprocess.run([sys.executable, "-c", command], check=True)

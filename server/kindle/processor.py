@@ -276,11 +276,16 @@ def ocr_bubble(img_pil: Image.Image, bubble: dict) -> BubbleResult:
     )
 
 
-def transform_furigana(br: BubbleResult) -> None:
+def transform_furigana(
+    br: BubbleResult, *, reading_overrides: dict[str, str] | None = None,
+) -> None:
     """Stage 4a: Annotate with furigana readings."""
     if not br.is_valid:
         return
-    segments = furigana_annotate(br.ocr_text)
+    segments = (
+        furigana_annotate(br.ocr_text, reading_overrides=reading_overrides)
+        if reading_overrides else furigana_annotate(br.ocr_text)
+    )
     if any(s["needs_furigana"] for s in segments):
         br.transformed = segments
     else:

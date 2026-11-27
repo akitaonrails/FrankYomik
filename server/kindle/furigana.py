@@ -7,15 +7,17 @@ reads standalone 人 as にん instead of ひと, 今年 as こんねん instead
 reading.
 """
 
+from __future__ import annotations
+
 import logging
 import re
 import threading
-
-import fugashi
+from collections.abc import Mapping
+from typing import Any
 
 log = logging.getLogger(__name__)
 
-_tagger = None
+_tagger: Any = None
 _init_lock = threading.Lock()
 _convert_lock = threading.Lock()
 
@@ -30,11 +32,13 @@ _READING_OVERRIDES = {
 }
 
 
-def _get_tagger() -> fugashi.Tagger:
+def _get_tagger() -> Any:
     global _tagger
     if _tagger is None:
         with _init_lock:
             if _tagger is None:
+                import fugashi
+
                 _tagger = fugashi.Tagger()
     return _tagger
 
@@ -111,7 +115,9 @@ def _split_okurigana(surface: str, kana: str) -> list[dict]:
     return segments
 
 
-def annotate(text: str) -> list[dict]:
+def annotate(
+    text: str, *, reading_overrides: Mapping[str, str] | None = None,
+) -> list[dict]:
     """Convert Japanese text into annotated segments.
 
     Returns list of dicts:
@@ -121,12 +127,42 @@ def annotate(text: str) -> list[dict]:
     """
     tagger = _get_tagger()
     with _convert_lock:
-        words = tagger(text)
+        words = list(tagger(text))
+
+    overrides = (
+        {**_READING_OVERRIDES, **reading_overrides}
+        if reading_overrides else _READING_OVERRIDES
+    )
+    max_override_len = max((len(key) for key in overrides), default=0)
 
     segments = []
-    for word in words:
-        surface = word.surface
-        kana = _READING_OVERRIDES.get(surface, word.feature.kana)
+    idx = 0
+    count = len(words)
+    while idx < count:
+        matched_surface = None
+        matched_kana = None
+        matched_end = idx + 1
+
+        if max_override_len > 0:
+            combined = ""
+            for end in range(idx, count):
+                combined += words[end].surface
+                if len(combined) > max_override_len:
+                    break
+                if combined in overrides:
+                    matched_surface = combined
+                    matched_kana = overrides[combined]
+                    matched_end = end + 1
+
+        if matched_surface is not None:
+            surface = matched_surface
+            kana = matched_kana
+            idx = matched_end
+        else:
+            word = words[idx]
+            surface = word.surface
+            kana = word.feature.kana
+            idx += 1
 
         if not surface.strip():
             continue

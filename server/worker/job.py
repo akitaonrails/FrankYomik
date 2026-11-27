@@ -72,6 +72,11 @@ from pipeline.document import (
     make_region_id,
 )
 from pipeline.protocols import PipelineRuntime
+from pipeline.glossary import (
+    EMPTY_SERIES_GLOSSARY,
+    GlossaryCatalog,
+    SeriesGlossary,
+)
 from pipeline.revision import DEFAULT_PIPELINE_REVISION
 from pipeline.translation import (
     MANGA_PAGE_STYLE,
@@ -216,6 +221,19 @@ def process_job(job: ProcessingJob,
             pipeline_revision=job.pipeline_revision,
             cacheable=False,
         )
+
+
+def _series_glossary(deps: PipelineDependencies, title: str) -> SeriesGlossary:
+    """Resolve optional per-series reading overrides and translation terms."""
+    if not title:
+        return EMPTY_SERIES_GLOSSARY
+    try:
+        catalog = deps.config_value("GLOSSARIES")
+    except (AttributeError, KeyError):
+        return EMPTY_SERIES_GLOSSARY
+    if isinstance(catalog, GlossaryCatalog):
+        return catalog.for_series(title)
+    return EMPTY_SERIES_GLOSSARY
 
 
 def _report(cb: ProgressCallback | None, stage: str, detail: str, percent: int):
@@ -992,18 +1010,24 @@ def _process_manga(job: ProcessingJob,
         region_plans.append((region_id, order, kind))
 
     # Transform
+    glossary = _series_glossary(deps, job.title)
     total_br = len(page.bubble_results)
     if mode_name == "furigana":
+        overrides = glossary.reading_overrides_dict()
         _report(progress_cb, "translating", "", 65)
         for i, br in enumerate(page.bubble_results):
             _report(progress_cb, "translating", f"{i+1}/{total_br} bubbles",
                     65 + int(25 * (i+1) / max(total_br, 1)))
-            deps.transform_furigana(br)
+            if overrides:
+                deps.transform_furigana(br, reading_overrides=overrides)
+            else:
+                deps.transform_furigana(br)
     else:
         translatable = [(i, br) for i, br in enumerate(page.bubble_results)
                         if br.is_valid]
         _report(progress_cb, "translating", f"{len(translatable)} bubbles", 65)
         if translatable:
+            terms = glossary.matching_terms([br.ocr_text for _, br in translatable])
             request = PageTranslationRequest(
                 source_language="ja",
                 target_language=job.target_lang,
@@ -1014,6 +1038,7 @@ def _process_manga(job: ProcessingJob,
                     )
                     for index, br in translatable
                 ), key=lambda item: item.reading_order)),
+                terms=terms,
                 style=MANGA_PAGE_STYLE,
             )
             translated = deps.translate_page(request).by_id()
@@ -1219,10 +1244,16 @@ def _process_book(job: ProcessingJob,
         _report(progress_cb, "ocr", f"{done}/{total} columns",
                 20 + int(65 * done / max(total, 1)))
 
+    glossary = _series_glossary(deps, job.title)
+    overrides = glossary.reading_overrides_dict()
+    annotate_fn = (
+        (lambda text: deps.annotate(text, reading_overrides=overrides))
+        if overrides else deps.annotate
+    )
     readings = deps.read_columns(
         img_pil, layout,
         ocr=deps.ocr_prose,
-        annotate=deps.annotate,
+        annotate=annotate_fn,
         progress=on_column,
     )
 
@@ -1374,10 +1405,13 @@ def _process_webtoon(job: ProcessingJob,
         if eligible
     )
     if items:
+        glossary = _series_glossary(deps, job.title)
+        terms = glossary.matching_terms([item.source_text for item in items])
         request = PageTranslationRequest(
             source_language="ko",
             target_language=job.target_lang,
             items=tuple(sorted(items, key=lambda item: item.reading_order)),
+            terms=terms,
             style=WEBTOON_PAGE_STYLE,
         )
         translated = deps.translate_page(request).by_id()
