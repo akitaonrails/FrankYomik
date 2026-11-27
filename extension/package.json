@@ -1,7 +1,7 @@
 {
   "name": "frank-yomik-extension",
   "private": true,
-  "version": "2.0.7",
+  "version": "2.1.0",
   "type": "module",
   "engines": {
     "node": ">=21"
